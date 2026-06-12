@@ -20,6 +20,7 @@ Atlas is an open source self-hosted LLM inference platform: a control plane + pe
 ## Conventions
 
 - Markdown docs, sentence-case headings, one doc per concern.
+- **Changes land via PR, never direct push.** `main` is protected by a repo ruleset: PRs required, all CI checks green, squash-merge only. Branch from `main`, open a PR sized as one logical change (a build-plan phase, a fix), merge when green. Real release artifacts come from `v*` tags (`release.yml`); CI's build/release-dry-run jobs only prove the machinery on every PR.
 - **Go:** module `github.com/orchestra-hq/atlas`, layout per `docs/m0-build-plan.md`. `make build / test / lint / fmt / snapshot`; formatting is gofumpt + goimports via `golangci-lint fmt` (config in `.golangci.yml`), releases via GoReleaser (`.goreleaser.yaml`). CI runs on Blacksmith runners (`.github/workflows/ci.yml`); tool versions are pinned there — keep them in sync when upgrading.
 - **Formatting & linting:** the pre-commit hook in `.githooks/` runs `prettier --write` (table/emphasis formatting) then `markdownlint-cli2 --fix` on staged `.md` files, re-stages, and fails on remaining errors. Once per clone: `git config core.hooksPath .githooks`. Rules live in `.markdownlint.jsonc` — disabling a rule is fine when deliberate, but comment why. Tables are padded-pipe style (MD060); ASCII diagrams use ` ```text ` fences.
 - ADR format: Status / Context / Decision / Consequences. Statuses: `proposed`, `accepted`, `superseded by ADR-XXXX`.
