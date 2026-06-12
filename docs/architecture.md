@@ -6,7 +6,7 @@ This answers the core "how does this actually run?" questions: what processes ex
 
 Atlas ships as **one binary with two roles** (plus a combined mode):
 
-```
+```text
                     clients (Claude Agent SDK, Claude Code, OpenAI SDKs, curl)
                                         │
                               ANTHROPIC_BASE_URL=https://atlas.yourco.com
@@ -36,13 +36,13 @@ Atlas ships as **one binary with two roles** (plus a combined mode):
 
 ### Vocabulary
 
-| Term | Meaning |
-|---|---|
-| **Gateway** | The client-facing API endpoint (`/v1/messages`, `/v1/chat/completions`). What `ANTHROPIC_BASE_URL` points at; what the DNS name fronts. It decides where each request goes based on which workers/instances are available and healthy. |
-| **Server** (control plane) | The process that hosts the gateway plus the scheduler, model registry, worker hub, auth/metering, and console. One process; "gateway" names its front door. |
-| **Worker** | The per-machine agent that runs engines and executes inference. |
-| **Engine** | An inference runtime Atlas orchestrates (vLLM, SGLang, llama.cpp, MLX). |
-| **Instance** | One running model on one worker (a model definition placed by the scheduler). |
+| Term                       | Meaning                                                                                                                                                                                                                                |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Gateway**                | The client-facing API endpoint (`/v1/messages`, `/v1/chat/completions`). What `ANTHROPIC_BASE_URL` points at; what the DNS name fronts. It decides where each request goes based on which workers/instances are available and healthy. |
+| **Server** (control plane) | The process that hosts the gateway plus the scheduler, model registry, worker hub, auth/metering, and console. One process; "gateway" names its front door.                                                                            |
+| **Worker**                 | The per-machine agent that runs engines and executes inference.                                                                                                                                                                        |
+| **Engine**                 | An inference runtime Atlas orchestrates (vLLM, SGLang, llama.cpp, MLX).                                                                                                                                                                |
+| **Instance**               | One running model on one worker (a model definition placed by the scheduler).                                                                                                                                                          |
 
 In user-facing docs and marketing, "gateway" and "workers" are the two words; "server" is the process you run to get a gateway.
 
@@ -69,12 +69,12 @@ One process per machine that has compute. Responsibilities:
 
 Atlas is self-hosted software. **The default deployment is everything inside the user's own network**: they run the server and the workers in their VPC/DC, expose one DNS endpoint for the gateway (e.g. behind an internal load balancer), and their apps point `ANTHROPIC_BASE_URL` at it. Nothing about Atlas lives on our infrastructure, ever. See [deployment-aws.md](deployment-aws.md) for the concrete AWS picture.
 
-| Model | Server (gateway) lives | Workers live | Who runs this |
-|---|---|---|---|
-| **Self-contained** (default) | User's VPC/DC | Same network | Almost everyone: single host (`atlas up`) up to a team's GPU fleet |
+| Model                         | Server (gateway) lives                                  | Workers live                                               | Who runs this                                                                                                                       |
+| ----------------------------- | ------------------------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| **Self-contained** (default)  | User's VPC/DC                                           | Same network                                               | Almost everyone: single host (`atlas up`) up to a team's GPU fleet                                                                  |
 | **Split / hybrid** (optional) | Wherever the operator wants (one cloud, a VPS, on-prem) | Anywhere else — other clouds, on-prem, a laptop behind NAT | Multi-cloud fleets; vendors offering "bring your own compute" where the vendor hosts the control plane and customers attach workers |
 
-The split model is *enabled* by the connectivity design below, never required by it.
+The split model is _enabled_ by the connectivity design below, never required by it.
 
 ### Connectivity model: workers dial out
 
@@ -82,7 +82,7 @@ The worker opens a persistent outbound connection (gRPC or WebSocket stream — 
 
 Why this is load-bearing (ADR-0003): workers must never require inbound connectivity. Even in the self-contained deployment this pays off — GPU workers sit in private subnets with zero inbound security-group rules — and it's what makes the split/hybrid model possible at all (workers behind NAT, in another cloud, on networks the control-plane operator doesn't control). Only the gateway needs a reachable address. (Anthropic's own self-hosted sandbox workers use the same outbound-only pattern, as does every CI runner; it's proven.)
 
-Trade-off: all inference bytes transit the server. Fine for v1 (token streams are small); if it ever matters, a "direct data plane" optimization (gateway redirects to a worker that *chooses* to expose a port) can be added without changing the model.
+Trade-off: all inference bytes transit the server. Fine for v1 (token streams are small); if it ever matters, a "direct data plane" optimization (gateway redirects to a worker that _chooses_ to expose a port) can be added without changing the model.
 
 ### Single-node mode
 
@@ -105,18 +105,18 @@ Trade-off: all inference bytes transit the server. Fine for v1 (token streams ar
 
 ## What we deliberately did not invent
 
-| Question | Answer | Stolen from |
-|---|---|---|
-| Job distributor or per-machine agent? | Both: scheduler in control plane, agent per machine | GPUStack, every CI system |
-| Who runs inference? | Existing engines as supervised subprocesses | GPUStack, Ollama |
-| How do machines join? | Join token + outbound persistent connection | GPUStack (token), Anthropic self-hosted workers (outbound-only) |
-| Model storage? | Content-addressable cache, manifest + blobs | Ollama / OCI |
-| Single-node DX? | Daemon + CLI client, one binary | Ollama |
-| API shape? | Anthropic `/v1/messages` + OpenAI `/v1/chat/completions` | vLLM, LiteLLM, Ollama |
+| Question                              | Answer                                                   | Stolen from                                                     |
+| ------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------- |
+| Job distributor or per-machine agent? | Both: scheduler in control plane, agent per machine      | GPUStack, every CI system                                       |
+| Who runs inference?                   | Existing engines as supervised subprocesses              | GPUStack, Ollama                                                |
+| How do machines join?                 | Join token + outbound persistent connection              | GPUStack (token), Anthropic self-hosted workers (outbound-only) |
+| Model storage?                        | Content-addressable cache, manifest + blobs              | Ollama / OCI                                                    |
+| Single-node DX?                       | Daemon + CLI client, one binary                          | Ollama                                                          |
+| API shape?                            | Anthropic `/v1/messages` + OpenAI `/v1/chat/completions` | vLLM, LiteLLM, Ollama                                           |
 
 ## Repository shape (when code starts)
 
-```
+```text
 /cmd/atlas            # single CLI entrypoint: up | server | worker | pull | run | status ...
 /internal/server      # gateway, scheduler, registry, hub, auth, metering
 /internal/worker      # hardware detection, engine supervisors, request execution

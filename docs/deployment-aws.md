@@ -8,7 +8,7 @@ Atlas does **not** ship or support Terraform as part of the product. We will pub
 
 ## Topology
 
-```
+```text
                         your engineers / your app (VPC or internet)
                                         │ https (443)
                               ANTHROPIC_BASE_URL=https://atlas.yourco.com

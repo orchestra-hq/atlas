@@ -1,0 +1,21 @@
+#!/bin/sh
+# Pre-commit: markdownlint with auto-fix on staged markdown files.
+# Enable once per clone:  git config core.hooksPath .githooks
+set -e
+
+staged_md=$(git diff --cached --name-only --diff-filter=ACMR -- '*.md')
+[ -z "$staged_md" ] && exit 0
+
+if command -v markdownlint-cli2 >/dev/null 2>&1; then
+  LINT="markdownlint-cli2"
+elif command -v npx >/dev/null 2>&1; then
+  LINT="npx --yes markdownlint-cli2"
+else
+  echo "pre-commit: markdownlint-cli2 not found (brew install markdownlint-cli2 or install node) — skipping markdown lint" >&2
+  exit 0
+fi
+
+# Auto-fix, re-stage the fixes, then verify everything passes.
+echo "$staged_md" | tr '\n' '\0' | xargs -0 $LINT --fix || true
+echo "$staged_md" | tr '\n' '\0' | xargs -0 git add
+echo "$staged_md" | tr '\n' '\0' | xargs -0 $LINT

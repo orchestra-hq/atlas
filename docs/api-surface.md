@@ -58,7 +58,7 @@ Admin auth is separate from inference API keys (admin tokens / console session).
 
 One internal request/response representation; adapters at the edges:
 
-```
+```text
 anthropic wire ⇄ ┐                          ┌ ⇄ engine A (OpenAI-compat endpoint)
                  ├─ internal representation ─┤
 openai wire    ⇄ ┘                          └ ⇄ engine B (native API)

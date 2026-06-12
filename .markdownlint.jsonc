@@ -1,0 +1,10 @@
+{
+  // Atlas markdownlint config. Disabled rules are deliberate — comment why.
+
+  // One line per paragraph/sentence is the house prose style; hard-wrapping
+  // at a column count adds diff noise and helps nobody in 2026 editors.
+  "MD013": false,
+
+  // Tables and the occasional <br>/<sub> in docs are fine.
+  "MD033": false
+}

@@ -20,5 +20,6 @@ Atlas (working name) is an open source self-hosted LLM inference platform: a con
 ## Conventions
 
 - Markdown docs, sentence-case headings, one doc per concern.
+- **Linting:** `markdownlint-cli2` runs on staged `.md` files via the pre-commit hook in `.githooks/` (auto-fixes and re-stages). Once per clone: `git config core.hooksPath .githooks`. Rules live in `.markdownlint.jsonc` — disabling a rule is fine when deliberate, but comment why. ASCII diagrams use ` ```text ` fences.
 - ADR format: Status / Context / Decision / Consequences. Statuses: `proposed`, `accepted`, `superseded by ADR-XXXX`.
 - Keep `README.md`'s documentation map in sync when adding docs.
