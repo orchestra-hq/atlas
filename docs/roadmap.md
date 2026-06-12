@@ -12,7 +12,7 @@ Phased so every milestone ends in something demoable and marketable. Dates inten
 - **Anthropic `/v1/messages`** incl. streaming + tool use + thinking-block mapping for reasoning models (ADR-0005), `count_tokens`, `/v1/models`; **OpenAI `/v1/chat/completions`** incl. streaming + tools
 - Gateway-side context-window assertion: requests that don't fit the resolved model's window are rejected pre-dispatch with a clean Anthropic-shaped 400 ([m0-acceptance.md](m0-acceptance.md))
 - Model alias mapping (`claude-* → local model`)
-- Conformance suite v0 (real Anthropic + OpenAI SDKs, tool loop, Claude Code smoke test)
+- Conformance suite v0 (real Anthropic + OpenAI SDKs, tool loop, Claude Code smoke test) — specced in [conformance-suite.md](conformance-suite.md)
 - Single shared-secret auth for the endpoint
 - `/healthz` + `/readyz` endpoints; single-directory state ([deployment requirements](deployment-aws.md#product-requirements-this-topology-imposes))
 

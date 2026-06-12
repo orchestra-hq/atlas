@@ -74,4 +74,4 @@ The hard parts, known in advance (LiteLLM's translation code is the reference fo
 
 ## Conformance testing (a deliverable, not an afterthought)
 
-A test suite that runs the **real Anthropic and OpenAI SDKs** against Atlas covering: non-streaming + streaming text, multi-turn, tool loop (request → `tool_use` → `tool_result` → final), count_tokens, model listing, error mapping, and Claude Code smoke test (`ANTHROPIC_BASE_URL` pointed at Atlas, scripted task). This suite is also marketing: a published compat matrix.
+A test suite that runs the **real Anthropic and OpenAI SDKs** against Atlas covering: non-streaming + streaming text, multi-turn, tool loop (request → `tool_use` → `tool_result` → final), thinking blocks, count_tokens, model listing, error mapping, and Claude Code smoke test (`ANTHROPIC_BASE_URL` pointed at Atlas, scripted task). This suite is also marketing: a published compat matrix. Full spec: [conformance-suite.md](conformance-suite.md).

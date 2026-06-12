@@ -24,6 +24,7 @@ Teams building on LLMs increasingly want control over where the model runs and w
 | [docs/deployment-aws.md](docs/deployment-aws.md)         | Reference topology for deploying in your own AWS account         |
 | [docs/roadmap.md](docs/roadmap.md)                       | Phased milestones from single-node MVP to fleet                  |
 | [docs/m0-acceptance.md](docs/m0-acceptance.md)           | Definition of done for M0's API surface                          |
+| [docs/conformance-suite.md](docs/conformance-suite.md)   | Executable spec of the compat promise: harness, test groups      |
 | [docs/positioning.md](docs/positioning.md)               | Marketing differentiators and the proof each one requires        |
 | [docs/decisions/](docs/decisions/)                       | Architecture decision records (ADRs)                             |
 | [docs/open-questions.md](docs/open-questions.md)         | Unresolved decisions that need an owner call                     |
