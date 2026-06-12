@@ -13,6 +13,7 @@ Phased so every milestone ends in something demoable and marketable. Dates inten
 - Model alias mapping (`claude-* → local model`)
 - Conformance suite v0 (real Anthropic + OpenAI SDKs, tool loop, Claude Code smoke test)
 - Single shared-secret auth for the endpoint
+- `/healthz` + `/readyz` endpoints; single-directory state ([deployment requirements](deployment-aws.md#product-requirements-this-topology-imposes))
 
 Cut from M0: web console, multi-node, API key management, usage metering (log counts only).
 
@@ -26,6 +27,7 @@ Cut from M0: web console, multi-node, API key management, usage metering (log co
 - API key management (create/revoke, per-key model allowlist)
 - Usage metering (tokens by key/model/worker) + `atlas` CLI views
 - TLS story for the server endpoint
+- Cloud-fleet behaviors: non-interactive join, graceful drain on SIGTERM, heartbeat-timeout removal ([deployment requirements](deployment-aws.md#product-requirements-this-topology-imposes))
 
 ## M2 — Platform: "Private LLM service your team actually operates"
 
@@ -34,6 +36,7 @@ Cut from M0: web console, multi-node, API key management, usage metering (log co
 - SGLang + MLX adapters; engine version pinning/upgrade flow
 - Catalog expansion + published agent-capability test results per model
 - Packaging: Docker images, compose file, systemd units, (k8s manifests as packaging only)
+- Reference IaC under `examples/` — AWS Terraform first (~100-line bar, see [deployment-aws.md](deployment-aws.md)); `s3://` model sources
 - Observability: Prometheus metrics endpoint, structured logs
 
 ## M3 — Ecosystem & differentiation deepeners (pick by traction)

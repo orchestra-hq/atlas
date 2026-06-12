@@ -1,35 +1,42 @@
 # Open questions
 
-Decisions that need Will's call (or at least sign-off). Each has a recommendation so the default path is unblocked.
+Decisions that need Will's call (or at least sign-off). Resolved items move to the bottom with their outcome.
 
-## 1. Name
+## Open
 
-"Atlas" is a placeholder from the directory name and almost certainly collides (multiple Atlas-named dev tools exist, incl. MongoDB Atlas). Need a brandable, npm/crates/domain-available name before anything public. **Recommendation:** keep `atlas` internally, run a naming exercise before first public push.
+### 1. Name
 
-## 2. Language: Go (ADR-0004 is `proposed`)
+"Atlas" is a placeholder and collides widely. Will agrees it's not unique and will come back with ideas. Keep `atlas` internally; rename before anything public. **Waiting on Will.**
 
-Go vs Python for the platform binary. ADR-0004 argues Go (single-binary DX is core differentiation; engines are subprocesses anyway; Ollama precedent). Python's case: ML contributor pool, GPUStack precedent, faster glue iteration. **Recommendation: Go.** Needs sign-off to flip ADR-0004 to `accepted`.
+### 2. License
 
-## 3. License
+**On hold by Will's call (2026-06-12): decide when we go public.** Recommendation on file remains Apache 2.0. Nothing blocks on this until first public release; it becomes a hard blocker at that point (and before accepting external contributions).
 
-**Recommendation: Apache 2.0** (patent grant, infra-adoption norm, matches vLLM/GPUStack). Alternative MIT (simpler, Ollama's choice). If a hosted/open-core business is intended later, this choice has consequences — flag now, decide before first release.
+### 3. M0 engine pair
 
-## 4. M0 engine pair
+Proposed: llama.cpp (universal dev experience) + vLLM (CUDA credibility) both in M0. Not yet explicitly confirmed.
 
-Proposed: llama.cpp (universal dev experience) + vLLM (CUDA credibility). Alternative: ship only llama.cpp in M0 for speed, vLLM in M0.5. **Recommendation: both in M0** — the agent-redirection demo is unconvincing on small quantized models alone; vLLM on a real GPU is the demo that lands.
+### 4. How do workers get engine runtimes?
 
-## 5. How do workers get engine runtimes?
+Containers where available, managed venv (uv) fallback for bare metal — recommendation (c). Decide at M0 build time.
 
-vLLM/SGLang need a Python+CUDA stack on the worker. Options: (a) require Docker/Podman and run engines as containers; (b) worker-managed venvs (uv) per engine; (c) both, container preferred. **Recommendation: (c)** — containers where available, managed venv fallback for bare metal. Decide at M0 build time; affects ADR-0004 consequences.
+### 5. Open-core / monetization posture
 
-## 6. Scope guard: multi-machine model sharding
+Defer, but document intent before first external contribution.
 
-exo-style splitting of one model across several small machines is explicitly out of scope (vision.md). Confirm — it's a frequent community ask and a scope-creep magnet. **Recommendation: confirm out of scope; revisit only with overwhelming demand.**
+### 6. Existing app conformance inputs
 
-## 7. Open-core / monetization posture
+Will prefers not to point Atlas work at the app codebase. Instead, he'll answer a short questionnaire about its API usage, which becomes the M0 acceptance scope:
 
-Not needed now, but the architecture has natural seams (hosted control plane, enterprise console features). Worth a deliberate decision before the project has outside contributors with expectations. **Recommendation: defer, but document intent before first external contribution.**
+1. Does it call the Messages API directly, or run the **Claude Agent SDK** harness? (The harness implies: streaming, client-side tool loop, system prompts, `count_tokens`, `cache_control` traffic.)
+2. Any **server-side tools** (web search, code execution)? These don't exist on Atlas — if used, the app needs client-side equivalents before redirection.
+3. Which **model tiers** (opus/sonnet/haiku) does it use, and roughly what context length per request? (Drives the alias mapping and the GPU/model sizing.)
+4. **Multimodal** inputs (images/PDFs)?
+5. Peak **concurrency** — parallel agent sessions / requests per minute? (Drives engine choice and replica planning.)
+6. Anything using **batches, files, or thinking** explicitly?
 
-## 8. Relationship to the existing app
+## Resolved
 
-Will's current app uses the Claude Agent SDK against Anthropic. The stated goal is to eventually point its LLM requests at Atlas. Question: does the app's needs list (specific endpoints/features it exercises) become the v1 conformance checklist? **Recommendation: yes — extract the app's actual API usage (which endpoints, streaming, tool use patterns) and make it the M0 acceptance test.** Needs a pointer to that codebase.
+- **Language: Go** — accepted by Will 2026-06-12. ADR-0004 flipped to `accepted`.
+- **Scope guard: no cross-machine model sharding** — confirmed by Will 2026-06-12. exo-style sharding stays out of scope.
+- **Terraform/IaC as a product surface: no** — confirmed by Will 2026-06-12. We ship *reference* IaC examples as documentation (M2), never a supported Terraform product. See [deployment-aws.md](deployment-aws.md).

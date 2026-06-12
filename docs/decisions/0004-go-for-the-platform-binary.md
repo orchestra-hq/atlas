@@ -1,6 +1,6 @@
 # ADR-0004: Go for the Atlas binary
 
-**Status:** proposed (needs owner sign-off — see open-questions.md)
+**Status:** accepted (owner sign-off 2026-06-12)
 
 ## Context
 
