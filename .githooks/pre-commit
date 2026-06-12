@@ -1,8 +1,21 @@
 #!/bin/sh
-# Pre-commit: prettier (format) + markdownlint (verify, with auto-fix) on staged markdown files.
+# Pre-commit: format/lint staged Go and markdown files.
 # Enable once per clone:  git config core.hooksPath .githooks
 set -e
 
+# --- Go: golangci-lint fmt (gofumpt + goimports), then re-stage. Full lint
+# runs in CI and via `make lint`; the hook only keeps formatting honest.
+staged_go=$(git diff --cached --name-only --diff-filter=ACMR -- '*.go')
+if [ -n "$staged_go" ]; then
+  if command -v golangci-lint >/dev/null 2>&1; then
+    echo "$staged_go" | tr '\n' '\0' | xargs -0 golangci-lint fmt
+    echo "$staged_go" | tr '\n' '\0' | xargs -0 git add
+  else
+    echo "pre-commit: golangci-lint not found (brew install golangci-lint) — skipping Go format" >&2
+  fi
+fi
+
+# --- Markdown: prettier (format) + markdownlint-cli2 (verify, with auto-fix).
 staged_md=$(git diff --cached --name-only --diff-filter=ACMR -- '*.md')
 [ -z "$staged_md" ] && exit 0
 

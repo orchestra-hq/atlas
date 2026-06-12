@@ -1,0 +1,43 @@
+# GoReleaser v2 config. CI runs `release --snapshot` on every PR as a
+# dry-run; the release workflow runs `release --clean` on v* tags.
+version: 2
+
+project_name: atlas
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/atlas
+    binary: atlas
+    env:
+      - CGO_ENABLED=0 # pure-Go static binary, see ADR-0004
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/orchestra-hq/atlas/internal/version.Version={{ .Version }}
+      - -X github.com/orchestra-hq/atlas/internal/version.Commit={{ .ShortCommit }}
+      - -X github.com/orchestra-hq/atlas/internal/version.Date={{ .Date }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^ci:"
+
+release:
+  draft: true # publish manually after sanity-checking artifacts

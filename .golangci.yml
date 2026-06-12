@@ -1,0 +1,22 @@
+# golangci-lint v2 config. Run via `make lint`; CI pins the same version.
+version: "2"
+
+linters:
+  # Standard set (errcheck, govet, ineffassign, staticcheck, unused) plus:
+  default: standard
+  enable:
+    - gocritic # opinionated correctness/style checks
+    - misspell
+    - nolintlint # nolint directives must be specific and explained
+    - revive
+    - unconvert
+    - unparam
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/orchestra-hq/atlas

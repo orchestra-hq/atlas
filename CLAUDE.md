@@ -6,7 +6,7 @@ Atlas is an open source self-hosted LLM inference platform: a control plane + pe
 
 ## Current phase
 
-**Design.** There is no application code yet. The source of truth is `docs/`. Do not scaffold code without an explicit request from the project owner.
+**Build (M0).** Code lands in the phase order of `docs/m0-build-plan.md` (phase 0 scaffold is done). Design truth still lives in `docs/`; when code and a design doc diverge, fix one or the other in the same change.
 
 ## Rules
 
@@ -20,6 +20,7 @@ Atlas is an open source self-hosted LLM inference platform: a control plane + pe
 ## Conventions
 
 - Markdown docs, sentence-case headings, one doc per concern.
+- **Go:** module `github.com/orchestra-hq/atlas`, layout per `docs/m0-build-plan.md`. `make build / test / lint / fmt / snapshot`; formatting is gofumpt + goimports via `golangci-lint fmt` (config in `.golangci.yml`), releases via GoReleaser (`.goreleaser.yaml`). CI runs on Blacksmith runners (`.github/workflows/ci.yml`); tool versions are pinned there — keep them in sync when upgrading.
 - **Formatting & linting:** the pre-commit hook in `.githooks/` runs `prettier --write` (table/emphasis formatting) then `markdownlint-cli2 --fix` on staged `.md` files, re-stages, and fails on remaining errors. Once per clone: `git config core.hooksPath .githooks`. Rules live in `.markdownlint.jsonc` — disabling a rule is fine when deliberate, but comment why. Tables are padded-pipe style (MD060); ASCII diagrams use ` ```text ` fences.
 - ADR format: Status / Context / Decision / Consequences. Statuses: `proposed`, `accepted`, `superseded by ADR-XXXX`.
 - Keep `README.md`'s documentation map in sync when adding docs.

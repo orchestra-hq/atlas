@@ -1,2 +1,7 @@
 .claude/settings.local.json
 .DS_Store
+
+# Build output
+/bin/
+/dist/
+coverage.out

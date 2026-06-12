@@ -28,6 +28,20 @@ Implementation choices consistent with existing ADRs — recorded here so they d
 4. **Worker channel is an interface with only an in-process implementation in M0.** `atlas up` registers the worker over a Go channel (architecture: single-node mode may not fork the architecture). The wire protocol (gRPC vs WebSocket) is an M1 decision; nothing in M0 depends on it.
 5. **Engine version pinning from day one.** Each catalog/engine release pins exact engine versions; upgrades are explicit.
 
+## Phase 0 scaffolding choices
+
+Tooling picked when the scaffold was built (2026-06-12). Not ADR material — swap any of these if they stop pulling their weight, but change the CI pin and local docs together:
+
+| Concern       | Choice                                                                              | Notes                                                                                                                                          |
+| ------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Module        | `github.com/orchestra-hq/atlas`, Go 1.26                                            | Toolchain version pinned in `go.mod`; CI reads it from there                                                                                   |
+| CLI framework | `spf13/cobra`                                                                       | The standard for subcommand trees (Ollama, kubectl); only transitive dep is pflag                                                              |
+| Lint/format   | `golangci-lint` v2 — standard linters + gocritic/revive/misspell; gofumpt+goimports | One tool for both (`make lint`, `make fmt`); config in `.golangci.yml`                                                                         |
+| Release       | GoReleaser v2, `CGO_ENABLED=0`, linux/darwin × amd64/arm64                          | Version stamped into `internal/version` via ldflags; every PR runs `release --snapshot` as a dry-run                                           |
+| Task runner   | Makefile                                                                            | Five targets, no task-runner dependency                                                                                                        |
+| CI            | GitHub Actions on Blacksmith runners (`blacksmith-{2,4}vcpu-ubuntu-2404`)           | Standard `actions/*` work as-is — Blacksmith intercepts the cache API transparently; macOS/Windows builds are cross-compiled, no extra runners |
+| Repo hooks    | `.githooks/pre-commit` formats staged Go (`golangci-lint fmt`) and markdown         | Full lint stays in CI to keep commits fast                                                                                                     |
+
 ## Engine runtime provisioning (proposal — closes the open question)
 
 Proposed resolution of the [open question](open-questions.md): **M0 ships managed runtimes only (option c); containers (option b) arrive at M1** behind the same `RuntimeProvisioner` interface.
