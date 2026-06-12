@@ -5,3 +5,9 @@
 /bin/
 /dist/
 coverage.out
+
+# Conformance harness
+node_modules/
+__pycache__/
+/conformance/.venv/
+/conformance/results/

@@ -71,6 +71,34 @@ jobs:
           version: "~> v2"
           args: release --snapshot --clean
 
+  conformance:
+    name: Conformance (stub gateway)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
+          cache-dependency-glob: conformance/uv.lock
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: conformance/ts/package-lock.json
+      - run: npm ci --no-fund --no-audit
+        working-directory: conformance/ts
+      # Gate: G1 green against the stub. Failures in other groups are the
+      # point at this phase — matrix.json records what isn't conformant yet,
+      # and the gate widens as m0-build-plan phases land.
+      - name: Run harness
+        run: uv run --locked python run.py --require G1
+        working-directory: conformance
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: conformance-matrix
+          path: conformance/results/matrix.json
+
   docs:
     name: Docs lint
     runs-on: blacksmith-2vcpu-ubuntu-2404

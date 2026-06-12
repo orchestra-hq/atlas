@@ -1,0 +1,24 @@
+[project]
+name = "atlas-conformance"
+version = "0.0.0"
+description = "Conformance suite for the Atlas API surface — executable spec per docs/conformance-suite.md"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.40",
+    "httpx>=0.27",
+    "openai>=1.60",
+    "pytest>=8",
+]
+
+[tool.uv]
+# Test/tooling project, not an installable package.
+package = false
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["py"]
+markers = [
+    "group(name): conformance group from docs/conformance-suite.md (G1..G10)",
+    "criterion(n): acceptance criterion number from docs/m0-acceptance.md",
+    "client(name): client under test (anthropic-py, openai-py, wire, agent-sdk)",
+]

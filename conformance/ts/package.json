@@ -1,0 +1,17 @@
+{
+  "name": "atlas-conformance-ts",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Anthropic TypeScript SDK subset of the Atlas conformance suite (docs/conformance-suite.md)",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@anthropic-ai/sdk": "^0.104.1",
+    "vitest": "^4.1.8"
+  }
+}
