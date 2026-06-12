@@ -4,12 +4,12 @@
 
 ## Context
 
-Atlas must run on a single laptop *and* across a fleet of GPU machines the user controls — including machines on networks the operator can't open inbound ports into (home GPUs, customer VPCs, NAT). The question "is it a job distributor, with a process on each GPU machine and a central process sending jobs?" needed an explicit answer.
+Atlas must run on a single laptop _and_ across a fleet of GPU machines the user controls — including machines on networks the operator can't open inbound ports into (home GPUs, customer VPCs, NAT). The question "is it a job distributor, with a process on each GPU machine and a central process sending jobs?" needed an explicit answer.
 
 ## Decision
 
 - **Two roles in one binary:** `atlas server` (control plane: gateway, scheduler, registry, auth, metering, console — no GPU needed) and `atlas worker` (per-machine agent: hardware detection, engine lifecycle, request execution).
-- **Workers dial out** to the server with a join token and hold a persistent connection; control messages *and* proxied inference traffic flow over worker-initiated connections. The server never connects in to workers.
+- **Workers dial out** to the server with a join token and hold a persistent connection; control messages _and_ proxied inference traffic flow over worker-initiated connections. The server never connects in to workers.
 - **`atlas up`** runs both roles in one process for single-node use; it is the same code path (in-process worker registration), never a fork of the architecture.
 - Scheduling is centralized in the server; workers are deliberately dumb executors.
 

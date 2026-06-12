@@ -6,5 +6,9 @@
   "MD013": false,
 
   // Tables and the occasional <br>/<sub> in docs are fine.
-  "MD033": false
+  "MD033": false,
+
+  // Tables are padded-pipe style — what `prettier --write` produces.
+  // The pre-commit hook runs prettier first, so this should never fire.
+  "MD060": { "style": "padded" }
 }

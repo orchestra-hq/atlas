@@ -6,7 +6,7 @@
 
 ## The problem
 
-Apps built on LLM APIs are easy to start and hard to control. The model runs on someone else's infrastructure, the data leaves your network, the costs scale with someone else's pricing, and availability is someone else's SLA. Open-weight models have closed much of the capability gap — especially for tool-calling/agentic workloads — but actually *serving* them well is still an integration project: pick an engine, tune it per GPU, build an API layer, add auth and usage tracking, repeat per machine.
+Apps built on LLM APIs are easy to start and hard to control. The model runs on someone else's infrastructure, the data leaves your network, the costs scale with someone else's pricing, and availability is someone else's SLA. Open-weight models have closed much of the capability gap — especially for tool-calling/agentic workloads — but actually _serving_ them well is still an integration project: pick an engine, tune it per GPU, build an API layer, add auth and usage tracking, repeat per machine.
 
 Specific gap we target: **agent SDK redirection**. The Claude Agent SDK and Claude Code can already be pointed at any endpoint that speaks the Anthropic Messages API via `ANTHROPIC_BASE_URL`. What's missing is a product that makes "the endpoint" trivially easy to stand up on your own compute — single machine or fleet — without assembling vLLM + LiteLLM + Kubernetes yourself.
 
@@ -14,12 +14,12 @@ Specific gap we target: **agent SDK redirection**. The Claude Agent SDK and Clau
 
 1. **Developers building agents** (primary, drives adoption). They have one GPU box or a beefy Mac, an app built on the Anthropic/OpenAI SDKs, and want `ANTHROPIC_BASE_URL=http://localhost:9090` to just work. They judge us against Ollama's DX.
 2. **Small platform/infra teams** (primary, drives depth). They have 2–20 GPU machines across on-prem and cloud and want a private LLM-as-a-service for their org: API keys, usage visibility, model lifecycle, no Kubernetes mandate. They judge us against GPUStack and DIY vLLM.
-3. **Product companies offering "bring your own compute"** (strategic, this is *us* — we will build tools on top). They ship an agent product and want customers to run inference on customer-controlled hardware. Atlas workers on the customer's machines + a control plane (theirs or the vendor's) is the deployment story.
+3. **Product companies offering "bring your own compute"** (strategic, this is _us_ — we will build tools on top). They ship an agent product and want customers to run inference on customer-controlled hardware. Atlas workers on the customer's machines + a control plane (theirs or the vendor's) is the deployment story.
 
 ## What Atlas is
 
 - A **control plane** (`atlas server`): API gateway, scheduler, model registry, auth, usage metering, web console. Runs anywhere, no GPU needed.
-- A **worker** (`atlas worker`): one process per compute machine. Detects hardware, launches and supervises the right inference engine for the model and the hardware, streams results back. Dials *out* to the control plane.
+- A **worker** (`atlas worker`): one process per compute machine. Detects hardware, launches and supervises the right inference engine for the model and the hardware, streams results back. Dials _out_ to the control plane.
 - A **single-node mode** (`atlas up`): both in one process, Ollama-style, for laptops and single GPU boxes.
 
 ## What Atlas is not

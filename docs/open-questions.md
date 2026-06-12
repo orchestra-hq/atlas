@@ -32,5 +32,5 @@ The app sends "any length of request", but open models top out at 32k–256k con
 
 - **Language: Go** — accepted by Will 2026-06-12. ADR-0004 flipped to `accepted`.
 - **Scope guard: no cross-machine model sharding** — confirmed by Will 2026-06-12. exo-style sharding stays out of scope.
-- **Terraform/IaC as a product surface: no** — confirmed by Will 2026-06-12. We ship *reference* IaC examples as documentation (M2), never a supported Terraform product. See [deployment-aws.md](deployment-aws.md).
+- **Terraform/IaC as a product surface: no** — confirmed by Will 2026-06-12. We ship _reference_ IaC examples as documentation (M2), never a supported Terraform product. See [deployment-aws.md](deployment-aws.md).
 - **Existing app conformance inputs** — questionnaire answered by Will 2026-06-12; captured as [m0-acceptance.md](m0-acceptance.md). Headline: Agent SDK harness, streaming + client-side tool loop are the non-negotiables; no server-side tools; all tiers; no multimodal/batches/files/thinking today.

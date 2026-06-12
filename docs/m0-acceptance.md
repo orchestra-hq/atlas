@@ -4,14 +4,14 @@ Derived from the API usage of Will's existing app (questionnaire answered 2026-0
 
 ## Source: the reference app's profile
 
-| Question | Answer | Consequence for Atlas |
-|---|---|---|
-| Agent SDK harness or raw Messages API? | **Claude Agent SDK harness** today (could be refactored to raw Messages API). 100% reliant on streaming + client-side tool loop. | Streaming SSE and the full tool-use loop are the non-negotiable core. Conformance must run the *actual Agent SDK harness*, not just the Messages API. |
-| Server-side tools? | No. Each runtime gets its own machine with restricted execution and tightly restricted network egress. | Nothing to emulate — our "honest API scope" stance holds. Bonus: the app's egress-restricted runtimes only need to reach one Atlas endpoint, which the zero-inbound/single-endpoint design suits well. |
-| Model tiers / context length? | All three tiers (opus/sonnet/haiku); **any length of request**. | Alias mapping must cover all three tiers to differently-sized local models. ⚠️ See context-window flag below. |
-| Multimodal? | Not now, possibly later. | Image content blocks: accept-and-pass-through where the model supports it, but not M0 acceptance criteria. |
-| Concurrency? | Not deployed yet; must scale. | No hard number to size against. M0 is correctness; concurrency/replicas are M1/M2. Capture real numbers once the app deploys. |
-| Batches / files / thinking? | Not currently. | Stay out of scope per ADR-0002. |
+| Question                               | Answer                                                                                                                           | Consequence for Atlas                                                                                                                                                                                  |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Agent SDK harness or raw Messages API? | **Claude Agent SDK harness** today (could be refactored to raw Messages API). 100% reliant on streaming + client-side tool loop. | Streaming SSE and the full tool-use loop are the non-negotiable core. Conformance must run the _actual Agent SDK harness_, not just the Messages API.                                                  |
+| Server-side tools?                     | No. Each runtime gets its own machine with restricted execution and tightly restricted network egress.                           | Nothing to emulate — our "honest API scope" stance holds. Bonus: the app's egress-restricted runtimes only need to reach one Atlas endpoint, which the zero-inbound/single-endpoint design suits well. |
+| Model tiers / context length?          | All three tiers (opus/sonnet/haiku); **any length of request**.                                                                  | Alias mapping must cover all three tiers to differently-sized local models. ⚠️ See context-window flag below.                                                                                          |
+| Multimodal?                            | Not now, possibly later.                                                                                                         | Image content blocks: accept-and-pass-through where the model supports it, but not M0 acceptance criteria.                                                                                             |
+| Concurrency?                           | Not deployed yet; must scale.                                                                                                    | No hard number to size against. M0 is correctness; concurrency/replicas are M1/M2. Capture real numbers once the app deploys.                                                                          |
+| Batches / files / thinking?            | Not currently.                                                                                                                   | Stay out of scope per ADR-0002.                                                                                                                                                                        |
 
 ## ⚠️ Flag for Will: "any length of request" has a ceiling on open models
 

@@ -1,6 +1,6 @@
 # API surface
 
-Atlas exposes three API groups from the gateway. Compatibility surfaces are defined by *what real clients need*, not by cloning every provider endpoint.
+Atlas exposes three API groups from the gateway. Compatibility surfaces are defined by _what real clients need_, not by cloning every provider endpoint.
 
 ## 1. Anthropic-compatible API (first-class — ADR-0002)
 
@@ -8,11 +8,11 @@ Target clients: Anthropic SDKs (Python/TS/Go/…), Claude Agent SDK, Claude Code
 
 ### Endpoints
 
-| Endpoint | v1 scope |
-|---|---|
-| `POST /v1/messages` | Full support: system prompts, multi-turn, multimodal content blocks (images, model-permitting), **tool use** (`tools`, `tool_choice`, `tool_use`/`tool_result` blocks), **streaming** (SSE event sequence below), `stop_sequences`, `max_tokens`, `temperature`/`top_p`/`top_k` (passed to engine where supported) |
-| `POST /v1/messages/count_tokens` | Supported — agents use this for budgeting; counts via the target model's actual tokenizer |
-| `GET /v1/models`, `GET /v1/models/{id}` | Lists deployed models *and* aliases, Anthropic response shape |
+| Endpoint                                | v1 scope                                                                                                                                                                                                                                                                                                           |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /v1/messages`                     | Full support: system prompts, multi-turn, multimodal content blocks (images, model-permitting), **tool use** (`tools`, `tool_choice`, `tool_use`/`tool_result` blocks), **streaming** (SSE event sequence below), `stop_sequences`, `max_tokens`, `temperature`/`top_p`/`top_k` (passed to engine where supported) |
+| `POST /v1/messages/count_tokens`        | Supported — agents use this for budgeting; counts via the target model's actual tokenizer                                                                                                                                                                                                                          |
+| `GET /v1/models`, `GET /v1/models/{id}` | Lists deployed models _and_ aliases, Anthropic response shape                                                                                                                                                                                                                                                      |
 
 ### Streaming
 
@@ -20,7 +20,7 @@ SSE must emit the exact Anthropic event sequence — `message_start` → `conten
 
 ### Behavior notes
 
-- **Auth:** accept the key from `x-api-key` *or* `Authorization: Bearer` (clients vary); `anthropic-version` header accepted and ignored.
+- **Auth:** accept the key from `x-api-key` _or_ `Authorization: Bearer` (clients vary); `anthropic-version` header accepted and ignored.
 - **Model aliases:** operator-defined mapping, e.g. `claude-sonnet-4-6 → qwen3-coder-72b`, so SDK/tool defaults resolve. Claude Code users can alternatively use `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` env vars — document both.
 - **Errors:** Anthropic error envelope (`{"type":"error","error":{"type":...,"message":...}}`) with matching status codes (400/401/404/413/429/500/529) so SDK retry logic behaves.
 - **Usage:** populate `usage.input_tokens`/`output_tokens` from engine counts (SDKs and cost dashboards read these).
@@ -30,12 +30,12 @@ SSE must emit the exact Anthropic event sequence — `message_start` → `conten
 
 Target clients: OpenAI SDKs, LangChain, llama-index, Continue, Open WebUI, anything else.
 
-| Endpoint | v1 scope |
-|---|---|
-| `POST /v1/chat/completions` | Full: streaming, `tools`/`tool_calls`, JSON mode where engine supports |
-| `POST /v1/embeddings` | Supported when an embedding model is deployed |
-| `GET /v1/models` | OpenAI list shape (same path as Anthropic's — disambiguate by response shape, which matches both closely enough; verify at build time, else version by header) |
-| `POST /v1/completions` | Legacy text completion — passthrough if engine supports, low priority |
+| Endpoint                    | v1 scope                                                                                                                                                       |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /v1/chat/completions` | Full: streaming, `tools`/`tool_calls`, JSON mode where engine supports                                                                                         |
+| `POST /v1/embeddings`       | Supported when an embedding model is deployed                                                                                                                  |
+| `GET /v1/models`            | OpenAI list shape (same path as Anthropic's — disambiguate by response shape, which matches both closely enough; verify at build time, else version by header) |
+| `POST /v1/completions`      | Legacy text completion — passthrough if engine supports, low priority                                                                                          |
 
 Note: engines (vLLM/SGLang/llama.cpp/Ollama) all natively speak OpenAI-compat, so much of this group is proxy + auth + metering rather than translation.
 
@@ -43,14 +43,14 @@ Note: engines (vLLM/SGLang/llama.cpp/Ollama) all natively speak OpenAI-compat, s
 
 What the CLI and web console use. Not a compatibility surface — design for us.
 
-| Area | Endpoints (sketch) |
-|---|---|
-| Workers | list/inspect workers, generate join tokens, drain/remove |
-| Models | registry CRUD, `pull` (download to workers), deploy/scale/stop instances, catalog browse |
-| Instances | list running instances, health, logs |
-| Keys | create/revoke API keys, set allowed models |
-| Usage | tokens by key/model/worker/time window |
-| System | health, version, license info |
+| Area      | Endpoints (sketch)                                                                       |
+| --------- | ---------------------------------------------------------------------------------------- |
+| Workers   | list/inspect workers, generate join tokens, drain/remove                                 |
+| Models    | registry CRUD, `pull` (download to workers), deploy/scale/stop instances, catalog browse |
+| Instances | list running instances, health, logs                                                     |
+| Keys      | create/revoke API keys, set allowed models                                               |
+| Usage     | tokens by key/model/worker/time window                                                   |
+| System    | health, version, license info                                                            |
 
 Admin auth is separate from inference API keys (admin tokens / console session).
 
@@ -69,7 +69,7 @@ The hard parts, known in advance (LiteLLM's translation code is the reference fo
 - **Tool calls:** Anthropic `tool_use` blocks ⇄ OpenAI `tool_calls`; `input_json_delta` streaming ⇄ OpenAI tool-call argument deltas; tool results as user-turn `tool_result` blocks ⇄ `role:"tool"` messages.
 - **Content blocks vs string content**, system prompt as field vs message.
 - **Stop reason vocabulary mapping** (`end_turn` ⇄ `stop`, `tool_use` ⇄ `tool_calls`, etc.).
-- **Chat templates are the engine's job** — Atlas passes structured messages to engines, never renders prompts itself. The registry stores per-model template/parser *configuration* the engine needs.
+- **Chat templates are the engine's job** — Atlas passes structured messages to engines, never renders prompts itself. The registry stores per-model template/parser _configuration_ the engine needs.
 
 ## Conformance testing (a deliverable, not an afterthought)
 

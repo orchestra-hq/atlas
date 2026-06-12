@@ -1,6 +1,6 @@
 # Deployment reference: AWS
 
-How a team deploys Atlas into their own AWS account. This is a *reference topology*, not a product surface: Atlas ships binaries and a join flow; the cloud wiring below is deliberately boring, and that's the point.
+How a team deploys Atlas into their own AWS account. This is a _reference topology_, not a product surface: Atlas ships binaries and a join flow; the cloud wiring below is deliberately boring, and that's the point.
 
 ## Stance on Terraform/IaC (decided 2026-06-12)
 
@@ -52,7 +52,8 @@ Atlas does **not** ship or support Terraform as part of the product. We will pub
                --join-token "$(aws secretsmanager get-secret-value --secret-id atlas/join-token --query SecretString --output text)"
   ```
 
-  That script *is* the integration. Join token lives in Secrets Manager/SSM; instance role grants read on it.
+  That script _is_ the integration. Join token lives in Secrets Manager/SSM; instance role grants read on it.
+
 - **Weights cache** on instance NVMe or gp3 EBS per worker. Optional **S3 weights mirror** so ten workers don't each pull 140GB from Hugging Face and cold boots are fast (registry supports `s3://` sources).
 
 ### Scaling and spot
@@ -67,13 +68,13 @@ Because workers are stateless executors that self-register and are removed on he
 
 These fall out of the reference deployment and are now design constraints (folded into architecture/roadmap):
 
-1. **Non-interactive worker join** — flags/env only, no prompts (user-data compatibility). *(M1)*
-2. **Graceful drain on SIGTERM** — finish/hand off in-flight requests before exit (ASG scale-in, spot interruption). *(M1)*
-3. **Heartbeat-timeout worker removal** — vanished workers leave the pool automatically. *(M1)*
-4. **`/healthz`** (liveness) and **`/readyz`** (serving traffic) endpoints on the server for LB health checks. *(M0)*
-5. **Single-directory state** for trivial backup/restore. *(M0)*
-6. **`s3://` (and `https://`) model sources** in the registry alongside Hugging Face. *(M2)*
-7. **Prometheus metrics** including a queue-depth/utilization signal usable for external autoscaling. *(M2)*
+1. **Non-interactive worker join** — flags/env only, no prompts (user-data compatibility). _(M1)_
+2. **Graceful drain on SIGTERM** — finish/hand off in-flight requests before exit (ASG scale-in, spot interruption). _(M1)_
+3. **Heartbeat-timeout worker removal** — vanished workers leave the pool automatically. _(M1)_
+4. **`/healthz`** (liveness) and **`/readyz`** (serving traffic) endpoints on the server for LB health checks. _(M0)_
+5. **Single-directory state** for trivial backup/restore. _(M0)_
+6. **`s3://` (and `https://`) model sources** in the registry alongside Hugging Face. _(M2)_
+7. **Prometheus metrics** including a queue-depth/utilization signal usable for external autoscaling. _(M2)_
 
 ## The same pattern elsewhere
 
