@@ -4,7 +4,7 @@ Phased so every milestone ends in something demoable and marketable. Dates inten
 
 ## M0 — Single-node MVP: "Claude Code on your own box"
 
-**Demo:** install one binary, `atlas up`, `atlas pull <model>`, point Claude Code at `http://localhost:9090`, complete a real coding task on a local open model.
+**Demo:** install one binary, `atlas up`, `atlas pull <model>`, point Claude Code at `http://localhost:9090`, complete a real coding task on a local open model. Definition of done: [m0-acceptance.md](m0-acceptance.md).
 
 - `atlas` CLI + daemon (`up`, `pull`, `run`, `ps`, `serve` equivalents)
 - One engine adapter per platform class to start: **llama.cpp** (works everywhere, incl. dev laptops) and **vLLM** (CUDA, the credibility path) — MLX and SGLang follow

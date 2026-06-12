@@ -24,19 +24,13 @@ Containers where available, managed venv (uv) fallback for bare metal — recomm
 
 Defer, but document intent before first external contribution.
 
-### 6. Existing app conformance inputs
+### 6. App context-window strategy
 
-Will prefers not to point Atlas work at the app codebase. Instead, he'll answer a short questionnaire about its API usage, which becomes the M0 acceptance scope:
-
-1. Does it call the Messages API directly, or run the **Claude Agent SDK** harness? (The harness implies: streaming, client-side tool loop, system prompts, `count_tokens`, `cache_control` traffic.)
-2. Any **server-side tools** (web search, code execution)? These don't exist on Atlas — if used, the app needs client-side equivalents before redirection.
-3. Which **model tiers** (opus/sonnet/haiku) does it use, and roughly what context length per request? (Drives the alias mapping and the GPU/model sizing.)
-4. **Multimodal** inputs (images/PDFs)?
-5. Peak **concurrency** — parallel agent sessions / requests per minute? (Drives engine choice and replica planning.)
-6. Anything using **batches, files, or thinking** explicitly?
+The app sends "any length of request", but open models top out at 32k–256k context vs Claude's 1M. Atlas will report real windows via `/v1/models` and return clean SDK-parseable errors — but whether the app handles smaller windows gracefully or we provision long-context models for the opus alias is Will's call when deployment nears. See [m0-acceptance.md](m0-acceptance.md). **Parked until app deployment planning.**
 
 ## Resolved
 
 - **Language: Go** — accepted by Will 2026-06-12. ADR-0004 flipped to `accepted`.
 - **Scope guard: no cross-machine model sharding** — confirmed by Will 2026-06-12. exo-style sharding stays out of scope.
 - **Terraform/IaC as a product surface: no** — confirmed by Will 2026-06-12. We ship *reference* IaC examples as documentation (M2), never a supported Terraform product. See [deployment-aws.md](deployment-aws.md).
+- **Existing app conformance inputs** — questionnaire answered by Will 2026-06-12; captured as [m0-acceptance.md](m0-acceptance.md). Headline: Agent SDK harness, streaming + client-side tool loop are the non-negotiables; no server-side tools; all tiers; no multimodal/batches/files/thinking today.
