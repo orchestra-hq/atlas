@@ -34,6 +34,18 @@ Atlas ships as **one binary with two roles** (plus a combined mode):
                   └──────────────┘ └─────────────┘ └─────────────┘
 ```
 
+### Vocabulary
+
+| Term | Meaning |
+|---|---|
+| **Gateway** | The client-facing API endpoint (`/v1/messages`, `/v1/chat/completions`). What `ANTHROPIC_BASE_URL` points at; what the DNS name fronts. It decides where each request goes based on which workers/instances are available and healthy. |
+| **Server** (control plane) | The process that hosts the gateway plus the scheduler, model registry, worker hub, auth/metering, and console. One process; "gateway" names its front door. |
+| **Worker** | The per-machine agent that runs engines and executes inference. |
+| **Engine** | An inference runtime Atlas orchestrates (vLLM, SGLang, llama.cpp, MLX). |
+| **Instance** | One running model on one worker (a model definition placed by the scheduler). |
+
+In user-facing docs and marketing, "gateway" and "workers" are the two words; "server" is the process you run to get a gateway.
+
 ### `atlas server` — the control plane
 
 Runs anywhere (a VPS, a container, the same box as a worker). **No GPU required.** Responsibilities:
@@ -53,11 +65,22 @@ One process per machine that has compute. Responsibilities:
 - **Request execution.** Receives proxied inference requests over its connection to the server, forwards them to the local engine, streams tokens back.
 - **Telemetry.** Heartbeats, GPU utilization, instance health, token counts.
 
+### Deployment models
+
+Atlas is self-hosted software. **The default deployment is everything inside the user's own network**: they run the server and the workers in their VPC/DC, expose one DNS endpoint for the gateway (e.g. behind an internal load balancer), and their apps point `ANTHROPIC_BASE_URL` at it. Nothing about Atlas lives on our infrastructure, ever. See [deployment-aws.md](deployment-aws.md) for the concrete AWS picture.
+
+| Model | Server (gateway) lives | Workers live | Who runs this |
+|---|---|---|---|
+| **Self-contained** (default) | User's VPC/DC | Same network | Almost everyone: single host (`atlas up`) up to a team's GPU fleet |
+| **Split / hybrid** (optional) | Wherever the operator wants (one cloud, a VPS, on-prem) | Anywhere else — other clouds, on-prem, a laptop behind NAT | Multi-cloud fleets; vendors offering "bring your own compute" where the vendor hosts the control plane and customers attach workers |
+
+The split model is *enabled* by the connectivity design below, never required by it.
+
 ### Connectivity model: workers dial out
 
 The worker opens a persistent outbound connection (gRPC or WebSocket stream — implementation detail, TBD at build time) to the server and keeps it alive. All control messages **and** proxied inference traffic flow over worker-initiated connections.
 
-Why this is load-bearing (ADR-0003): workers must be able to live on networks we don't control — behind NAT, in a customer VPC, on a laptop. Requiring inbound ports on workers would kill the "runs on anyone's infra" story. Only the server needs a reachable address. (Anthropic's own self-hosted sandbox workers use the same outbound-only pattern, as does every CI runner; it's proven.)
+Why this is load-bearing (ADR-0003): workers must never require inbound connectivity. Even in the self-contained deployment this pays off — GPU workers sit in private subnets with zero inbound security-group rules — and it's what makes the split/hybrid model possible at all (workers behind NAT, in another cloud, on networks the control-plane operator doesn't control). Only the gateway needs a reachable address. (Anthropic's own self-hosted sandbox workers use the same outbound-only pattern, as does every CI runner; it's proven.)
 
 Trade-off: all inference bytes transit the server. Fine for v1 (token streams are small); if it ever matters, a "direct data plane" optimization (gateway redirects to a worker that *chooses* to expose a port) can be added without changing the model.
 
