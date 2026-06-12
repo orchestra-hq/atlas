@@ -76,7 +76,7 @@ jobs:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@v8.2.0 # no floating major tag — pin exact
         with:
           enable-cache: true
           cache-dependency-glob: conformance/uv.lock
