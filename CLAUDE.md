@@ -2,11 +2,11 @@
 
 ## What this project is
 
-Atlas (working name) is an open source self-hosted LLM inference platform: a control plane + per-machine workers that orchestrate existing inference engines (vLLM, SGLang, llama.cpp, MLX) and expose Anthropic-compatible (`/v1/messages`) and OpenAI-compatible APIs, so agents built on the Claude Agent SDK or OpenAI SDKs can be pointed at user-controlled hardware.
+Atlas is an open source self-hosted LLM inference platform: a control plane + per-machine workers that orchestrate existing inference engines (vLLM, SGLang, llama.cpp, MLX) and expose Anthropic-compatible (`/v1/messages`) and OpenAI-compatible APIs, so agents built on the Claude Agent SDK or OpenAI SDKs can be pointed at user-controlled hardware.
 
 ## Current phase
 
-**Design.** There is no application code yet. The source of truth is `docs/`. Do not scaffold code without an explicit request from the project owner (Will).
+**Design.** There is no application code yet. The source of truth is `docs/`. Do not scaffold code without an explicit request from the project owner.
 
 ## Rules
 

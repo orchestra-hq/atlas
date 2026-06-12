@@ -1,7 +1,5 @@
 # Atlas
 
-> **Working name** — see [docs/open-questions.md](docs/open-questions.md) before getting attached.
-
 Atlas is an open source, self-hosted LLM inference platform. It lets you run open-weight models on hardware **you** control — a laptop, a single GPU box, or a fleet of GPU machines across clouds — and exposes the APIs that agents and apps already speak, so you can point existing tooling (the Claude Agent SDK, Claude Code, OpenAI-compatible clients) at your own infrastructure with a one-line config change.
 
 **Status: design phase.** No code yet. The current deliverable is the design in `docs/`, which is under review.
@@ -33,3 +31,7 @@ Teams building on LLMs increasingly want control over where the model runs and w
 ## Contributing (humans and agents)
 
 Read [CLAUDE.md](CLAUDE.md) first — it explains the project conventions and where design truth lives. During the design phase, changes to `docs/` are the contribution surface; substantive direction changes need an ADR.
+
+## License
+
+[Apache 2.0](LICENSE).
