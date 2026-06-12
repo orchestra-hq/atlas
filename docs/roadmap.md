@@ -8,7 +8,7 @@ Phased so every milestone ends in something demoable and marketable. Dates inten
 
 - `atlas` CLI + daemon (`up`, `pull`, `run`, `ps`, `serve` equivalents)
 - One engine adapter per platform class to start: **llama.cpp** (works everywhere, incl. dev laptops) and **vLLM** (CUDA, the credibility path) — MLX and SGLang follow
-- Model store (content-addressable cache) + a starter catalog of 3–5 agent-tested models with correct templates/tool parsers, incl. ≥1 reasoning-capable model (ADR-0005)
+- Model store (content-addressable cache) + a starter catalog of 3–5 agent-tested models with correct templates/tool parsers, incl. ≥1 reasoning-capable model (ADR-0005) — candidates in [research/model-catalog-m0.md](research/model-catalog-m0.md)
 - **Anthropic `/v1/messages`** incl. streaming + tool use + thinking-block mapping for reasoning models (ADR-0005), `count_tokens`, `/v1/models`; **OpenAI `/v1/chat/completions`** incl. streaming + tools
 - Gateway-side context-window assertion: requests that don't fit the resolved model's window are rejected pre-dispatch with a clean Anthropic-shaped 400 ([m0-acceptance.md](m0-acceptance.md))
 - Model alias mapping (`claude-* → local model`)
