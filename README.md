@@ -1,0 +1,32 @@
+# Atlas
+
+> **Working name** — see [docs/open-questions.md](docs/open-questions.md) before getting attached.
+
+Atlas is an open source, self-hosted LLM inference platform. It lets you run open-weight models on hardware **you** control — a laptop, a single GPU box, or a fleet of GPU machines across clouds — and exposes the APIs that agents and apps already speak, so you can point existing tooling (the Claude Agent SDK, Claude Code, OpenAI-compatible clients) at your own infrastructure with a one-line config change.
+
+**Status: design phase.** No code yet. The current deliverable is the design in `docs/`, which is under review.
+
+## Why
+
+Teams building on LLMs increasingly want control over where the model runs and where their data goes. The pieces to do this exist — vLLM and SGLang for serving, Ollama for local DX, LiteLLM for API translation — but assembling them into a private, multi-machine, agent-ready inference platform is still a do-it-yourself project. Atlas packages the best ideas from those projects into one coherent, well-marketed product:
+
+- **Agent-first API compatibility.** Native Anthropic Messages API (`/v1/messages`) plus OpenAI-compatible endpoints, so `ANTHROPIC_BASE_URL=https://your-atlas` just works.
+- **Your hardware, anywhere.** A lightweight worker runs on each compute machine (your DC, your cloud, your customer's infra) and dials out to a central control plane. No inbound ports, no Kubernetes required.
+- **Ollama-grade DX, fleet-grade scale.** One binary, `atlas up`, pull a model, serve it. The same binary scales out to a multi-node GPU cluster.
+- **Best engine for the job.** Atlas orchestrates proven inference engines (vLLM, SGLang, llama.cpp, MLX) rather than reinventing them.
+
+## Documentation map
+
+| Doc | What it covers |
+|---|---|
+| [docs/vision.md](docs/vision.md) | What we're building, for whom, and how we differentiate |
+| [docs/research/landscape.md](docs/research/landscape.md) | Survey of existing projects and what we take from each |
+| [docs/architecture.md](docs/architecture.md) | How Atlas runs: control plane, workers, request flow, scheduling |
+| [docs/api-surface.md](docs/api-surface.md) | The APIs Atlas exposes (Anthropic-compat, OpenAI-compat, admin) |
+| [docs/roadmap.md](docs/roadmap.md) | Phased milestones from single-node MVP to fleet |
+| [docs/decisions/](docs/decisions/) | Architecture decision records (ADRs) |
+| [docs/open-questions.md](docs/open-questions.md) | Unresolved decisions that need an owner call |
+
+## Contributing (humans and agents)
+
+Read [CLAUDE.md](CLAUDE.md) first — it explains the project conventions and where design truth lives. During the design phase, changes to `docs/` are the contribution surface; substantive direction changes need an ADR.
