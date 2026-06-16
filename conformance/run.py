@@ -125,6 +125,11 @@ def main() -> int:
     parser.add_argument("--api-key", default=os.environ.get("ATLAS_API_KEY", DEFAULT_API_KEY))
     parser.add_argument("--engine", help="engine label for matrix.json (default: stub or external)")
     parser.add_argument("--model", default=os.environ.get("ATLAS_MODEL", DEFAULT_MODEL))
+    parser.add_argument(
+        "--reasoning-model",
+        default=os.environ.get("ATLAS_REASONING_MODEL", ""),
+        help="reasoning-capable model name for G4 (omit to skip reasoning cases)",
+    )
     parser.add_argument("--require", default="", metavar="G1[,G2...]", help="groups that must be green (exit 1 otherwise)")
     parser.add_argument("--skip-ts", action="store_true", help="skip the vitest (anthropic-ts) suite")
     parser.add_argument("--output", type=Path, default=CONF_DIR / "results" / "matrix.json")
@@ -147,6 +152,8 @@ def main() -> int:
 
     env = os.environ.copy()
     env.update({"ATLAS_BASE_URL": base_url, "ATLAS_API_KEY": args.api_key, "ATLAS_MODEL": args.model})
+    if args.reasoning_model:
+        env["ATLAS_REASONING_MODEL"] = args.reasoning_model
 
     try:
         cells = run_pytest(env, results_dir / "pytest-results.json")

@@ -8,6 +8,12 @@ Atlas translates Anthropic `tool_choice` correctly — `auto → auto`, `any →
 
 True forcing would require the gateway to constrain decoding (e.g. supply a GBNF/JSON-schema grammar that mandates a tool call) rather than relying on the engine to honor `tool_choice` — which edges toward reimplementing engine behavior (ADR-0001). **Open:** do we (a) accept best-effort forcing in M0 and document it, (b) add gateway-side grammar enforcement, or (c) gate it on an engine-version bump once a build enforces `tool_choice:required`? Until decided, the G3 suite asserts tool selection on prompt-motivated tasks (the conformance philosophy) rather than forcing against a contrary prompt.
 
+## Reasoning control is model-convention-specific (phase 5)
+
+Atlas maps engine reasoning output to Anthropic `thinking` blocks (ADR-0005) and toggles reasoning per request via the engine's chat-template kwarg `enable_thinking` — the convention hybrid-thinking models (Qwen3, …) expose through llama-server's `--jinja` templating (`internal/engines/llamacpp`, `thinkingKwargs`). This is a **convention, not a standard**: a reasoning model that gates thinking differently (a system-prompt token, a distinct kwarg name, always-on with no off switch) would not respond to `enable_thinking`, so a client that did not request thinking could still get reasoning (which Atlas then drops from the response, wasting tokens but staying correct). `budget_tokens` is **accepted and ignored** on llama.cpp: there is no reasoning-budget knob, and ADR-0005 forbids enforcing budgets by truncation, so it stays advisory.
+
+Both are clean once a per-model reasoning-parser/config registry exists (ADR-0005 consequence; the registry lands with the catalog in phase 9). **Open:** until then, do we (a) keep the Qwen3 `enable_thinking` convention as the M0 default and document it, or (b) introduce minimal per-model reasoning config earlier? The G4 suite deploys a Qwen3 reasoning model + a non-reasoning model and asserts structural behavior (thinking present/absent, deltas stream, graceful no-op), which holds under either choice.
+
 ## Resolved
 
 How workers get engine runtimes — settled: M0 ships managed runtimes only (downloaded prebuilt llama.cpp binaries, a `uv`-managed vLLM venv), with the container path arriving at M1 behind the same provisioner interface. Recorded in [m0-build-plan.md](m0-build-plan.md#engine-runtime-provisioning) and implemented for llama.cpp in phase 2.

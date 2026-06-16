@@ -454,6 +454,96 @@ func TestNonStreamingToolUse(t *testing.T) {
 	}
 }
 
+// thinkExecutor emits a reasoning trace before its answer. Execute returns the
+// buffered form (thinking block then text) so the gateway's buffered-stream
+// fallback is exercised too.
+type thinkExecutor struct{}
+
+func (thinkExecutor) Execute(_ context.Context, _ core.Request) (core.Response, error) {
+	return core.Response{
+		Blocks: []core.ContentBlock{
+			core.ThinkingBlock("let me think", ""),
+			core.TextBlock("the answer"),
+		},
+		StopReason: core.StopEndTurn,
+		Usage:      core.Usage{InputTokens: 3, OutputTokens: 5},
+	}, nil
+}
+
+func (thinkExecutor) ExecuteStream(_ context.Context, _ core.Request, sink core.StreamSink) error {
+	if err := sink.Thinking("let me "); err != nil {
+		return err
+	}
+	if err := sink.Thinking("think"); err != nil {
+		return err
+	}
+	if err := sink.Text("the answer"); err != nil {
+		return err
+	}
+	return sink.Done(core.StopEndTurn, core.Usage{InputTokens: 3, OutputTokens: 5})
+}
+
+// blockTypesByIndex maps each content block's index to its type.
+func blockTypesByIndex(events []sseEvent) map[float64]string {
+	starts := map[float64]string{}
+	for _, e := range events {
+		if e.name == "content_block_start" {
+			starts[e.data["index"].(float64)] = e.data["content_block"].(map[string]any)["type"].(string)
+		}
+	}
+	return starts
+}
+
+func TestStreamThinking(t *testing.T) {
+	srv := newTestServer(thinkExecutor{})
+	defer srv.Close()
+
+	resp, events := streamPost(t, srv,
+		`{"model":"test-model","max_tokens":64,"stream":true,"thinking":{"type":"enabled","budget_tokens":1024},`+
+			`"messages":[{"role":"user","content":"q"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+
+	// thinking block at index 0, text at index 1.
+	if blocks := blockTypesByIndex(events); blocks[0] != "thinking" || blocks[1] != "text" {
+		t.Errorf("block types = %v", blocks)
+	}
+
+	// thinking_delta fragments concatenate to the full reasoning.
+	var thinking string
+	for _, e := range events {
+		if e.name == "content_block_delta" {
+			if d := e.data["delta"].(map[string]any); d["type"] == "thinking_delta" {
+				thinking += d["thinking"].(string)
+			}
+		}
+	}
+	if thinking != "let me think" {
+		t.Errorf("thinking = %q", thinking)
+	}
+}
+
+func TestNonStreamingThinking(t *testing.T) {
+	srv := newTestServer(thinkExecutor{})
+	defer srv.Close()
+
+	resp, body := post(t, srv, testKey,
+		`{"model":"test-model","max_tokens":64,"thinking":{"type":"enabled"},`+
+			`"messages":[{"role":"user","content":"q"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %v", resp.StatusCode, body)
+	}
+	content := body["content"].([]any)
+	first := content[0].(map[string]any)
+	if first["type"] != "thinking" || first["thinking"] != "let me think" {
+		t.Errorf("first block = %v", first)
+	}
+	if content[1].(map[string]any)["type"] != "text" {
+		t.Errorf("second block = %v", content[1])
+	}
+}
+
 func TestValidationErrors(t *testing.T) {
 	srv := newTestServer(&echoExecutor{reply: "x"})
 	defer srv.Close()

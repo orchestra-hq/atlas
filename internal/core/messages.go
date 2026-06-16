@@ -1,8 +1,7 @@
 // Package core holds Atlas's internal representation of conversations:
 // messages, content blocks, and stop reasons. The wire formats under
 // internal/api translate to and from these types so engine adapters and the
-// gateway never depend on a vendor's JSON shape. Thinking blocks arrive in
-// build-plan phase 5.
+// gateway never depend on a vendor's JSON shape.
 package core
 
 import "encoding/json"
@@ -29,8 +28,7 @@ const (
 	StopToolUse      StopReason = "tool_use"
 )
 
-// BlockType discriminates content blocks. Thinking arrives in build-plan
-// phase 5.
+// BlockType discriminates content blocks.
 type BlockType string
 
 // Content block types.
@@ -38,6 +36,7 @@ const (
 	BlockText       BlockType = "text"
 	BlockToolUse    BlockType = "tool_use"
 	BlockToolResult BlockType = "tool_result"
+	BlockThinking   BlockType = "thinking"
 )
 
 // ContentBlock is one unit of message content. A flat struct rather than an
@@ -59,6 +58,13 @@ type ContentBlock struct {
 	ToolUseID string
 	Content   string
 	IsError   bool
+
+	// BlockThinking: the model's reasoning trace, mapped from an engine's
+	// reasoning output (ADR-0005). Thinking is the reasoning text. Signature is
+	// accepted on echoed-back input but never produced — Atlas does not emulate
+	// provider-side signing.
+	Thinking  string
+	Signature string
 }
 
 // TextBlock builds a text content block.
@@ -76,6 +82,12 @@ func ToolUseBlock(id, name string, input json.RawMessage) ContentBlock {
 // the given ID.
 func ToolResultBlock(toolUseID, content string, isError bool) ContentBlock {
 	return ContentBlock{Type: BlockToolResult, ToolUseID: toolUseID, Content: content, IsError: isError}
+}
+
+// ThinkingBlock builds a thinking content block. signature is carried for
+// round-tripping echoed-back input but is empty on blocks Atlas produces.
+func ThinkingBlock(thinking, signature string) ContentBlock {
+	return ContentBlock{Type: BlockThinking, Thinking: thinking, Signature: signature}
 }
 
 // Tool is a tool the model may call. InputSchema is a JSON Schema object,
@@ -142,6 +154,21 @@ type Request struct {
 	// is nil when the request sets no constraint (engine default: auto).
 	Tools      []Tool
 	ToolChoice *ToolChoice
+
+	// Thinking requests reasoning output (ADR-0005). Nil means the client did
+	// not ask for thinking; adapters then suppress reasoning where the engine
+	// would otherwise emit it. Non-nil with Enabled maps reasoning output to
+	// thinking blocks.
+	Thinking *ThinkingConfig
+}
+
+// ThinkingConfig is the request's thinking setting. BudgetTokens is advisory
+// (ADR-0005): adapters map it to the engine's reasoning-effort knob where one
+// exists and otherwise ignore it — Atlas never truncates reasoning to enforce
+// a budget.
+type ThinkingConfig struct {
+	Enabled      bool
+	BudgetTokens int
 }
 
 // Usage is token accounting as reported by the engine.

@@ -194,6 +194,50 @@ func TestStreamWriterToolUse(t *testing.T) {
 	}
 }
 
+func TestStreamWriterThinking(t *testing.T) {
+	rec := httptest.NewRecorder()
+	sw, _ := NewStreamWriter(rec, "msg_th", "m")
+	_ = sw.Start(0)
+	_ = sw.ThinkingDelta("let me ")
+	_ = sw.ThinkingDelta("think")
+	_ = sw.TextDelta("the answer")
+	_ = sw.Finish(core.StopEndTurn, nil, core.Usage{InputTokens: 3, OutputTokens: 5})
+
+	events := parseSSE(t, rec.Body.String())
+	got := names(events)
+	want := []string{
+		"message_start",
+		"content_block_start", "content_block_delta", "content_block_delta", "content_block_stop", // thinking, index 0
+		"content_block_start", "content_block_delta", "content_block_stop", // text, index 1
+		"message_delta", "message_stop",
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("event names = %v, want %v", got, want)
+	}
+
+	// The thinking block is index 0; thinking_delta fragments concatenate.
+	var thinkStart sseEvent
+	for _, e := range events {
+		if e.name == "content_block_start" && e.data["index"].(float64) == 0 {
+			thinkStart = e
+		}
+	}
+	if thinkStart.data["content_block"].(map[string]any)["type"] != "thinking" {
+		t.Errorf("index 0 start block = %v", thinkStart.data["content_block"])
+	}
+	var thinking strings.Builder
+	for _, e := range events {
+		if e.name == "content_block_delta" {
+			if d := e.data["delta"].(map[string]any); d["type"] == "thinking_delta" {
+				thinking.WriteString(d["thinking"].(string))
+			}
+		}
+	}
+	if thinking.String() != "let me think" {
+		t.Errorf("thinking = %q", thinking.String())
+	}
+}
+
 // lastMessageDelta returns the delta object of the final message_delta event.
 func lastMessageDelta(events []sseEvent) map[string]any {
 	var md map[string]any

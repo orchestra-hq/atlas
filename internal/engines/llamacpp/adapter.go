@@ -68,16 +68,20 @@ type oaiTool struct {
 }
 
 type chatRequest struct {
-	Model         string         `json:"model"`
-	Messages      []chatMessage  `json:"messages"`
-	MaxTokens     int            `json:"max_tokens"`
-	Temperature   *float64       `json:"temperature,omitempty"`
-	TopP          *float64       `json:"top_p,omitempty"`
-	TopK          *int           `json:"top_k,omitempty"` // llama.cpp extension, ignored by strict OpenAI servers
-	Tools         []oaiTool      `json:"tools,omitempty"`
-	ToolChoice    any            `json:"tool_choice,omitempty"` // string or {type,function} object
-	Stream        bool           `json:"stream"`
-	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+	Model       string        `json:"model"`
+	Messages    []chatMessage `json:"messages"`
+	MaxTokens   int           `json:"max_tokens"`
+	Temperature *float64      `json:"temperature,omitempty"`
+	TopP        *float64      `json:"top_p,omitempty"`
+	TopK        *int          `json:"top_k,omitempty"` // llama.cpp extension, ignored by strict OpenAI servers
+	Tools       []oaiTool     `json:"tools,omitempty"`
+	ToolChoice  any           `json:"tool_choice,omitempty"` // string or {type,function} object
+	// ChatTemplateKwargs are passed to the engine's Jinja chat template. Atlas
+	// uses it to toggle reasoning on hybrid-thinking models (ADR-0005); see
+	// thinkingKwargs.
+	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"`
+	Stream             bool           `json:"stream"`
+	StreamOptions      *streamOptions `json:"stream_options,omitempty"`
 }
 
 // streamOptions asks the OpenAI-compat server to include a final usage chunk
@@ -89,8 +93,12 @@ type streamOptions struct {
 type chatResponse struct {
 	Choices []struct {
 		Message struct {
-			Content   string     `json:"content"`
-			ToolCalls []toolCall `json:"tool_calls"`
+			Content string `json:"content"`
+			// ReasoningContent is the model's reasoning trace, separated by
+			// llama-server's reasoning parser (the de-facto field name shared by
+			// llama.cpp, vLLM, and SGLang). Empty for non-reasoning models.
+			ReasoningContent string     `json:"reasoning_content"`
+			ToolCalls        []toolCall `json:"tool_calls"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -138,7 +146,12 @@ func (a *Adapter) Execute(ctx context.Context, req core.Request) (core.Response,
 	}
 
 	choice := chat.Choices[0]
-	blocks := make([]core.ContentBlock, 0, 1+len(choice.Message.ToolCalls))
+	blocks := make([]core.ContentBlock, 0, 2+len(choice.Message.ToolCalls))
+	// Reasoning precedes the answer. Only surface it when the client asked for
+	// thinking (ADR-0005); otherwise a hybrid model's stray reasoning is dropped.
+	if emitThinking(req) && choice.Message.ReasoningContent != "" {
+		blocks = append(blocks, core.ThinkingBlock(choice.Message.ReasoningContent, ""))
+	}
 	if choice.Message.Content != "" {
 		blocks = append(blocks, core.TextBlock(choice.Message.Content))
 	}
@@ -187,8 +200,9 @@ func toolUseID(id string, index int) string {
 type chatStreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string `json:"content"`
-			ToolCalls []struct {
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
+			ToolCalls        []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
 				Function struct {
@@ -238,6 +252,7 @@ func (a *Adapter) ExecuteStream(ctx context.Context, req core.Request, sink core
 	reason := core.StopEndTurn
 	var usage core.Usage
 	sawToolCall := false
+	wantThinking := emitThinking(req)
 	started := map[int]bool{} // tool-call indices already announced via ToolCallStart
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -264,6 +279,13 @@ func (a *Adapter) ExecuteStream(ctx context.Context, req core.Request, sink core
 			continue // usage-only final chunk
 		}
 		choice := chunk.Choices[0]
+		if wantThinking && choice.Delta.ReasoningContent != "" {
+			if stop, err := pump(sink.Thinking(choice.Delta.ReasoningContent)); err != nil {
+				return err
+			} else if stop {
+				return nil
+			}
+		}
 		if choice.Delta.Content != "" {
 			if stop, err := pump(sink.Text(choice.Delta.Content)); err != nil {
 				return err
@@ -329,20 +351,37 @@ func (a *Adapter) toChat(req core.Request, stream bool) chatRequest {
 		msgs = append(msgs, toChatMessages(m)...)
 	}
 	cr := chatRequest{
-		Model:       a.model,
-		Messages:    msgs,
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
-		TopP:        req.TopP,
-		TopK:        req.TopK,
-		Tools:       toChatTools(req.Tools),
-		ToolChoice:  toChatToolChoice(req.ToolChoice),
-		Stream:      stream,
+		Model:              a.model,
+		Messages:           msgs,
+		MaxTokens:          req.MaxTokens,
+		Temperature:        req.Temperature,
+		TopP:               req.TopP,
+		TopK:               req.TopK,
+		Tools:              toChatTools(req.Tools),
+		ToolChoice:         toChatToolChoice(req.ToolChoice),
+		ChatTemplateKwargs: thinkingKwargs(req),
+		Stream:             stream,
 	}
 	if stream {
 		cr.StreamOptions = &streamOptions{IncludeUsage: true}
 	}
 	return cr
+}
+
+// emitThinking reports whether the client asked for reasoning output.
+func emitThinking(req core.Request) bool {
+	return req.Thinking != nil && req.Thinking.Enabled
+}
+
+// thinkingKwargs maps the request's thinking setting onto the engine's chat
+// template via the enable_thinking kwarg — the convention hybrid-thinking
+// models (Qwen3, …) expose through llama-server's --jinja templating. Atlas
+// always sets it so a hybrid model defaulting to thinking-on does not emit
+// reasoning the client never requested; on a non-reasoning model the unused
+// kwarg is harmless. budget_tokens is advisory (ADR-0005) and not forwarded:
+// llama.cpp has no reasoning-budget knob, so it is accepted and ignored.
+func thinkingKwargs(req core.Request) map[string]any {
+	return map[string]any{"enable_thinking": emitThinking(req)}
 }
 
 // toChatMessages expands one core message into OpenAI chat messages. Most
@@ -361,6 +400,10 @@ func toChatMessages(m core.Message) []chatMessage {
 				tc.Function.Name = b.Name
 				tc.Function.Arguments = string(b.Input)
 				cm.ToolCalls = append(cm.ToolCalls, tc)
+			case core.BlockThinking:
+				// Reasoning echoed back from a prior turn is dropped, not resent:
+				// thinking-model templates expect prior reasoning stripped from
+				// history (ADR-0005 point 4).
 			}
 		}
 		return []chatMessage{cm}
