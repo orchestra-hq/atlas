@@ -25,6 +25,22 @@ def post_messages(base_url: str, api_key: str | None, body: dict | bytes) -> htt
     return httpx.post(f"{base_url}/v1/messages", headers=headers(api_key), timeout=30, **kwargs)
 
 
+def post_count_tokens(base_url: str, api_key: str | None, body: dict | bytes) -> httpx.Response:
+    """POST /v1/messages/count_tokens without SDK mediation."""
+    kwargs = {"content": body} if isinstance(body, bytes) else {"json": body}
+    return httpx.post(f"{base_url}/v1/messages/count_tokens", headers=headers(api_key), timeout=30, **kwargs)
+
+
+def get_models(base_url: str, api_key: str | None) -> httpx.Response:
+    """GET /v1/models as raw wire JSON."""
+    return httpx.get(f"{base_url}/v1/models", headers=headers(api_key), timeout=30)
+
+
+def get_model(base_url: str, api_key: str | None, model_id: str) -> httpx.Response:
+    """GET /v1/models/{id} as raw wire JSON."""
+    return httpx.get(f"{base_url}/v1/models/{model_id}", headers=headers(api_key), timeout=30)
+
+
 def capture_sse(base_url: str, api_key: str, body: dict) -> list[dict]:
     """Stream /v1/messages and return the exact event sequence.
 

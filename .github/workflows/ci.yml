@@ -132,6 +132,9 @@ jobs:
           ./atlas up \
             --model "models/${CONF_MODEL_FILE}" \
             --model "models/${CONF_REASONING_FILE}" \
+            --alias "claude-sonnet-4-6=${CONF_MODEL_NAME}" \
+            --alias "claude-haiku-4-5=${CONF_MODEL_NAME}" \
+            --alias "claude-opus-4-1=${CONF_REASONING_NAME}" \
             --addr 127.0.0.1:8080 --api-key "$ATLAS_API_KEY" > atlas.log 2>&1 &
           echo $! > atlas.pid
           for _ in $(seq 1 150); do
@@ -141,8 +144,9 @@ jobs:
           if ! curl -sf -o /dev/null http://127.0.0.1:8080/healthz; then
             echo "::error::Atlas did not become ready"; cat atlas.log; exit 1
           fi
-      # Gate: G1 (non-streaming) + G2 (SSE streaming) + G3 (tool loop) + G4
-      # (thinking) green on the real gateway — the phase-5 exit criterion.
+      # Gate: G1-G7 green on the real gateway — the phase-6 exit criterion:
+      # messages, streaming, tools, thinking, models+aliases, count_tokens, and
+      # Anthropic-shaped errors (including pre-dispatch context-window rejection).
       # Remaining groups fail by design; matrix.json records what isn't
       # conformant yet, and the gate widens as m0-build-plan phases land.
       - name: Run harness
@@ -151,7 +155,7 @@ jobs:
             --base-url http://127.0.0.1:8080 \
             --engine llamacpp --model "$CONF_MODEL_NAME" \
             --reasoning-model "$CONF_REASONING_NAME" \
-            --require G1,G2,G3,G4
+            --require G1,G2,G3,G4,G5,G6,G7
         working-directory: conformance
       - name: Stop Atlas
         if: always()

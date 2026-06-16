@@ -125,16 +125,16 @@ func (a *Adapter) Execute(ctx context.Context, req core.Request) (core.Response,
 
 	resp, err := a.client.Do(httpReq)
 	if err != nil {
-		return core.Response{}, fmt.Errorf("llamacpp: call engine: %w", err)
+		return core.Response{}, fmt.Errorf("llamacpp: call engine: %w: %w", core.ErrEngineUnavailable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return core.Response{}, fmt.Errorf("llamacpp: read response: %w", err)
+		return core.Response{}, fmt.Errorf("llamacpp: read response: %w: %w", core.ErrEngineUnavailable, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return core.Response{}, fmt.Errorf("llamacpp: engine returned %d: %s", resp.StatusCode, truncate(raw, 512))
+		return core.Response{}, fmt.Errorf("llamacpp: engine returned %d: %s: %w", resp.StatusCode, truncate(raw, 512), core.ErrEngineUnavailable)
 	}
 
 	var chat chatResponse
@@ -240,13 +240,13 @@ func (a *Adapter) ExecuteStream(ctx context.Context, req core.Request, sink core
 
 	resp, err := a.client.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("llamacpp: call engine: %w", err)
+		return fmt.Errorf("llamacpp: call engine: %w: %w", core.ErrEngineUnavailable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("llamacpp: engine returned %d: %s", resp.StatusCode, truncate(raw, 512))
+		return fmt.Errorf("llamacpp: engine returned %d: %s: %w", resp.StatusCode, truncate(raw, 512), core.ErrEngineUnavailable)
 	}
 
 	reason := core.StopEndTurn
@@ -343,13 +343,7 @@ func pump(err error) (stop bool, _ error) {
 }
 
 func (a *Adapter) toChat(req core.Request, stream bool) chatRequest {
-	msgs := make([]chatMessage, 0, len(req.Messages)+1)
-	if req.System != "" {
-		msgs = append(msgs, chatMessage{Role: "system", Content: req.System})
-	}
-	for _, m := range req.Messages {
-		msgs = append(msgs, toChatMessages(m)...)
-	}
+	msgs := a.chatMessages(req)
 	cr := chatRequest{
 		Model:              a.model,
 		Messages:           msgs,
@@ -366,6 +360,20 @@ func (a *Adapter) toChat(req core.Request, stream bool) chatRequest {
 		cr.StreamOptions = &streamOptions{IncludeUsage: true}
 	}
 	return cr
+}
+
+// chatMessages expands a core request's system prompt and turns into the
+// OpenAI chat message list, shared by generation (toChat) and token counting
+// (CountTokens) so a count and the identical generation map to the same prompt.
+func (a *Adapter) chatMessages(req core.Request) []chatMessage {
+	msgs := make([]chatMessage, 0, len(req.Messages)+1)
+	if req.System != "" {
+		msgs = append(msgs, chatMessage{Role: "system", Content: req.System})
+	}
+	for _, m := range req.Messages {
+		msgs = append(msgs, toChatMessages(m)...)
+	}
+	return msgs
 }
 
 // emitThinking reports whether the client asked for reasoning output.
@@ -405,6 +413,12 @@ func toChatMessages(m core.Message) []chatMessage {
 				// thinking-model templates expect prior reasoning stripped from
 				// history (ADR-0005 point 4).
 			}
+		}
+		if cm.Content == "" && len(cm.ToolCalls) == 0 {
+			// A prior assistant turn containing only thinking blocks becomes
+			// empty after reasoning-strip; drop it rather than sending
+			// {"role":"assistant"}, which strict OpenAI-compat servers reject.
+			return nil
 		}
 		return []chatMessage{cm}
 	}
@@ -479,6 +493,116 @@ func mapFinishReason(reason string) core.StopReason {
 	default:
 		return core.StopEndTurn
 	}
+}
+
+// applyTemplateRequest asks llama-server to render the chat template for the
+// given messages without generating. The body mirrors a chat completion so the
+// rendered prompt matches what generation would feed the model — tools and the
+// thinking kwarg both change the template (and thus the token count).
+type applyTemplateRequest struct {
+	Messages           []chatMessage  `json:"messages"`
+	Tools              []oaiTool      `json:"tools,omitempty"`
+	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"`
+}
+
+type applyTemplateResponse struct {
+	Prompt string `json:"prompt"`
+}
+
+type tokenizeRequest struct {
+	Content string `json:"content"`
+}
+
+type tokenizeResponse struct {
+	Tokens []int `json:"tokens"`
+}
+
+// propsResponse is the subset of GET /props Atlas reads. n_ctx lives under
+// default_generation_settings and is the context window the server was launched
+// with (the model's trained window unless capped with -c).
+type propsResponse struct {
+	DefaultGenerationSettings struct {
+		NCtx int `json:"n_ctx"`
+	} `json:"default_generation_settings"`
+}
+
+// CountTokens returns the prompt's token count using the engine's real
+// tokenizer (ADR build-time decision 2: never reimplement tokenization). It
+// renders the chat template via /apply-template, then tokenizes the result via
+// /tokenize — the same path generation takes, so the count equals the
+// usage.input_tokens an identical Execute would report.
+func (a *Adapter) CountTokens(ctx context.Context, req core.Request) (int, error) {
+	var rendered applyTemplateResponse
+	if err := a.postJSON(ctx, "/apply-template", applyTemplateRequest{
+		Messages:           a.chatMessages(req),
+		Tools:              toChatTools(req.Tools),
+		ChatTemplateKwargs: thinkingKwargs(req),
+	}, &rendered); err != nil {
+		return 0, err
+	}
+	var tok tokenizeResponse
+	if err := a.postJSON(ctx, "/tokenize", tokenizeRequest{Content: rendered.Prompt}, &tok); err != nil {
+		return 0, err
+	}
+	return len(tok.Tokens), nil
+}
+
+// ContextWindow returns the engine's context window (tokens), read from /props.
+// The gateway uses it to reject oversized requests pre-dispatch and to report
+// each model's window via /v1/models (docs/m0-acceptance.md).
+func (a *Adapter) ContextWindow(ctx context.Context) (int, error) {
+	var props propsResponse
+	if err := a.getJSON(ctx, "/props", &props); err != nil {
+		return 0, err
+	}
+	return props.DefaultGenerationSettings.NCtx, nil
+}
+
+// postJSON marshals body to path, decodes a 200 response into out (skipped when
+// nil), and wraps transport failures and non-200 statuses with
+// core.ErrEngineUnavailable so the gateway maps them to a 529.
+func (a *Adapter) postJSON(ctx context.Context, path string, body, out any) error {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("llamacpp: encode %s request: %w", path, err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+path, bytes.NewReader(raw))
+	if err != nil {
+		return fmt.Errorf("llamacpp: build %s request: %w", path, err)
+	}
+	httpReq.Header.Set("content-type", "application/json")
+	return a.doJSON(httpReq, path, out)
+}
+
+// getJSON issues a GET to path and decodes a 200 response into out.
+func (a *Adapter) getJSON(ctx context.Context, path string, out any) error {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, a.baseURL+path, nil)
+	if err != nil {
+		return fmt.Errorf("llamacpp: build %s request: %w", path, err)
+	}
+	return a.doJSON(httpReq, path, out)
+}
+
+func (a *Adapter) doJSON(httpReq *http.Request, path string, out any) error {
+	resp, err := a.client.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("llamacpp: call %s: %w: %w", path, core.ErrEngineUnavailable, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("llamacpp: read %s response: %w: %w", path, core.ErrEngineUnavailable, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("llamacpp: %s returned %d: %s: %w", path, resp.StatusCode, truncate(raw, 512), core.ErrEngineUnavailable)
+	}
+	if out != nil {
+		if err := json.Unmarshal(raw, out); err != nil {
+			return fmt.Errorf("llamacpp: decode %s response: %w", path, err)
+		}
+	}
+	return nil
 }
 
 func truncate(b []byte, n int) string {
