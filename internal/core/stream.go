@@ -21,6 +21,10 @@ import (
 // generating and end the stream cleanly (the gateway uses this when a stop
 // sequence matches mid-stream); the engine treats that as success, not failure.
 type StreamSink interface {
+	// Thinking reports the next chunk of the model's reasoning trace (ADR-0005).
+	// Reasoning precedes the visible answer, so all Thinking calls arrive before
+	// the first Text or ToolCallStart. delta is never empty.
+	Thinking(delta string) error
 	// Text reports the next chunk of generated text. delta is never empty.
 	Text(delta string) error
 	// ToolCallStart reports that the model began a tool call.

@@ -38,6 +38,16 @@ def model() -> str:
     return _required_env("ATLAS_MODEL")
 
 
+@pytest.fixture(scope="session")
+def reasoning_model() -> str:
+    # The reasoning-capable model (G4). Optional: when no reasoning model is
+    # deployed (e.g. the stub gateway), reasoning cases skip rather than fail.
+    value = os.environ.get("ATLAS_REASONING_MODEL")
+    if not value:
+        pytest.skip("ATLAS_REASONING_MODEL not set — no reasoning model deployed")
+    return value
+
+
 # max_retries=0 everywhere: retry behavior is itself under test (G7), and
 # the suite's own flake-retry policy lives in the runner, not the clients.
 @pytest.fixture(scope="session")

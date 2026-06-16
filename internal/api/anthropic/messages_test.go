@@ -200,6 +200,75 @@ func TestFromCoreToolUse(t *testing.T) {
 	}
 }
 
+func TestToCoreThinking(t *testing.T) {
+	// thinking enabled + a thinking block echoed back in history.
+	body := `{
+		"model": "m",
+		"max_tokens": 64,
+		"thinking": {"type":"enabled","budget_tokens":2048},
+		"messages": [
+			{"role":"user","content":"q1"},
+			{"role":"assistant","content":[{"type":"thinking","thinking":"prior reasoning","signature":"sig"},{"type":"text","text":"a1"}]},
+			{"role":"user","content":"q2"}
+		]
+	}`
+	var req MessagesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got, err := req.ToCore()
+	if err != nil {
+		t.Fatalf("ToCore: %v", err)
+	}
+	if got.Thinking == nil || !got.Thinking.Enabled || got.Thinking.BudgetTokens != 2048 {
+		t.Errorf("thinking = %+v", got.Thinking)
+	}
+	think := got.Messages[1].Blocks[0]
+	if think.Type != core.BlockThinking || think.Thinking != "prior reasoning" || think.Signature != "sig" {
+		t.Errorf("thinking block = %+v", think)
+	}
+}
+
+func TestToCoreThinkingErrors(t *testing.T) {
+	body := `{"model":"m","max_tokens":1,"messages":[{"role":"user","content":"x"}],"thinking":{"type":"bogus"}}`
+	var req MessagesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, err := req.ToCore(); err == nil {
+		t.Error("expected error for invalid thinking.type")
+	}
+}
+
+func TestFromCoreThinking(t *testing.T) {
+	resp := core.Response{
+		Blocks: []core.ContentBlock{
+			core.ThinkingBlock("reasoning trace", ""),
+			core.TextBlock("the answer"),
+		},
+		StopReason: core.StopEndTurn,
+	}
+	wire := FromCore("msg_1", "m", resp, nil)
+	raw, err := json.Marshal(wire.Content)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var blocks []map[string]any
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if blocks[0]["type"] != "thinking" || blocks[0]["thinking"] != "reasoning trace" {
+		t.Errorf("thinking block = %v", blocks[0])
+	}
+	// No signature is produced for freshly generated reasoning (ADR-0005).
+	if _, ok := blocks[0]["signature"]; ok {
+		t.Error("freshly produced thinking block leaked a signature")
+	}
+	if blocks[1]["type"] != "text" || blocks[1]["text"] != "the answer" {
+		t.Errorf("text block = %v", blocks[1])
+	}
+}
+
 func TestFromCore(t *testing.T) {
 	seq := "stopword"
 	resp := core.Response{

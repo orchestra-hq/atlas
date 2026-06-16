@@ -10,24 +10,29 @@ import (
 
 // StreamWriter emits the Anthropic Messages streaming event sequence over an
 // HTTP response as Server-Sent Events. A response is a series of content blocks
-// (text and tool_use), each framed by content_block_start … content_block_stop:
+// (thinking, text, and tool_use), each framed by content_block_start …
+// content_block_stop:
 //
 //	message_start
-//	content_block_start   (index 0, text block)
-//	content_block_delta*  (text_delta chunks)
+//	content_block_start   (index 0, thinking block)
+//	content_block_delta*  (thinking_delta chunks)
 //	content_block_stop    (index 0)
-//	content_block_start   (index 1, tool_use block)
-//	content_block_delta*  (input_json_delta chunks)
+//	content_block_start   (index 1, text block)
+//	content_block_delta*  (text_delta chunks)
 //	content_block_stop    (index 1)
+//	content_block_start   (index 2, tool_use block)
+//	content_block_delta*  (input_json_delta chunks)
+//	content_block_stop    (index 2)
 //	message_delta         (stop_reason + final usage)
 //	message_stop
 //
 // Blocks are opened lazily as content arrives: the caller drives it with
-// NewStreamWriter, Start, then TextDelta / ToolUseStart+ToolUseDelta as the
-// model produces them, then Finish. The writer assigns block indices and closes
-// the open block when the next one starts (one block is open at a time, which
-// is what the Anthropic wire requires). Each event is flushed immediately so
-// clients see incremental output.
+// NewStreamWriter, Start, then ThinkingDelta / TextDelta / ToolUseStart+
+// ToolUseDelta as the model produces them, then Finish. Reasoning precedes the
+// answer, so thinking deltas arrive before text. The writer assigns block
+// indices and closes the open block when the next one starts (one block is open
+// at a time, which is what the Anthropic wire requires). Each event is flushed
+// immediately so clients see incremental output.
 type StreamWriter struct {
 	w     http.ResponseWriter
 	flush func()
@@ -70,6 +75,25 @@ func (s *StreamWriter) Start(inputTokens int) error {
 	start.Message.Content = []WireBlock{}
 	start.Message.Usage = WireUsage{InputTokens: inputTokens, OutputTokens: 0}
 	return s.event("message_start", start)
+}
+
+// ThinkingDelta emits one content_block_delta carrying a thinking_delta,
+// opening a thinking block first if one is not already open. Empty deltas are
+// dropped so the wire never carries no-op events.
+func (s *StreamWriter) ThinkingDelta(text string) error {
+	if text == "" {
+		return nil
+	}
+	if !s.open || s.openKind != "thinking" {
+		if err := s.startBlock("thinking", WireBlock{Type: "thinking", Thinking: ""}); err != nil {
+			return err
+		}
+	}
+	return s.event("content_block_delta", contentBlockDeltaEvent{
+		Type:  "content_block_delta",
+		Index: s.openIdx,
+		Delta: thinkingDelta{Type: "thinking_delta", Thinking: text},
+	})
 }
 
 // TextDelta emits one content_block_delta carrying a text_delta, opening a text
@@ -206,12 +230,17 @@ type contentBlockStartEvent struct {
 type contentBlockDeltaEvent struct {
 	Type  string `json:"type"`
 	Index int    `json:"index"`
-	Delta any    `json:"delta"` // textDelta or inputJSONDelta
+	Delta any    `json:"delta"` // thinkingDelta, textDelta, or inputJSONDelta
 }
 
 type textDelta struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+}
+
+type thinkingDelta struct {
+	Type     string `json:"type"`
+	Thinking string `json:"thinking"`
 }
 
 type inputJSONDelta struct {

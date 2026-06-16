@@ -114,6 +114,7 @@ type collectSink struct {
 	usage  core.Usage
 }
 
+func (c *collectSink) Thinking(_ string) error                { return nil }
 func (c *collectSink) Text(d string) error                    { c.text += d; return nil }
 func (c *collectSink) ToolCallStart(_ int, _, _ string) error { return nil }
 func (c *collectSink) ToolCallDelta(_ int, _ string) error    { return nil }

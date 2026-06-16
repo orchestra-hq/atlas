@@ -12,6 +12,7 @@ if (!baseURL) throw new Error("ATLAS_BASE_URL not set — run via conformance/ru
 
 const client = new Anthropic({ baseURL, apiKey: process.env.ATLAS_API_KEY ?? "" });
 const model = process.env.ATLAS_MODEL ?? "stub-small";
+const reasoningModel = process.env.ATLAS_REASONING_MODEL;
 
 function textOf(message: Anthropic.Message): string {
   return message.content
@@ -82,3 +83,26 @@ it('[G3][c3][anthropic-ts] streaming tool use yields a valid tool_use block', as
   expect(toolUse!.name).toBe("get_weather");
   expect((toolUse!.input as { city?: string }).city).toBeTruthy();
 });
+
+// Thinking subset on the TS client: with a reasoning model, streaming must
+// surface a thinking block the SDK reassembles from thinking_delta fragments.
+// Skips when no reasoning model is deployed (e.g. the stub gateway).
+it.skipIf(!reasoningModel)(
+  '[G4][c9][anthropic-ts] streaming thinking yields a thinking block',
+  async () => {
+    const stream = client.messages.stream({
+      model: reasoningModel!,
+      max_tokens: 512,
+      temperature: 0,
+      thinking: { type: "enabled", budget_tokens: 1024 },
+      messages: [{ role: "user", content: "What is 17 times 19? Reason it through." }],
+    });
+    const final = await stream.finalMessage();
+
+    const thinking = final.content.find(
+      (block): block is Anthropic.ThinkingBlock => block.type === "thinking",
+    );
+    expect(thinking).toBeDefined();
+    expect(thinking!.thinking.trim().length).toBeGreaterThan(0);
+  },
+);

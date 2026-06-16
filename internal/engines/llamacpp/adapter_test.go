@@ -199,6 +199,90 @@ func TestToolChoiceMapping(t *testing.T) {
 	}
 }
 
+func TestExecuteEmitsThinkingBlock(t *testing.T) {
+	var got chatRequest
+	srv := fakeServer(t, http.StatusOK, `{
+		"choices":[{"message":{"role":"assistant","reasoning_content":"let me think","content":"the answer"},"finish_reason":"stop"}],
+		"usage":{"prompt_tokens":5,"completion_tokens":6}
+	}`, &got)
+	defer srv.Close()
+
+	a := New(srv.URL, "m", srv.Client())
+	resp, err := a.Execute(context.Background(), core.Request{
+		Model:     "m",
+		MaxTokens: 64,
+		Thinking:  &core.ThinkingConfig{Enabled: true, BudgetTokens: 1024},
+		Messages:  []core.Message{{Role: core.RoleUser, Blocks: []core.ContentBlock{core.TextBlock("q")}}},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	// thinking block precedes the text block.
+	if len(resp.Blocks) != 2 || resp.Blocks[0].Type != core.BlockThinking || resp.Blocks[1].Type != core.BlockText {
+		t.Fatalf("blocks = %+v", resp.Blocks)
+	}
+	if resp.Blocks[0].Thinking != "let me think" {
+		t.Errorf("thinking = %q", resp.Blocks[0].Thinking)
+	}
+	// enable_thinking forwarded to the chat template.
+	if got.ChatTemplateKwargs["enable_thinking"] != true {
+		t.Errorf("enable_thinking = %v, want true", got.ChatTemplateKwargs["enable_thinking"])
+	}
+}
+
+func TestExecuteDropsReasoningWhenThinkingOff(t *testing.T) {
+	var got chatRequest
+	// Engine still returned reasoning_content, but the client did not ask for it.
+	srv := fakeServer(t, http.StatusOK, `{
+		"choices":[{"message":{"role":"assistant","reasoning_content":"stray","content":"answer"},"finish_reason":"stop"}],
+		"usage":{"prompt_tokens":1,"completion_tokens":1}
+	}`, &got)
+	defer srv.Close()
+
+	a := New(srv.URL, "m", srv.Client())
+	resp, err := a.Execute(context.Background(), core.Request{
+		Model:     "m",
+		MaxTokens: 64,
+		Messages:  []core.Message{{Role: core.RoleUser, Blocks: []core.ContentBlock{core.TextBlock("q")}}},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(resp.Blocks) != 1 || resp.Blocks[0].Type != core.BlockText {
+		t.Fatalf("blocks = %+v, want a single text block", resp.Blocks)
+	}
+	if got.ChatTemplateKwargs["enable_thinking"] != false {
+		t.Errorf("enable_thinking = %v, want false", got.ChatTemplateKwargs["enable_thinking"])
+	}
+}
+
+func TestExecuteStreamForwardsThinking(t *testing.T) {
+	body := "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"hmm \"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"ok\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: [DONE]\n\n"
+	srv := sseServer(t, body, nil)
+	defer srv.Close()
+
+	sink := &recordSink{}
+	a := New(srv.URL, "m", srv.Client())
+	if err := a.ExecuteStream(context.Background(), core.Request{
+		Model:     "m",
+		MaxTokens: 16,
+		Thinking:  &core.ThinkingConfig{Enabled: true},
+		Messages:  []core.Message{{Role: core.RoleUser, Blocks: []core.ContentBlock{core.TextBlock("q")}}},
+	}, sink); err != nil {
+		t.Fatalf("ExecuteStream: %v", err)
+	}
+	if sink.thinking != "hmm ok" {
+		t.Errorf("thinking = %q", sink.thinking)
+	}
+	if len(sink.deltas) != 1 || sink.deltas[0] != "done" {
+		t.Errorf("text deltas = %v", sink.deltas)
+	}
+}
+
 func TestExecuteEngineErrorStatus(t *testing.T) {
 	srv := fakeServer(t, http.StatusServiceUnavailable, `{"error":"loading model"}`, nil)
 	defer srv.Close()
@@ -232,6 +316,7 @@ func TestExecuteNoChoices(t *testing.T) {
 // recordSink captures the deltas, tool-call events, and terminal signal a
 // stream produces.
 type recordSink struct {
+	thinking   string // concatenated thinking deltas
 	deltas     []string
 	toolStarts []string // "name" per ToolCallStart, in order
 	toolArgs   string   // concatenated tool-call argument fragments
@@ -239,6 +324,11 @@ type recordSink struct {
 	usage      core.Usage
 	done       bool
 	stopAfter  int // return ErrStopStreaming after this many deltas (0 = never)
+}
+
+func (s *recordSink) Thinking(delta string) error {
+	s.thinking += delta
+	return nil
 }
 
 func (s *recordSink) Text(delta string) error {

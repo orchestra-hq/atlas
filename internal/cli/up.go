@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -23,7 +24,7 @@ import (
 )
 
 type upOptions struct {
-	model    string
+	models   []string
 	addr     string
 	apiKey   string
 	stateDir string
@@ -42,8 +43,8 @@ func newUpCmd() *cobra.Command {
 			return runUp(cmd.Context(), cmd, opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.model, "model", "",
-		"model to serve: a path to a .gguf file or a Hugging Face spec (e.g. ggml-org/Qwen2.5-0.5B-Instruct-GGUF) (required)")
+	cmd.Flags().StringArrayVar(&opts.models, "model", nil,
+		"model to serve: a path to a .gguf file or a Hugging Face spec (e.g. ggml-org/Qwen2.5-0.5B-Instruct-GGUF); repeat to serve several (required)")
 	cmd.Flags().StringVar(&opts.addr, "addr", "127.0.0.1:8080", "address the gateway listens on")
 	cmd.Flags().StringVar(&opts.apiKey, "api-key", "", "API key clients must present; a random key is generated if unset")
 	cmd.Flags().StringVar(&opts.stateDir, "state-dir", defaultStateDir(), "directory for runtimes, weights, and logs")
@@ -70,22 +71,31 @@ func runUp(ctx context.Context, cmd *cobra.Command, opts *upOptions) error {
 		return err
 	}
 
-	// 2. Launch the engine and wait for it to load the model.
-	modelName := modelDisplayName(opts.model)
-	cmd.Printf("Loading model %q (this can take a while on first run)…\n", modelName)
-	w, err := worker.Start(ctx, worker.Config{
-		BinPath:   binPath,
-		ModelArgs: modelArgs(opts.model),
-		Model:     modelName,
-		LogPath:   filepath.Join(opts.stateDir, "llama-server.log"),
-	})
-	if err != nil {
-		return err
+	// 2. Launch an engine per requested model and wait for each to load. Every
+	// model gets its own llama-server (one set of weights apiece); the gateway
+	// routes by model name.
+	models := map[string]server.Executor{}
+	for _, spec := range opts.models {
+		modelName := modelDisplayName(spec)
+		if _, dup := models[modelName]; dup {
+			return fmt.Errorf("duplicate model %q", modelName)
+		}
+		cmd.Printf("Loading model %q (this can take a while on first run)…\n", modelName)
+		w, err := worker.Start(ctx, worker.Config{
+			BinPath:   binPath,
+			ModelArgs: modelArgs(spec),
+			Model:     modelName,
+			LogPath:   filepath.Join(opts.stateDir, "llama-server-"+modelName+".log"),
+		})
+		if err != nil {
+			return err
+		}
+		defer func() { _ = w.Stop() }()
+		models[modelName] = w
 	}
-	defer func() { _ = w.Stop() }()
 
-	// 3. Serve the gateway, routing the served model to the in-process worker.
-	gw := server.NewGateway(opts.apiKey, map[string]server.Executor{modelName: w})
+	// 3. Serve the gateway, routing each served model to its worker.
+	gw := server.NewGateway(opts.apiKey, models)
 	srv := &http.Server{
 		Addr:              opts.addr,
 		Handler:           gw.Handler(),
@@ -102,7 +112,7 @@ func runUp(ctx context.Context, cmd *cobra.Command, opts *upOptions) error {
 	cmd.Println()
 	cmd.Printf("Atlas is up.\n")
 	cmd.Printf("  Endpoint : http://%s\n", opts.addr)
-	cmd.Printf("  Model    : %s\n", modelName)
+	cmd.Printf("  Models   : %s\n", strings.Join(modelNames(models), ", "))
 	cmd.Printf("  API key  : %s\n", opts.apiKey)
 	cmd.Printf("\nPoint a client at it:\n")
 	cmd.Printf("  ANTHROPIC_BASE_URL=http://%s ANTHROPIC_API_KEY=%s\n", opts.addr, opts.apiKey)
@@ -143,6 +153,17 @@ func modelDisplayName(model string) string {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+// modelNames returns the served model names in a stable (sorted) order for
+// display.
+func modelNames(models map[string]server.Executor) []string {
+	names := make([]string, 0, len(models))
+	for name := range models {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func defaultStateDir() string {

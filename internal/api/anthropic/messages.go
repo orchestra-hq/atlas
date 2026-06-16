@@ -8,9 +8,9 @@ import (
 )
 
 // MessagesRequest is the POST /v1/messages wire request. Fields Atlas does not
-// yet honor (thinking, metadata, …) are intentionally absent and land with
-// their build-plan phases; unknown JSON keys are ignored rather than rejected
-// so forward-compatible clients keep working.
+// yet honor (metadata, …) are intentionally absent and land with their
+// build-plan phases; unknown JSON keys are ignored rather than rejected so
+// forward-compatible clients keep working.
 type MessagesRequest struct {
 	Model         string          `json:"model"`
 	System        StringOrBlocks  `json:"system"`
@@ -22,7 +22,15 @@ type MessagesRequest struct {
 	StopSequences []string        `json:"stop_sequences"`
 	Tools         []WireTool      `json:"tools"`
 	ToolChoice    *WireToolChoice `json:"tool_choice"`
+	Thinking      *WireThinking   `json:"thinking"`
 	Stream        bool            `json:"stream"`
+}
+
+// WireThinking is the request's thinking object (ADR-0005). Type is "enabled"
+// or "disabled"; budget_tokens is advisory and only meaningful when enabled.
+type WireThinking struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
 }
 
 // WireTool is one entry of the request's tools array.
@@ -62,6 +70,10 @@ type WireBlock struct {
 	ToolUseID string         `json:"tool_use_id"`
 	Content   StringOrBlocks `json:"content"`
 	IsError   bool           `json:"is_error"`
+
+	// thinking
+	Thinking  string `json:"thinking"`
+	Signature string `json:"signature"`
 }
 
 // MarshalJSON renders a WireBlock with only the fields its Type uses. Atlas
@@ -87,6 +99,14 @@ func (b WireBlock) MarshalJSON() ([]byte, error) {
 			Content   string `json:"content"`
 			IsError   bool   `json:"is_error,omitempty"`
 		}{b.Type, b.ToolUseID, b.Content.Text(), b.IsError})
+	case "thinking":
+		// Atlas does not sign reasoning (ADR-0005), so signature is emitted only
+		// when present from an echoed-back block, never on freshly produced ones.
+		return json.Marshal(struct {
+			Type      string `json:"type"`
+			Thinking  string `json:"thinking"`
+			Signature string `json:"signature,omitempty"`
+		}{b.Type, b.Thinking, b.Signature})
 	default:
 		return json.Marshal(struct {
 			Type string `json:"type"`
@@ -166,6 +186,8 @@ func (r *MessagesRequest) ToCore() (core.Request, error) {
 				blocks = append(blocks, core.ToolUseBlock(b.ID, b.Name, b.Input))
 			case "tool_result":
 				blocks = append(blocks, core.ToolResultBlock(b.ToolUseID, b.Content.Text(), b.IsError))
+			case "thinking":
+				blocks = append(blocks, core.ThinkingBlock(b.Thinking, b.Signature))
 			default:
 				return core.Request{}, ErrInvalid("messages[%d].content[%d].type: unsupported block type %q", i, j, b.Type)
 			}
@@ -181,6 +203,10 @@ func (r *MessagesRequest) ToCore() (core.Request, error) {
 	if err != nil {
 		return core.Request{}, err
 	}
+	thinking, err := thinkingToCore(r.Thinking)
+	if err != nil {
+		return core.Request{}, err
+	}
 
 	return core.Request{
 		Model:         r.Model,
@@ -193,7 +219,26 @@ func (r *MessagesRequest) ToCore() (core.Request, error) {
 		StopSequences: r.StopSequences,
 		Tools:         tools,
 		ToolChoice:    choice,
+		Thinking:      thinking,
 	}, nil
+}
+
+// thinkingToCore validates and translates the request's thinking object. A nil
+// input (field absent) means the client did not ask for thinking. budget_tokens
+// is advisory (ADR-0005) and not range-checked: Atlas never enforces it, so a
+// small value is accepted rather than rejected the way the upstream API would.
+func thinkingToCore(wire *WireThinking) (*core.ThinkingConfig, error) {
+	if wire == nil {
+		return nil, nil
+	}
+	switch wire.Type {
+	case "enabled":
+		return &core.ThinkingConfig{Enabled: true, BudgetTokens: wire.BudgetTokens}, nil
+	case "disabled":
+		return &core.ThinkingConfig{Enabled: false}, nil
+	default:
+		return nil, ErrInvalid("thinking.type: must be %q or %q", "enabled", "disabled")
+	}
 }
 
 // toolsToCore validates and translates the request's tools array.
@@ -260,6 +305,8 @@ func FromCore(id, model string, resp core.Response, stopSequence *string) Messag
 			content = append(content, WireBlock{Type: "text", Text: b.Text})
 		case core.BlockToolUse:
 			content = append(content, WireBlock{Type: "tool_use", ID: b.ID, Name: b.Name, Input: b.Input})
+		case core.BlockThinking:
+			content = append(content, WireBlock{Type: "thinking", Thinking: b.Thinking, Signature: b.Signature})
 		}
 	}
 	return MessagesResponse{

@@ -169,6 +169,13 @@ func bufferedStream(ctx context.Context, exec Executor, req core.Request, sink c
 	}
 	for i, b := range resp.Blocks {
 		switch b.Type {
+		case core.BlockThinking:
+			if b.Thinking == "" {
+				continue
+			}
+			if err := sink.Thinking(b.Thinking); err != nil {
+				return err
+			}
 		case core.BlockText:
 			if b.Text == "" {
 				continue
@@ -201,6 +208,14 @@ type streamSink struct {
 	reason  core.StopReason
 	stopSeq *string
 	usage   core.Usage
+}
+
+// Thinking forwards a reasoning delta straight to the writer. Stop sequences
+// match the model's visible answer, not its reasoning, so thinking text bypasses
+// the scanner (and reasoning always precedes text, so the scanner is still empty
+// here anyway).
+func (s *streamSink) Thinking(delta string) error {
+	return s.sw.ThinkingDelta(delta)
 }
 
 func (s *streamSink) Text(delta string) error {
