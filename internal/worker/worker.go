@@ -129,6 +129,12 @@ func (w *Worker) Execute(ctx context.Context, req core.Request) (core.Response, 
 	return w.adapter.Execute(ctx, req)
 }
 
+// ExecuteStream runs one streaming inference request against the supervised
+// engine, forwarding deltas to sink. It satisfies server.StreamExecutor.
+func (w *Worker) ExecuteStream(ctx context.Context, req core.Request, sink core.StreamSink) error {
+	return w.adapter.ExecuteStream(ctx, req, sink)
+}
+
 // waitReady polls the engine's /health until it returns 200, failing fast if
 // the process exits or the deadline passes.
 func (w *Worker) waitReady(ctx context.Context) error {

@@ -25,8 +25,18 @@ type Executor interface {
 	Execute(ctx context.Context, req core.Request) (core.Response, error)
 }
 
+// StreamExecutor is an Executor that can also stream a response incrementally.
+// The in-process worker implements it; when an executor does not, the gateway
+// falls back to buffering a non-streaming Execute and replaying it as a stream,
+// so the SSE surface holds regardless of engine capability.
+type StreamExecutor interface {
+	Executor
+	ExecuteStream(ctx context.Context, req core.Request, sink core.StreamSink) error
+}
+
 // Gateway is the client-facing control plane: auth, model resolution, and
-// dispatch to a worker. Phase 2 serves non-streaming POST /v1/messages only.
+// dispatch to a worker. It serves POST /v1/messages both buffered and as an
+// SSE stream (stream=true).
 type Gateway struct {
 	apiKey string
 	models map[string]Executor
@@ -75,11 +85,6 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Stream {
-		anthropic.WriteError(w, anthropic.ErrInvalid("streaming is not implemented yet (lands in m0-build-plan phase 3)"))
-		return
-	}
-
 	coreReq, err := req.ToCore()
 	if err != nil {
 		writeErr(w, err)
@@ -101,6 +106,11 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 	stops := coreReq.StopSequences
 	coreReq.StopSequences = nil
 
+	if req.Stream {
+		g.streamMessages(w, r, exec, coreReq, stops)
+		return
+	}
+
 	resp, err := exec.Execute(r.Context(), coreReq)
 	if err != nil {
 		writeErr(w, err)
@@ -114,6 +124,95 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	anthropic.WriteJSON(w, http.StatusOK, anthropic.FromCore(newMessageID(), coreReq.Model, resp, stopSeq))
+}
+
+// streamMessages serves a streaming POST /v1/messages. It opens the SSE
+// response, drives the executor (native streaming if supported, else a
+// buffered Execute replayed as one stream), and applies stop sequences as text
+// arrives so behavior matches the non-streaming path.
+//
+// Once the SSE headers are written the status is committed: a mid-stream engine
+// failure becomes an error event, not an HTTP error.
+func (g *Gateway) streamMessages(w http.ResponseWriter, r *http.Request, exec Executor, req core.Request, stops []string) {
+	sw, err := anthropic.NewStreamWriter(w, newMessageID(), req.Model)
+	if err != nil {
+		anthropic.WriteError(w, &anthropic.Error{Status: http.StatusInternalServerError, Type: anthropic.ErrAPI, Msg: "streaming unsupported"})
+		return
+	}
+	if err := sw.Start(0); err != nil {
+		return // client went away; nothing more we can do
+	}
+
+	sink := &streamSink{sw: sw, scanner: core.NewStopSequenceScanner(stops), reason: core.StopEndTurn}
+
+	if streamer, ok := exec.(StreamExecutor); ok {
+		err = streamer.ExecuteStream(r.Context(), req, sink)
+	} else {
+		err = bufferedStream(r.Context(), exec, req, sink)
+	}
+	if err != nil {
+		_ = sw.Error(anthropic.ErrAPI, "engine error during generation")
+		return
+	}
+
+	_ = sw.Finish(sink.reason, sink.stopSeq, sink.usage)
+}
+
+// bufferedStream adapts a non-streaming Executor to the streaming sink by
+// running Execute and replaying the result as a single text delta plus Done.
+func bufferedStream(ctx context.Context, exec Executor, req core.Request, sink core.StreamSink) error {
+	resp, err := exec.Execute(ctx, req)
+	if err != nil {
+		return err
+	}
+	if text := resp.Text(); text != "" {
+		if err := sink.Text(text); err != nil {
+			if errors.Is(err, core.ErrStopStreaming) {
+				return nil
+			}
+			return err
+		}
+	}
+	return sink.Done(resp.StopReason, resp.Usage)
+}
+
+// streamSink interposes between an engine's deltas and the SSE writer: it runs
+// text through the stop-sequence scanner (truncating and ending the stream when
+// one matches) and records the final stop reason, sequence, and usage for the
+// closing message_delta.
+type streamSink struct {
+	sw      *anthropic.StreamWriter
+	scanner *core.StopSequenceScanner
+	reason  core.StopReason
+	stopSeq *string
+	usage   core.Usage
+}
+
+func (s *streamSink) Text(delta string) error {
+	emit, matched := s.scanner.Push(delta)
+	if emit != "" {
+		if err := s.sw.TextDelta(emit); err != nil {
+			return err
+		}
+	}
+	if matched {
+		s.reason = core.StopStopSequence
+		seq := s.scanner.Matched()
+		s.stopSeq = &seq
+		return core.ErrStopStreaming
+	}
+	return nil
+}
+
+func (s *streamSink) Done(reason core.StopReason, usage core.Usage) error {
+	if tail := s.scanner.Flush(); tail != "" {
+		if err := s.sw.TextDelta(tail); err != nil {
+			return err
+		}
+	}
+	s.reason = reason
+	s.usage = usage
+	return nil
 }
 
 // authenticated checks the key from x-api-key or Authorization: Bearer

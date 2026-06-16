@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"io"
@@ -45,7 +46,18 @@ func runFakeLlama(behavior string) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, `{"status":"ok"}`)
 	})
-	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		if bytes.Contains(raw, []byte(`"stream":true`)) {
+			w.Header().Set("content-type", "text/event-stream")
+			for _, tok := range []string{"po", "ng"} {
+				_, _ = io.WriteString(w, `data: {"choices":[{"delta":{"content":"`+tok+`"},"finish_reason":null}]}`+"\n\n")
+			}
+			_, _ = io.WriteString(w, `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`+"\n\n")
+			_, _ = io.WriteString(w, `data: {"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2}}`+"\n\n")
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+			return
+		}
 		w.Header().Set("content-type", "application/json")
 		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}`)
 	})
@@ -92,6 +104,42 @@ func TestStartReadyAndExecute(t *testing.T) {
 	}
 	if resp.Text() != "pong" || resp.StopReason != core.StopEndTurn {
 		t.Errorf("resp = %q / %q", resp.Text(), resp.StopReason)
+	}
+}
+
+// collectSink records streamed deltas and the terminal signal.
+type collectSink struct {
+	text   string
+	reason core.StopReason
+	usage  core.Usage
+}
+
+func (c *collectSink) Text(d string) error { c.text += d; return nil }
+func (c *collectSink) Done(r core.StopReason, u core.Usage) error {
+	c.reason, c.usage = r, u
+	return nil
+}
+
+func TestStartReadyAndStream(t *testing.T) {
+	w, err := Start(context.Background(), fakeConfig(t, "ready"))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Stop() })
+
+	sink := &collectSink{}
+	if err := w.ExecuteStream(context.Background(), core.Request{
+		Model:     "fake-model",
+		MaxTokens: 16,
+		Messages:  []core.Message{{Role: core.RoleUser, Blocks: []core.ContentBlock{core.TextBlock("ping")}}},
+	}, sink); err != nil {
+		t.Fatalf("ExecuteStream: %v", err)
+	}
+	if sink.text != "pong" || sink.reason != core.StopEndTurn {
+		t.Errorf("streamed = %q / %q", sink.text, sink.reason)
+	}
+	if sink.usage.OutputTokens != 2 {
+		t.Errorf("usage = %+v", sink.usage)
 	}
 }
 

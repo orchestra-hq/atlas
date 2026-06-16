@@ -155,14 +155,192 @@ func TestUnknownModel404(t *testing.T) {
 	}
 }
 
-func TestStreamRejected(t *testing.T) {
-	srv := newTestServer(&echoExecutor{reply: "x"})
+// streamExecutor emits a fixed sequence of deltas natively (implements
+// StreamExecutor). A stop sequence may end the stream early via the sink.
+type streamExecutor struct {
+	deltas []string
+	err    error
+}
+
+func (e *streamExecutor) Execute(_ context.Context, _ core.Request) (core.Response, error) {
+	return core.Response{Blocks: []core.ContentBlock{core.TextBlock(strings.Join(e.deltas, ""))}, StopReason: core.StopEndTurn}, nil
+}
+
+func (e *streamExecutor) ExecuteStream(_ context.Context, _ core.Request, sink core.StreamSink) error {
+	if e.err != nil {
+		return e.err
+	}
+	for _, d := range e.deltas {
+		if err := sink.Text(d); err != nil {
+			if err == core.ErrStopStreaming {
+				return nil
+			}
+			return err
+		}
+	}
+	return sink.Done(core.StopEndTurn, core.Usage{InputTokens: 4, OutputTokens: len(e.deltas)})
+}
+
+// streamPost issues a streaming POST and returns the parsed SSE events.
+func streamPost(t *testing.T, srv *httptest.Server, body string) (*http.Response, []sseEvent) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/messages", strings.NewReader(body))
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("x-api-key", testKey)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	if resp.StatusCode != http.StatusOK {
+		return resp, nil
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	return resp, parseSSEEvents(t, string(raw))
+}
+
+type sseEvent struct {
+	name string
+	data map[string]any
+}
+
+func parseSSEEvents(t *testing.T, body string) []sseEvent {
+	t.Helper()
+	var events []sseEvent
+	for _, block := range strings.Split(strings.TrimSpace(body), "\n\n") {
+		if strings.TrimSpace(block) == "" {
+			continue
+		}
+		var name, data string
+		for _, line := range strings.Split(block, "\n") {
+			switch {
+			case strings.HasPrefix(line, "event:"):
+				name = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			case strings.HasPrefix(line, "data:"):
+				data = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			}
+		}
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(data), &obj); err != nil {
+			t.Fatalf("event %q bad data %q: %v", name, data, err)
+		}
+		events = append(events, sseEvent{name: name, data: obj})
+	}
+	return events
+}
+
+func eventNames(events []sseEvent) []string {
+	out := make([]string, 0, len(events))
+	for _, e := range events {
+		if e.name != "ping" {
+			out = append(out, e.name)
+		}
+	}
+	return out
+}
+
+func streamText(events []sseEvent) string {
+	var b strings.Builder
+	for _, e := range events {
+		if e.name == "content_block_delta" {
+			b.WriteString(e.data["delta"].(map[string]any)["text"].(string))
+		}
+	}
+	return b.String()
+}
+
+func TestStreamNativeSequence(t *testing.T) {
+	srv := newTestServer(&streamExecutor{deltas: []string{"stream ", "me ", "please"}})
 	defer srv.Close()
 
-	resp, body := post(t, srv, testKey,
-		`{"model":"test-model","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"hi"}]}`)
-	if resp.StatusCode != http.StatusBadRequest || errType(body) != "invalid_request_error" {
-		t.Errorf("status = %d, type = %v", resp.StatusCode, errType(body))
+	resp, events := streamPost(t, srv,
+		`{"model":"test-model","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"go"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Errorf("content-type = %q", ct)
+	}
+
+	names := eventNames(events)
+	if names[0] != "message_start" || names[1] != "content_block_start" {
+		t.Errorf("prefix = %v", names[:2])
+	}
+	last3 := names[len(names)-3:]
+	if strings.Join(last3, ",") != "content_block_stop,message_delta,message_stop" {
+		t.Errorf("suffix = %v", last3)
+	}
+	if streamText(events) != "stream me please" {
+		t.Errorf("text = %q", streamText(events))
+	}
+
+	// message_delta carries the stop reason.
+	for _, e := range events {
+		if e.name == "message_delta" {
+			if e.data["delta"].(map[string]any)["stop_reason"] != "end_turn" {
+				t.Errorf("stop_reason = %v", e.data["delta"])
+			}
+		}
+	}
+}
+
+func TestStreamBufferedFallback(t *testing.T) {
+	// echoExecutor implements only Executor; the gateway must still stream it.
+	srv := newTestServer(&echoExecutor{reply: "buffered reply"})
+	defer srv.Close()
+
+	resp, events := streamPost(t, srv,
+		`{"model":"test-model","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"go"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if streamText(events) != "buffered reply" {
+		t.Errorf("text = %q", streamText(events))
+	}
+	if names := eventNames(events); names[0] != "message_start" || names[len(names)-1] != "message_stop" {
+		t.Errorf("names = %v", names)
+	}
+}
+
+func TestStreamStopSequence(t *testing.T) {
+	srv := newTestServer(&streamExecutor{deltas: []string{"keep ", "this STOP", " drop"}})
+	defer srv.Close()
+
+	resp, events := streamPost(t, srv,
+		`{"model":"test-model","max_tokens":64,"stream":true,"stop_sequences":["STOP"],"messages":[{"role":"user","content":"go"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if got := streamText(events); got != "keep this " {
+		t.Errorf("text = %q, want %q", got, "keep this ")
+	}
+	for _, e := range events {
+		if e.name == "message_delta" {
+			delta := e.data["delta"].(map[string]any)
+			if delta["stop_reason"] != "stop_sequence" || delta["stop_sequence"] != "STOP" {
+				t.Errorf("delta = %v", delta)
+			}
+		}
+	}
+}
+
+func TestStreamEngineErrorEmitsErrorEvent(t *testing.T) {
+	srv := newTestServer(&streamExecutor{err: io.ErrUnexpectedEOF})
+	defer srv.Close()
+
+	resp, events := streamPost(t, srv,
+		`{"model":"test-model","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"go"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d (headers already sent → 200)", resp.StatusCode)
+	}
+	var sawError bool
+	for _, e := range events {
+		if e.name == "error" {
+			sawError = true
+		}
+	}
+	if !sawError {
+		t.Errorf("expected an error event, got %v", eventNames(events))
 	}
 }
 

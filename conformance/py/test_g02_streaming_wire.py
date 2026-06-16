@@ -1,11 +1,11 @@
 """G2 — Streaming wire conformance (criterion 2).
 
-Written against the spec, ahead of the implementation: expected to FAIL
-until phase 3 lands Anthropic SSE streaming (the stub gateway rejects
-stream=true on purpose). The failures are the phase-1 deliverable — they
-prove the harness reports structured failures. Fleshed out to the full
-event-sequence cases (per-stop-reason transitions, ping tolerance) when
-phase 3 starts.
+Anthropic SSE streaming, landed in m0-build-plan phase 3. Asserts the exact
+event sequence, that text deltas concatenate to the final text, the
+end_turn and max_tokens stop-reason transitions, and that the Python SDK
+streams without error. (The stub gateway rejects stream=true, so these fail
+against it on purpose; they pass against the real gateway from phase 3 on.
+The tool_use transition arrives with tools in phase 4.)
 """
 
 import pytest
@@ -54,6 +54,24 @@ def test_text_deltas_concatenate_to_final_text(base_url, api_key, model):
     message_deltas = [e["data"] for e in events if e["event"] == "message_delta"]
     assert message_deltas, "no message_delta event"
     assert message_deltas[-1]["delta"]["stop_reason"] == "end_turn"
+
+
+@pytest.mark.client("wire")
+def test_max_tokens_stop_reason_streams(base_url, api_key, model):
+    # A tiny budget forces the max_tokens transition regardless of the model.
+    events = capture_sse(
+        base_url,
+        api_key,
+        {
+            "model": model,
+            "max_tokens": 1,
+            "temperature": 0,
+            "messages": [{"role": "user", "content": "Write a long paragraph about the sea."}],
+        },
+    )
+    message_deltas = [e["data"] for e in events if e["event"] == "message_delta"]
+    assert message_deltas, "no message_delta event"
+    assert message_deltas[-1]["delta"]["stop_reason"] == "max_tokens"
 
 
 @pytest.mark.client("anthropic-py")
