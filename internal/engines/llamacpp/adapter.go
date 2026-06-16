@@ -414,6 +414,12 @@ func toChatMessages(m core.Message) []chatMessage {
 				// history (ADR-0005 point 4).
 			}
 		}
+		if cm.Content == "" && len(cm.ToolCalls) == 0 {
+			// A prior assistant turn containing only thinking blocks becomes
+			// empty after reasoning-strip; drop it rather than sending
+			// {"role":"assistant"}, which strict OpenAI-compat servers reject.
+			return nil
+		}
 		return []chatMessage{cm}
 	}
 

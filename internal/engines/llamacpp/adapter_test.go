@@ -257,6 +257,38 @@ func TestExecuteDropsReasoningWhenThinkingOff(t *testing.T) {
 	}
 }
 
+func TestAssistantThinkingOnlyTurnIsDropped(t *testing.T) {
+	var got chatRequest
+	srv := fakeServer(t, http.StatusOK, `{
+		"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+		"usage":{"prompt_tokens":1,"completion_tokens":1}
+	}`, &got)
+	defer srv.Close()
+
+	a := New(srv.URL, "m", srv.Client())
+	_, err := a.Execute(context.Background(), core.Request{
+		Model:     "m",
+		MaxTokens: 64,
+		Thinking:  &core.ThinkingConfig{Enabled: true},
+		Messages: []core.Message{
+			{Role: core.RoleUser, Blocks: []core.ContentBlock{core.TextBlock("first")}},
+			// Echoed prior assistant turn containing only reasoning should not
+			// produce an empty assistant chat message after reasoning-strip.
+			{Role: core.RoleAssistant, Blocks: []core.ContentBlock{core.ThinkingBlock("scratchpad", "")}},
+			{Role: core.RoleUser, Blocks: []core.ContentBlock{core.TextBlock("second")}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(got.Messages) != 2 {
+		t.Fatalf("messages = %+v, want user/user (thinking-only assistant dropped)", got.Messages)
+	}
+	if got.Messages[0].Role != "user" || got.Messages[1].Role != "user" {
+		t.Errorf("roles = %q, %q", got.Messages[0].Role, got.Messages[1].Role)
+	}
+}
+
 func TestExecuteStreamForwardsThinking(t *testing.T) {
 	body := "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"hmm \"},\"finish_reason\":null}]}\n\n" +
 		"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"ok\"},\"finish_reason\":null}]}\n\n" +
