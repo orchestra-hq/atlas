@@ -85,6 +85,6 @@ Every pytest test carries `group` / `criterion` / `client` markers; vitest tests
 
 ## Status
 
-As of [m0-build-plan](../docs/m0-build-plan.md) phase 2, CI runs the harness against the **real Atlas gateway** (`atlas up` with a tiny llama.cpp model on a CPU runner), gating on `--require G1` — the phase-2 exit criterion. Against the real gateway today: G1 (non-streaming `/v1/messages`) and G7's error-envelope subset pass; G2/G3/G8 fail by design (streaming, tools, and the OpenAI surface land in phases 3/4/7); the rest are skipped placeholders citing their build phase. The gate widens as those phases land.
+As of [m0-build-plan](../docs/m0-build-plan.md) phase 3, CI runs the harness against the **real Atlas gateway** (`atlas up` with a tiny llama.cpp model on a CPU runner), gating on `--require G1 G2` — the phase-3 exit criterion. Against the real gateway today: G1 (non-streaming `/v1/messages`), G2 (SSE streaming), and G7's error-envelope subset pass; G3/G8 fail by design (tools and the OpenAI surface land in phases 4/7); the rest are skipped placeholders citing their build phase. The gate widens as those phases land.
 
 The **stub gateway** (`stubgw/`) — a deliberately partial `/v1/messages` (non-streaming text, Anthropic-shaped errors) — remains in the tree as the default target when no `--base-url` is given. It exists so the harness mechanics can be exercised without standing up a model (the fast local loop); it is no longer the CI gate.
