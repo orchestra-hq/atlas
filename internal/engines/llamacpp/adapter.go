@@ -37,8 +37,34 @@ func New(baseURL, model string, client *http.Client) *Adapter {
 }
 
 type chatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role string `json:"role"`
+	// Content is the message text. Omitted on an assistant turn that only
+	// carries tool calls (OpenAI accepts a missing/empty content there).
+	Content string `json:"content,omitempty"`
+	// ToolCalls is set on an assistant turn that called tools.
+	ToolCalls []toolCall `json:"tool_calls,omitempty"`
+	// ToolCallID links a role:"tool" message to the call it answers.
+	ToolCallID string `json:"tool_call_id,omitempty"`
+}
+
+// toolCall is one OpenAI tool call (request and response shape coincide).
+type toolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+// oaiTool is one entry of the OpenAI tools array.
+type oaiTool struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Parameters  json.RawMessage `json:"parameters"`
+	} `json:"function"`
 }
 
 type chatRequest struct {
@@ -48,6 +74,8 @@ type chatRequest struct {
 	Temperature   *float64       `json:"temperature,omitempty"`
 	TopP          *float64       `json:"top_p,omitempty"`
 	TopK          *int           `json:"top_k,omitempty"` // llama.cpp extension, ignored by strict OpenAI servers
+	Tools         []oaiTool      `json:"tools,omitempty"`
+	ToolChoice    any            `json:"tool_choice,omitempty"` // string or {type,function} object
 	Stream        bool           `json:"stream"`
 	StreamOptions *streamOptions `json:"stream_options,omitempty"`
 }
@@ -60,8 +88,11 @@ type streamOptions struct {
 
 type chatResponse struct {
 	Choices []struct {
-		Message      chatMessage `json:"message"`
-		FinishReason string      `json:"finish_reason"`
+		Message struct {
+			Content   string     `json:"content"`
+			ToolCalls []toolCall `json:"tool_calls"`
+		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
 		PromptTokens     int `json:"prompt_tokens"`
@@ -107,14 +138,47 @@ func (a *Adapter) Execute(ctx context.Context, req core.Request) (core.Response,
 	}
 
 	choice := chat.Choices[0]
+	blocks := make([]core.ContentBlock, 0, 1+len(choice.Message.ToolCalls))
+	if choice.Message.Content != "" {
+		blocks = append(blocks, core.TextBlock(choice.Message.Content))
+	}
+	for i, tc := range choice.Message.ToolCalls {
+		blocks = append(blocks, core.ToolUseBlock(toolUseID(tc.ID, i), tc.Function.Name, toolArgs(tc.Function.Arguments)))
+	}
+
+	reason := mapFinishReason(choice.FinishReason)
+	if len(choice.Message.ToolCalls) > 0 {
+		// A tool call always means stop_reason tool_use, even if the engine
+		// reported "stop" (some do when tool_choice forced a call).
+		reason = core.StopToolUse
+	}
+
 	return core.Response{
-		Blocks:     []core.ContentBlock{core.TextBlock(choice.Message.Content)},
-		StopReason: mapFinishReason(choice.FinishReason),
+		Blocks:     blocks,
+		StopReason: reason,
 		Usage: core.Usage{
 			InputTokens:  chat.Usage.PromptTokens,
 			OutputTokens: chat.Usage.CompletionTokens,
 		},
 	}, nil
+}
+
+// toolArgs normalizes a tool call's arguments into a JSON object. llama-server
+// emits a JSON string like {"city":"Paris"}; an empty value becomes {}.
+func toolArgs(arguments string) json.RawMessage {
+	if strings.TrimSpace(arguments) == "" {
+		return json.RawMessage("{}")
+	}
+	return json.RawMessage(arguments)
+}
+
+// toolUseID returns the engine-supplied call id, or a synthesized one when the
+// engine omits it (Anthropic requires a non-empty id to pair with tool_result).
+func toolUseID(id string, index int) string {
+	if id != "" {
+		return id
+	}
+	return fmt.Sprintf("toolu_%d", index)
 }
 
 // chatStreamChunk is one Server-Sent Event from the OpenAI-compat streaming
@@ -123,7 +187,15 @@ func (a *Adapter) Execute(ctx context.Context, req core.Request) (core.Response,
 type chatStreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
+			Content   string `json:"content"`
+			ToolCalls []struct {
+				Index    int    `json:"index"`
+				ID       string `json:"id"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
@@ -165,6 +237,8 @@ func (a *Adapter) ExecuteStream(ctx context.Context, req core.Request, sink core
 
 	reason := core.StopEndTurn
 	var usage core.Usage
+	sawToolCall := false
+	started := map[int]bool{} // tool-call indices already announced via ToolCallStart
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
@@ -191,11 +265,28 @@ func (a *Adapter) ExecuteStream(ctx context.Context, req core.Request, sink core
 		}
 		choice := chunk.Choices[0]
 		if choice.Delta.Content != "" {
-			if err := sink.Text(choice.Delta.Content); err != nil {
-				if errors.Is(err, core.ErrStopStreaming) {
+			if stop, err := pump(sink.Text(choice.Delta.Content)); err != nil {
+				return err
+			} else if stop {
+				return nil
+			}
+		}
+		for _, tc := range choice.Delta.ToolCalls {
+			sawToolCall = true
+			if !started[tc.Index] {
+				started[tc.Index] = true
+				if stop, err := pump(sink.ToolCallStart(tc.Index, toolUseID(tc.ID, tc.Index), tc.Function.Name)); err != nil {
+					return err
+				} else if stop {
 					return nil
 				}
-				return err
+			}
+			if tc.Function.Arguments != "" {
+				if stop, err := pump(sink.ToolCallDelta(tc.Index, tc.Function.Arguments)); err != nil {
+					return err
+				} else if stop {
+					return nil
+				}
 			}
 		}
 		if choice.FinishReason != nil {
@@ -205,14 +296,28 @@ func (a *Adapter) ExecuteStream(ctx context.Context, req core.Request, sink core
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("llamacpp: read stream: %w", err)
 	}
+	if sawToolCall {
+		reason = core.StopToolUse
+	}
 
-	if err := sink.Done(reason, usage); err != nil {
-		if errors.Is(err, core.ErrStopStreaming) {
-			return nil
-		}
+	if _, err := pump(sink.Done(reason, usage)); err != nil {
 		return err
 	}
 	return nil
+}
+
+// pump interprets the error from a StreamSink call: ErrStopStreaming means the
+// gateway wants generation to end cleanly (stop=true, no error); any other
+// non-nil error propagates.
+func pump(err error) (stop bool, _ error) {
+	switch {
+	case err == nil:
+		return false, nil
+	case errors.Is(err, core.ErrStopStreaming):
+		return true, nil
+	default:
+		return false, err
+	}
 }
 
 func (a *Adapter) toChat(req core.Request, stream bool) chatRequest {
@@ -221,7 +326,7 @@ func (a *Adapter) toChat(req core.Request, stream bool) chatRequest {
 		msgs = append(msgs, chatMessage{Role: "system", Content: req.System})
 	}
 	for _, m := range req.Messages {
-		msgs = append(msgs, chatMessage{Role: string(m.Role), Content: m.Text()})
+		msgs = append(msgs, toChatMessages(m)...)
 	}
 	cr := chatRequest{
 		Model:       a.model,
@@ -230,6 +335,8 @@ func (a *Adapter) toChat(req core.Request, stream bool) chatRequest {
 		Temperature: req.Temperature,
 		TopP:        req.TopP,
 		TopK:        req.TopK,
+		Tools:       toChatTools(req.Tools),
+		ToolChoice:  toChatToolChoice(req.ToolChoice),
 		Stream:      stream,
 	}
 	if stream {
@@ -238,13 +345,92 @@ func (a *Adapter) toChat(req core.Request, stream bool) chatRequest {
 	return cr
 }
 
-// mapFinishReason maps OpenAI finish_reason onto Anthropic stop reasons. Tool
-// calls (tool_calls) arrive in build-plan phase 4. An empty/unknown reason is
-// treated as a normal end of turn.
+// toChatMessages expands one core message into OpenAI chat messages. Most
+// messages map one-to-one, but a user turn carrying tool_result blocks becomes
+// a separate role:"tool" message per result (OpenAI's shape), followed by a
+// user message for any accompanying text.
+func toChatMessages(m core.Message) []chatMessage {
+	if m.Role == core.RoleAssistant {
+		cm := chatMessage{Role: "assistant"}
+		for _, b := range m.Blocks {
+			switch b.Type {
+			case core.BlockText:
+				cm.Content += b.Text
+			case core.BlockToolUse:
+				tc := toolCall{ID: b.ID, Type: "function"}
+				tc.Function.Name = b.Name
+				tc.Function.Arguments = string(b.Input)
+				cm.ToolCalls = append(cm.ToolCalls, tc)
+			}
+		}
+		return []chatMessage{cm}
+	}
+
+	// User turn: tool results become their own messages; text becomes a user
+	// message. Tool results precede the text so they follow the assistant call.
+	var out []chatMessage
+	var text string
+	for _, b := range m.Blocks {
+		switch b.Type {
+		case core.BlockText:
+			text += b.Text
+		case core.BlockToolResult:
+			out = append(out, chatMessage{Role: "tool", ToolCallID: b.ToolUseID, Content: b.Content})
+		}
+	}
+	if text != "" || len(out) == 0 {
+		out = append(out, chatMessage{Role: "user", Content: text})
+	}
+	return out
+}
+
+// toChatTools translates core tools into the OpenAI tools array.
+func toChatTools(tools []core.Tool) []oaiTool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]oaiTool, 0, len(tools))
+	for _, t := range tools {
+		var ot oaiTool
+		ot.Type = "function"
+		ot.Function.Name = t.Name
+		ot.Function.Description = t.Description
+		ot.Function.Parameters = t.InputSchema
+		out = append(out, ot)
+	}
+	return out
+}
+
+// toChatToolChoice maps Anthropic tool-choice onto the OpenAI form: a bare
+// string ("auto"/"required"/"none") or a {type,function} object for a specific
+// tool. nil (no constraint) leaves the field unset.
+func toChatToolChoice(tc *core.ToolChoice) any {
+	if tc == nil {
+		return nil
+	}
+	switch tc.Type {
+	case core.ToolChoiceAuto:
+		return "auto"
+	case core.ToolChoiceAny:
+		return "required"
+	case core.ToolChoiceNone:
+		return "none"
+	case core.ToolChoiceTool:
+		choice := map[string]any{"type": "function", "function": map[string]string{"name": tc.Name}}
+		return choice
+	default:
+		return nil
+	}
+}
+
+// mapFinishReason maps OpenAI finish_reason onto Anthropic stop reasons. An
+// empty/unknown reason is treated as a normal end of turn.
 func mapFinishReason(reason string) core.StopReason {
 	switch reason {
 	case "length":
 		return core.StopMaxTokens
+	case "tool_calls":
+		return core.StopToolUse
 	case "stop", "":
 		return core.StopEndTurn
 	default:

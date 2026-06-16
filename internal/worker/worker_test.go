@@ -114,7 +114,9 @@ type collectSink struct {
 	usage  core.Usage
 }
 
-func (c *collectSink) Text(d string) error { c.text += d; return nil }
+func (c *collectSink) Text(d string) error                    { c.text += d; return nil }
+func (c *collectSink) ToolCallStart(_ int, _, _ string) error { return nil }
+func (c *collectSink) ToolCallDelta(_ int, _ string) error    { return nil }
 func (c *collectSink) Done(r core.StopReason, u core.Usage) error {
 	c.reason, c.usage = r, u
 	return nil

@@ -159,18 +159,33 @@ func (g *Gateway) streamMessages(w http.ResponseWriter, r *http.Request, exec Ex
 }
 
 // bufferedStream adapts a non-streaming Executor to the streaming sink by
-// running Execute and replaying the result as a single text delta plus Done.
+// running Execute and replaying each content block as the matching sink events,
+// then Done. It preserves block order so a text-then-tool_use response streams
+// the same shape a native streamer would produce.
 func bufferedStream(ctx context.Context, exec Executor, req core.Request, sink core.StreamSink) error {
 	resp, err := exec.Execute(ctx, req)
 	if err != nil {
 		return err
 	}
-	if text := resp.Text(); text != "" {
-		if err := sink.Text(text); err != nil {
-			if errors.Is(err, core.ErrStopStreaming) {
-				return nil
+	for i, b := range resp.Blocks {
+		switch b.Type {
+		case core.BlockText:
+			if b.Text == "" {
+				continue
 			}
-			return err
+			if err := sink.Text(b.Text); err != nil {
+				if errors.Is(err, core.ErrStopStreaming) {
+					return nil
+				}
+				return err
+			}
+		case core.BlockToolUse:
+			if err := sink.ToolCallStart(i, b.ID, b.Name); err != nil {
+				return err
+			}
+			if err := sink.ToolCallDelta(i, string(b.Input)); err != nil {
+				return err
+			}
 		}
 	}
 	return sink.Done(resp.StopReason, resp.Usage)
@@ -202,6 +217,23 @@ func (s *streamSink) Text(delta string) error {
 		return core.ErrStopStreaming
 	}
 	return nil
+}
+
+// ToolCallStart opens a tool_use block. Stop sequences apply to model text, not
+// tool arguments, so any text held back by the scanner is flushed first to keep
+// it ahead of the tool block on the wire.
+func (s *streamSink) ToolCallStart(_ int, id, name string) error {
+	if tail := s.scanner.Flush(); tail != "" {
+		if err := s.sw.TextDelta(tail); err != nil {
+			return err
+		}
+	}
+	s.reason = core.StopToolUse
+	return s.sw.ToolUseStart(id, name)
+}
+
+func (s *streamSink) ToolCallDelta(_ int, argsFragment string) error {
+	return s.sw.ToolUseDelta(argsFragment)
 }
 
 func (s *streamSink) Done(reason core.StopReason, usage core.Usage) error {

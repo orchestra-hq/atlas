@@ -101,6 +101,105 @@ func TestToCoreErrors(t *testing.T) {
 	}
 }
 
+func TestToCoreTools(t *testing.T) {
+	body := `{
+		"model": "m",
+		"max_tokens": 64,
+		"tools": [{"name":"get_weather","description":"Get weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}}}}],
+		"tool_choice": {"type":"tool","name":"get_weather"},
+		"messages": [
+			{"role":"user","content":"weather in Paris?"},
+			{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"get_weather","input":{"city":"Paris"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"sunny","is_error":false}]}
+		]
+	}`
+	var req MessagesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got, err := req.ToCore()
+	if err != nil {
+		t.Fatalf("ToCore: %v", err)
+	}
+
+	if len(got.Tools) != 1 || got.Tools[0].Name != "get_weather" {
+		t.Errorf("tools = %+v", got.Tools)
+	}
+	if string(got.Tools[0].InputSchema) == "" {
+		t.Error("input_schema not carried")
+	}
+	if got.ToolChoice == nil || got.ToolChoice.Type != core.ToolChoiceTool || got.ToolChoice.Name != "get_weather" {
+		t.Errorf("tool_choice = %+v", got.ToolChoice)
+	}
+
+	use := got.Messages[1].Blocks[0]
+	if use.Type != core.BlockToolUse || use.ID != "call_1" || use.Name != "get_weather" || string(use.Input) != `{"city":"Paris"}` {
+		t.Errorf("tool_use block = %+v", use)
+	}
+	res := got.Messages[2].Blocks[0]
+	if res.Type != core.BlockToolResult || res.ToolUseID != "call_1" || res.Content != "sunny" {
+		t.Errorf("tool_result block = %+v", res)
+	}
+}
+
+func TestToCoreToolChoiceErrors(t *testing.T) {
+	tests := []string{
+		`{"model":"m","max_tokens":1,"messages":[{"role":"user","content":"x"}],"tool_choice":{"type":"bogus"}}`,
+		`{"model":"m","max_tokens":1,"messages":[{"role":"user","content":"x"}],"tool_choice":{"type":"tool"}}`,
+		`{"model":"m","max_tokens":1,"messages":[{"role":"user","content":"x"}],"tools":[{"description":"no name"}]}`,
+	}
+	for _, body := range tests {
+		var req MessagesRequest
+		if err := json.Unmarshal([]byte(body), &req); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if _, err := req.ToCore(); err == nil {
+			t.Errorf("expected error for %s", body)
+		}
+	}
+}
+
+func TestFromCoreToolUse(t *testing.T) {
+	resp := core.Response{
+		Blocks: []core.ContentBlock{
+			core.TextBlock("Let me check."),
+			core.ToolUseBlock("call_1", "get_weather", json.RawMessage(`{"city":"Paris"}`)),
+		},
+		StopReason: core.StopToolUse,
+		Usage:      core.Usage{InputTokens: 5, OutputTokens: 9},
+	}
+	wire := FromCore("msg_1", "m", resp, nil)
+	if wire.StopReason != "tool_use" {
+		t.Errorf("stop_reason = %q", wire.StopReason)
+	}
+	if len(wire.Content) != 2 {
+		t.Fatalf("content = %+v", wire.Content)
+	}
+
+	// Marshal and re-parse to assert the exact wire shape of each block.
+	raw, err := json.Marshal(wire.Content)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var blocks []map[string]any
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if blocks[0]["type"] != "text" || blocks[0]["text"] != "Let me check." {
+		t.Errorf("text block = %v", blocks[0])
+	}
+	if _, ok := blocks[0]["input"]; ok {
+		t.Error("text block leaked an input field")
+	}
+	if blocks[1]["type"] != "tool_use" || blocks[1]["id"] != "call_1" || blocks[1]["name"] != "get_weather" {
+		t.Errorf("tool_use block = %v", blocks[1])
+	}
+	input, ok := blocks[1]["input"].(map[string]any)
+	if !ok || input["city"] != "Paris" {
+		t.Errorf("tool_use input = %v", blocks[1]["input"])
+	}
+}
+
 func TestFromCore(t *testing.T) {
 	seq := "stopword"
 	resp := core.Response{
