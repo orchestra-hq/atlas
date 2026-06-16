@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -43,7 +44,7 @@ func (e *echoExecutor) Execute(_ context.Context, req core.Request) (core.Respon
 }
 
 func newTestServer(exec Executor) *httptest.Server {
-	g := NewGateway(testKey, map[string]Executor{testModel: exec})
+	g := NewGateway(testKey, []Model{{Name: testModel, Exec: exec}}, nil)
 	return httptest.NewServer(g.Handler())
 }
 
@@ -597,4 +598,187 @@ func errType(body map[string]any) any {
 		return nil
 	}
 	return e["type"]
+}
+
+// countingExecutor serves text and counts tokens (implements TokenCounter). It
+// records the request it last counted so tests can assert the count path runs.
+type countingExecutor struct {
+	reply    string
+	count    int
+	countErr error
+	execErr  error
+}
+
+func (e *countingExecutor) Execute(_ context.Context, _ core.Request) (core.Response, error) {
+	if e.execErr != nil {
+		return core.Response{}, e.execErr
+	}
+	return core.Response{
+		Blocks:     []core.ContentBlock{core.TextBlock(e.reply)},
+		StopReason: core.StopEndTurn,
+		Usage:      core.Usage{InputTokens: e.count, OutputTokens: 3},
+	}, nil
+}
+
+func (e *countingExecutor) CountTokens(_ context.Context, _ core.Request) (int, error) {
+	return e.count, e.countErr
+}
+
+// getJSON issues a GET and returns the status and parsed body.
+func getJSON(t *testing.T, srv *httptest.Server, path, key string) (int, map[string]any) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+path, nil)
+	if key != "" {
+		req.Header.Set("x-api-key", key)
+	}
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, _ := io.ReadAll(resp.Body)
+	var parsed map[string]any
+	_ = json.Unmarshal(raw, &parsed)
+	return resp.StatusCode, parsed
+}
+
+// registryServer builds a gateway with explicit models and aliases.
+func registryServer(models []Model, aliases map[string]string) *httptest.Server {
+	return httptest.NewServer(NewGateway(testKey, models, aliases).Handler())
+}
+
+func TestListModels(t *testing.T) {
+	srv := registryServer(
+		[]Model{
+			{Name: "real-a", Exec: &echoExecutor{reply: "x"}, ContextWindow: 4096},
+			{Name: "real-b", Exec: &echoExecutor{reply: "x"}, ContextWindow: 8192},
+		},
+		map[string]string{"claude-sonnet-4-6": "real-a"},
+	)
+	defer srv.Close()
+
+	status, body := getJSON(t, srv, "/v1/models", testKey)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d", status)
+	}
+	data, _ := body["data"].([]any)
+	byID := map[string]map[string]any{}
+	for _, item := range data {
+		m := item.(map[string]any)
+		byID[m["id"].(string)] = m
+	}
+	if len(byID) != 3 {
+		t.Fatalf("models = %v", byID)
+	}
+	if byID["real-a"]["context_window"].(float64) != 4096 {
+		t.Errorf("real-a window = %v", byID["real-a"]["context_window"])
+	}
+	// The alias appears, carrying its target's context window.
+	alias, ok := byID["claude-sonnet-4-6"]
+	if !ok || alias["context_window"].(float64) != 4096 || alias["type"] != "model" {
+		t.Errorf("alias entry = %v", alias)
+	}
+}
+
+func TestGetModelAliasAndReal(t *testing.T) {
+	srv := registryServer(
+		[]Model{{Name: "real-a", Exec: &echoExecutor{reply: "x"}, ContextWindow: 4096}},
+		map[string]string{"claude-opus-4-6": "real-a"},
+	)
+	defer srv.Close()
+
+	for _, id := range []string{"real-a", "claude-opus-4-6"} {
+		status, body := getJSON(t, srv, "/v1/models/"+id, testKey)
+		if status != http.StatusOK {
+			t.Errorf("GET %s status = %d", id, status)
+		}
+		if body["id"] != id {
+			t.Errorf("GET %s id = %v", id, body["id"])
+		}
+	}
+
+	status, body := getJSON(t, srv, "/v1/models/nope", testKey)
+	if status != http.StatusNotFound || errType(body) != "not_found_error" {
+		t.Errorf("unknown model: status = %d, type = %v", status, errType(body))
+	}
+}
+
+// countTokens issues a POST /v1/messages/count_tokens and returns status + body.
+func countTokens(t *testing.T, srv *httptest.Server, body string) (int, map[string]any) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/messages/count_tokens", strings.NewReader(body))
+	req.Header.Set("x-api-key", testKey)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, _ := io.ReadAll(resp.Body)
+	var parsed map[string]any
+	_ = json.Unmarshal(raw, &parsed)
+	return resp.StatusCode, parsed
+}
+
+func TestCountTokensEndpoint(t *testing.T) {
+	srv := registryServer(
+		[]Model{{Name: testModel, Exec: &countingExecutor{reply: "hi", count: 42}, ContextWindow: 4096}},
+		map[string]string{"claude-haiku-4-5": testModel},
+	)
+	defer srv.Close()
+
+	// Real name and its alias return the same count.
+	for _, name := range []string{testModel, "claude-haiku-4-5"} {
+		status, body := countTokens(t, srv, `{"model":"`+name+`","messages":[{"role":"user","content":"hello"}]}`)
+		if status != http.StatusOK {
+			t.Fatalf("%s: status = %d, body = %v", name, status, body)
+		}
+		if body["input_tokens"].(float64) != 42 {
+			t.Errorf("%s: input_tokens = %v, want 42", name, body["input_tokens"])
+		}
+	}
+
+	// Unknown model still 404s on this route.
+	status, body := countTokens(t, srv, `{"model":"nope","messages":[{"role":"user","content":"hi"}]}`)
+	if status != http.StatusNotFound || errType(body) != "not_found_error" {
+		t.Errorf("unknown model: status = %d, type = %v", status, errType(body))
+	}
+}
+
+func TestContextWindowOversizedRejected(t *testing.T) {
+	srv := registryServer(
+		[]Model{{Name: testModel, Exec: &countingExecutor{reply: "x", count: 100}, ContextWindow: 200}},
+		nil,
+	)
+	defer srv.Close()
+
+	// max_tokens alone meets the window: rejected without counting.
+	resp, body := post(t, srv, testKey,
+		`{"model":"test-model","max_tokens":500,"messages":[{"role":"user","content":"hi"}]}`)
+	if resp.StatusCode != http.StatusBadRequest || errType(body) != "invalid_request_error" {
+		t.Errorf("max_tokens guard: status = %d, type = %v", resp.StatusCode, errType(body))
+	}
+
+	// input (100) + max_tokens (150) > window (200): rejected after counting.
+	resp, body = post(t, srv, testKey,
+		`{"model":"test-model","max_tokens":150,"messages":[{"role":"user","content":"hi"}]}`)
+	if resp.StatusCode != http.StatusBadRequest || errType(body) != "invalid_request_error" {
+		t.Errorf("count guard: status = %d, type = %v", resp.StatusCode, errType(body))
+	}
+
+	// input (100) + max_tokens (50) == window (200): fits, dispatched.
+	resp, _ = post(t, srv, testKey,
+		`{"model":"test-model","max_tokens":50,"messages":[{"role":"user","content":"hi"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("fitting request: status = %d", resp.StatusCode)
+	}
+}
+
+func TestEngineUnavailableIs529(t *testing.T) {
+	srv := newTestServer(&echoExecutor{err: fmt.Errorf("boom: %w", core.ErrEngineUnavailable)})
+	defer srv.Close()
+
+	resp, body := post(t, srv, testKey, `{"model":"test-model","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
+	if resp.StatusCode != statusOverloaded || errType(body) != "overloaded_error" {
+		t.Errorf("status = %d, type = %v, want 529 overloaded_error", resp.StatusCode, errType(body))
+	}
 }

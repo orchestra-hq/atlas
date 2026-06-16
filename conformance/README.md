@@ -37,11 +37,15 @@ go build -o atlas ./cmd/atlas
 curl -sSL -o qwen2.5-1.5b.gguf https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf
 curl -sSL -o qwen3-0.6b.gguf https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf
 # Two models: a non-reasoning model and a reasoning one (G4 needs both). Repeat --model.
-./atlas up --model qwen2.5-1.5b.gguf --model qwen3-0.6b.gguf --api-key dev-key &   # provisions llama.cpp, serves :8080
+./atlas up --model qwen2.5-1.5b.gguf --model qwen3-0.6b.gguf \
+  --alias claude-sonnet-4-6=qwen2.5-1.5b-instruct-q4_k_m \
+  --alias claude-haiku-4-5=qwen2.5-1.5b-instruct-q4_k_m \
+  --alias claude-opus-4-1=Qwen3-0.6B-Q8_0 \
+  --api-key dev-key &   # provisions llama.cpp, serves :8080
 cd conformance && uv run python run.py \
   --base-url http://127.0.0.1:8080 --api-key dev-key \
   --engine llamacpp --model qwen2.5-1.5b-instruct-q4_k_m \
-  --reasoning-model Qwen3-0.6B-Q8_0 --require G1,G2,G3,G4
+  --reasoning-model Qwen3-0.6B-Q8_0 --require G1,G2,G3,G4,G5,G6,G7
 ```
 
 `--reasoning-model` names the reasoning-capable model the G4 thinking cases target; omit it (e.g. against the stub) and those cases skip.
@@ -90,6 +94,6 @@ Every pytest test carries `group` / `criterion` / `client` markers; vitest tests
 
 ## Status
 
-As of [m0-build-plan](../docs/m0-build-plan.md) phase 5, CI runs the harness against the **real Atlas gateway** (`atlas up` with two tiny llama.cpp models — one non-reasoning, one reasoning — on a CPU runner), gating on `--require G1,G2,G3,G4` — the phase-5 exit criterion. Against the real gateway today: G1 (non-streaming `/v1/messages`), G2 (SSE streaming), G3 (tool loop: `tool_use`/`tool_result` round-trip, `input_json_delta` streaming, tool_choice variants, parallel calls, `is_error`), G4 (thinking: `thinking` blocks before text, `thinking_delta` streaming, multi-turn echo, advisory `budget_tokens`, graceful no-op on the non-reasoning model), and G7's error-envelope subset pass; G8 fails by design (the OpenAI surface lands in phase 7); the rest are skipped placeholders citing their build phase. The gate widens as those phases land. Note: `tool_choice` forcing is best-effort on the pinned llama.cpp build — see [open-questions.md](../docs/open-questions.md).
+As of [m0-build-plan](../docs/m0-build-plan.md) phase 6, CI runs the harness against the **real Atlas gateway** (`atlas up` with two tiny llama.cpp models — one non-reasoning, one reasoning — plus tier aliases on a CPU runner), gating on `--require G1,G2,G3,G4,G5,G6,G7` — the phase-6 exit criterion. Against the real gateway today: G1 (non-streaming `/v1/messages`), G2 (SSE streaming), G3 (tool loop: `tool_use`/`tool_result` round-trip, `input_json_delta` streaming, tool_choice variants, parallel calls, `is_error`), G4 (thinking: `thinking` blocks before text, `thinking_delta` streaming, multi-turn echo, advisory `budget_tokens`, graceful no-op on the non-reasoning model), G5 (`/v1/models` + aliases + context-window metadata), G6 (`count_tokens` parity vs `usage.input_tokens` and alias/canonical agreement), and G7's gateway-shape cases (including pre-dispatch context-window rejection) pass. The engine-down 529 retry case remains skipped until the harness gains deterministic engine lifecycle control. G8 fails by design (the OpenAI surface lands in phase 7); the gate widens as phases land. Note: `tool_choice` forcing is best-effort on the pinned llama.cpp build — see [open-questions.md](../docs/open-questions.md).
 
 The **stub gateway** (`stubgw/`) — a deliberately partial `/v1/messages` (non-streaming text, Anthropic-shaped errors) — remains in the tree as the default target when no `--base-url` is given. It exists so the harness mechanics can be exercised without standing up a model (the fast local loop); it is no longer the CI gate.

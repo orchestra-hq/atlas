@@ -1,14 +1,13 @@
 """G7 — Errors (criterion 6).
 
-The envelope-shape subset runs (and passes) from phase 1: the stub gateway
-already speaks Anthropic-shaped errors, so these lock the contract in
-before the real gateway exists. The cases that need real gateway/engine
-machinery (oversized context, 529, retry behavior) are deferred to phase 6.
+Error-envelope shape has run since phase 1 (stub gateway). Phase 6 extends
+this group with real-gateway context-window rejection. The engine-down 529
+retry case still needs deterministic engine lifecycle control in the harness.
 """
 
 import anthropic
 import pytest
-from wire import post_messages
+from wire import get_model, post_messages
 
 pytestmark = [pytest.mark.group("G7"), pytest.mark.criterion(6)]
 
@@ -56,12 +55,23 @@ def test_malformed_body_envelope(base_url, api_key):
 
 
 @pytest.mark.client("wire")
-@pytest.mark.skip(reason="fleshed out when phase 6 starts: pre-dispatch context-window rejection needs the real gateway")
-def test_oversized_context_rejected_placeholder():
-    pass
+def test_oversized_context_rejected(base_url, api_key, model):
+    model_info = get_model(base_url, api_key, model)
+    assert model_info.status_code == 200, model_info.text
+    window = model_info.json().get("context_window")
+    assert isinstance(window, int) and window > 0
+
+    # The gateway rejects max_tokens that alone meet/exceed the model window,
+    # before any engine dispatch.
+    body = {
+        "model": model,
+        "max_tokens": window,
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+    _assert_envelope(post_messages(base_url, api_key, body), 400, "invalid_request_error")
 
 
 @pytest.mark.client("anthropic-py")
-@pytest.mark.skip(reason="fleshed out when phase 6 starts: 529 + SDK retry behavior needs engine lifecycle control")
+@pytest.mark.skip(reason="requires deterministic engine lifecycle control in the harness")
 def test_engine_down_529_placeholder():
     pass

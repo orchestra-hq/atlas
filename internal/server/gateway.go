@@ -12,11 +12,17 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/orchestra-hq/atlas/internal/api/anthropic"
 	"github.com/orchestra-hq/atlas/internal/core"
 )
+
+// statusOverloaded is the non-standard 529 status Anthropic uses for transient
+// overload; net/http has no constant for it. SDK retry logic keys on it.
+const statusOverloaded = 529
 
 // Executor runs one inference request to completion. It is the gateway's view
 // of a worker: in M0 the single in-process worker implements it directly (the
@@ -34,25 +40,74 @@ type StreamExecutor interface {
 	ExecuteStream(ctx context.Context, req core.Request, sink core.StreamSink) error
 }
 
-// Gateway is the client-facing control plane: auth, model resolution, and
-// dispatch to a worker. It serves POST /v1/messages both buffered and as an
-// SSE stream (stream=true).
-type Gateway struct {
-	apiKey string
-	models map[string]Executor
+// TokenCounter is an Executor that can count a request's prompt tokens using
+// the engine's real tokenizer. The gateway uses it for POST
+// /v1/messages/count_tokens and to assert context-window fit before dispatch
+// (docs/m0-acceptance.md). The in-process worker implements it; an executor
+// that does not simply skips the pre-dispatch assertion.
+type TokenCounter interface {
+	CountTokens(ctx context.Context, req core.Request) (int, error)
 }
 
-// NewGateway builds a gateway that accepts apiKey and resolves each model name
-// in models to the executor that serves it. In M0 single-node mode every name
-// maps to the one in-process worker.
-func NewGateway(apiKey string, models map[string]Executor) *Gateway {
-	return &Gateway{apiKey: apiKey, models: models}
+// Model is one model the gateway serves: a canonical Name, the Executor that
+// runs it, and its ContextWindow in tokens (0 = unknown, assertion skipped).
+type Model struct {
+	Name          string
+	Exec          Executor
+	ContextWindow int
+}
+
+// Gateway is the client-facing control plane: auth, model resolution, and
+// dispatch to a worker. It serves the Anthropic surface: POST /v1/messages
+// (buffered and SSE), POST /v1/messages/count_tokens, and GET /v1/models[/{id}].
+type Gateway struct {
+	apiKey    string
+	models    map[string]Model  // canonical name -> model
+	aliases   map[string]string // alias -> canonical name
+	order     []string          // canonical names, registration order (listing)
+	createdAt string            // wire created_at stamped on model objects
+}
+
+// NewGateway builds a gateway that accepts apiKey, serves each model in models
+// by its Name, and resolves each alias to a canonical model name. In M0
+// single-node mode every model maps to one in-process worker; operator-defined
+// aliases (e.g. claude-sonnet-4-6 -> a local model) let SDK/tool defaults
+// resolve (docs/api-surface.md).
+func NewGateway(apiKey string, models []Model, aliases map[string]string) *Gateway {
+	byName := make(map[string]Model, len(models))
+	order := make([]string, 0, len(models))
+	for _, m := range models {
+		byName[m.Name] = m
+		order = append(order, m.Name)
+	}
+	if aliases == nil {
+		aliases = map[string]string{}
+	}
+	return &Gateway{
+		apiKey:    apiKey,
+		models:    byName,
+		aliases:   aliases,
+		order:     order,
+		createdAt: time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
+// resolve maps a requested model name (alias or canonical) to its Model.
+func (g *Gateway) resolve(name string) (Model, bool) {
+	if canon, ok := g.aliases[name]; ok {
+		name = canon
+	}
+	m, ok := g.models[name]
+	return m, ok
 }
 
 // Handler returns the gateway's HTTP routes.
 func (g *Gateway) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/messages", g.handleMessages)
+	mux.HandleFunc("POST /v1/messages/count_tokens", g.handleCountTokens)
+	mux.HandleFunc("GET /v1/models", g.handleListModels)
+	mux.HandleFunc("GET /v1/models/{id}", g.handleGetModel)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		anthropic.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -65,15 +120,11 @@ const maxRequestBytes = 32 << 20 // 32 MiB
 
 func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 	if !g.authenticated(r) {
-		anthropic.WriteError(w, &anthropic.Error{
-			Status: http.StatusUnauthorized,
-			Type:   anthropic.ErrAuthentication,
-			Msg:    "missing or invalid API key",
-		})
+		writeUnauthorized(w)
 		return
 	}
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBytes))
+	body, err := readBody(w, r)
 	if err != nil {
 		anthropic.WriteError(w, anthropic.ErrInvalid("could not read request body"))
 		return
@@ -91,13 +142,17 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exec, ok := g.models[coreReq.Model]
+	model, ok := g.resolve(coreReq.Model)
 	if !ok {
-		anthropic.WriteError(w, &anthropic.Error{
-			Status: http.StatusNotFound,
-			Type:   anthropic.ErrNotFound,
-			Msg:    "model not found: " + coreReq.Model,
-		})
+		writeModelNotFound(w, coreReq.Model)
+		return
+	}
+
+	// Assert the prompt fits the model's window before dispatch, so an oversized
+	// request fails with a clean 400 rather than a garbled engine overflow
+	// (docs/m0-acceptance.md context-window handling).
+	if err := g.assertContextFits(r.Context(), model, coreReq); err != nil {
+		writeErr(w, err)
 		return
 	}
 
@@ -107,11 +162,11 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 	coreReq.StopSequences = nil
 
 	if req.Stream {
-		g.streamMessages(w, r, exec, coreReq, stops)
+		g.streamMessages(w, r, model.Exec, coreReq, stops)
 		return
 	}
 
-	resp, err := exec.Execute(r.Context(), coreReq)
+	resp, err := model.Exec.Execute(r.Context(), coreReq)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -124,6 +179,130 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	anthropic.WriteJSON(w, http.StatusOK, anthropic.FromCore(newMessageID(), coreReq.Model, resp, stopSeq))
+}
+
+// assertContextFits rejects a request whose prompt plus max_tokens cannot fit
+// the model's context window. The window is the engine's real n_ctx; the count
+// is the engine's real tokenizer. A max_tokens that alone meets the window is
+// always too big and is caught without an engine round-trip. Counting is
+// best-effort: if the tokenizer call fails (and the engine is truly down,
+// dispatch surfaces that as a 529), the request proceeds rather than being
+// blocked on a transient hiccup.
+func (g *Gateway) assertContextFits(ctx context.Context, model Model, req core.Request) error {
+	if model.ContextWindow <= 0 {
+		return nil // unknown window: nothing to assert against
+	}
+	if req.MaxTokens >= model.ContextWindow {
+		return anthropic.ErrInvalid("max_tokens (%d) exceeds the model's %d-token context window", req.MaxTokens, model.ContextWindow)
+	}
+	tc, ok := model.Exec.(TokenCounter)
+	if !ok {
+		return nil
+	}
+	n, err := tc.CountTokens(ctx, req)
+	if err != nil {
+		return nil // best-effort; see doc comment
+	}
+	if n+req.MaxTokens > model.ContextWindow {
+		return anthropic.ErrInvalid(
+			"prompt is too long: %d input tokens + %d max_tokens exceeds the model's %d-token context window",
+			n, req.MaxTokens, model.ContextWindow)
+	}
+	return nil
+}
+
+// handleCountTokens serves POST /v1/messages/count_tokens: the prompt's token
+// count from the target model's real tokenizer (criterion 5).
+func (g *Gateway) handleCountTokens(w http.ResponseWriter, r *http.Request) {
+	if !g.authenticated(r) {
+		writeUnauthorized(w)
+		return
+	}
+
+	body, err := readBody(w, r)
+	if err != nil {
+		anthropic.WriteError(w, anthropic.ErrInvalid("could not read request body"))
+		return
+	}
+
+	var req anthropic.CountTokensRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		anthropic.WriteError(w, anthropic.ErrInvalid("request body is not valid JSON"))
+		return
+	}
+
+	coreReq, err := req.ToCore()
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	model, ok := g.resolve(coreReq.Model)
+	if !ok {
+		writeModelNotFound(w, coreReq.Model)
+		return
+	}
+
+	tc, ok := model.Exec.(TokenCounter)
+	if !ok {
+		anthropic.WriteError(w, &anthropic.Error{Status: http.StatusInternalServerError, Type: anthropic.ErrAPI, Msg: "count_tokens unsupported for this model"})
+		return
+	}
+	n, err := tc.CountTokens(r.Context(), coreReq)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	anthropic.WriteJSON(w, http.StatusOK, anthropic.CountTokensResponse{InputTokens: n})
+}
+
+// handleListModels serves GET /v1/models: every deployed model followed by
+// every alias, each with context-window metadata (criterion 4).
+func (g *Gateway) handleListModels(w http.ResponseWriter, r *http.Request) {
+	if !g.authenticated(r) {
+		writeUnauthorized(w)
+		return
+	}
+
+	infos := make([]anthropic.ModelInfo, 0, len(g.order)+len(g.aliases))
+	for _, name := range g.order {
+		infos = append(infos, g.modelInfo(name))
+	}
+	aliasNames := make([]string, 0, len(g.aliases))
+	for a := range g.aliases {
+		aliasNames = append(aliasNames, a)
+	}
+	sort.Strings(aliasNames)
+	for _, a := range aliasNames {
+		infos = append(infos, g.modelInfo(a))
+	}
+
+	anthropic.WriteJSON(w, http.StatusOK, anthropic.NewModelList(infos))
+}
+
+// handleGetModel serves GET /v1/models/{id} for an alias or a canonical name.
+func (g *Gateway) handleGetModel(w http.ResponseWriter, r *http.Request) {
+	if !g.authenticated(r) {
+		writeUnauthorized(w)
+		return
+	}
+
+	id := r.PathValue("id")
+	if _, ok := g.resolve(id); !ok {
+		writeModelNotFound(w, id)
+		return
+	}
+	anthropic.WriteJSON(w, http.StatusOK, g.modelInfo(id))
+}
+
+// modelInfo builds the wire model object for an alias or canonical id. The id
+// echoes what the client addressed; display_name is the canonical model it
+// resolves to, and context_window is that model's window. The caller must have
+// confirmed id resolves.
+func (g *Gateway) modelInfo(id string) anthropic.ModelInfo {
+	model, _ := g.resolve(id)
+	return anthropic.NewModelInfo(id, model.Name, g.createdAt, model.ContextWindow)
 }
 
 // streamMessages serves a streaming POST /v1/messages. It opens the SSE
@@ -277,12 +456,43 @@ func (g *Gateway) authenticated(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(key), []byte(g.apiKey)) == 1
 }
 
-// writeErr renders an *anthropic.Error as its envelope; anything else becomes
-// a 500 api_error (engine/internal failures the client shouldn't see details of).
+// readBody reads a request body under the size cap.
+func readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	return io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBytes))
+}
+
+func writeUnauthorized(w http.ResponseWriter) {
+	anthropic.WriteError(w, &anthropic.Error{
+		Status: http.StatusUnauthorized,
+		Type:   anthropic.ErrAuthentication,
+		Msg:    "missing or invalid API key",
+	})
+}
+
+func writeModelNotFound(w http.ResponseWriter, model string) {
+	anthropic.WriteError(w, &anthropic.Error{
+		Status: http.StatusNotFound,
+		Type:   anthropic.ErrNotFound,
+		Msg:    "model not found: " + model,
+	})
+}
+
+// writeErr renders an error as its Anthropic envelope. An *anthropic.Error
+// carries its own status; an engine-unavailable failure (core.ErrEngineUnavailable)
+// becomes a retryable 529 overloaded_error; anything else is a 500 api_error
+// (internal failures the client shouldn't see details of).
 func writeErr(w http.ResponseWriter, err error) {
 	var apiErr *anthropic.Error
 	if errors.As(err, &apiErr) {
 		anthropic.WriteError(w, apiErr)
+		return
+	}
+	if errors.Is(err, core.ErrEngineUnavailable) {
+		anthropic.WriteError(w, &anthropic.Error{
+			Status: statusOverloaded,
+			Type:   anthropic.ErrOverloaded,
+			Msg:    "the inference engine is unavailable; retry shortly",
+		})
 		return
 	}
 	anthropic.WriteError(w, &anthropic.Error{

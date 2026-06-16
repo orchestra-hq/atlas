@@ -135,6 +135,17 @@ func (w *Worker) ExecuteStream(ctx context.Context, req core.Request, sink core.
 	return w.adapter.ExecuteStream(ctx, req, sink)
 }
 
+// CountTokens returns the prompt's token count from the engine's tokenizer. It
+// satisfies server.TokenCounter.
+func (w *Worker) CountTokens(ctx context.Context, req core.Request) (int, error) {
+	return w.adapter.CountTokens(ctx, req)
+}
+
+// ContextWindow returns the engine's context window in tokens.
+func (w *Worker) ContextWindow(ctx context.Context) (int, error) {
+	return w.adapter.ContextWindow(ctx)
+}
+
 // waitReady polls the engine's /health until it returns 200, failing fast if
 // the process exits or the deadline passes.
 func (w *Worker) waitReady(ctx context.Context) error {
