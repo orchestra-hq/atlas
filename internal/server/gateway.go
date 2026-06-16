@@ -106,6 +106,7 @@ func (g *Gateway) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/messages", g.handleMessages)
 	mux.HandleFunc("POST /v1/messages/count_tokens", g.handleCountTokens)
+	mux.HandleFunc("POST /v1/chat/completions", g.handleChatCompletions)
 	mux.HandleFunc("GET /v1/models", g.handleListModels)
 	mux.HandleFunc("GET /v1/models/{id}", g.handleGetModel)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {

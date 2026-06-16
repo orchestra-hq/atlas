@@ -31,14 +31,14 @@ SSE must emit the exact Anthropic event sequence — `message_start` → `conten
 
 Target clients: OpenAI SDKs, LangChain, llama-index, Continue, Open WebUI, anything else.
 
-| Endpoint                    | v1 scope                                                                                                                                                       |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /v1/chat/completions` | Full: streaming, `tools`/`tool_calls`, JSON mode where engine supports                                                                                         |
-| `POST /v1/embeddings`       | Supported when an embedding model is deployed                                                                                                                  |
-| `GET /v1/models`            | OpenAI list shape (same path as Anthropic's — disambiguate by response shape, which matches both closely enough; verify at build time, else version by header) |
-| `POST /v1/completions`      | Legacy text completion — passthrough if engine supports, low priority                                                                                          |
+| Endpoint                    | v1 scope                                                                                                                                                                                                                                                             |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /v1/chat/completions` | Shipped (M0): system prompts, multi-turn, streaming, `tools`/`tool_calls` (request → `tool_calls` → tool result → answer), `stop`, `max_tokens`/`max_completion_tokens`, `temperature`/`top_p`, `finish_reason` mapping (`stop`/`tool_calls`/`length`), usage fields |
+| `POST /v1/embeddings`       | Later (needs an embedding model deployed) — out of scope for M0                                                                                                                                                                                                      |
+| `GET /v1/models`            | OpenAI list shape (same path as Anthropic's — disambiguate by response shape, which matches both closely enough; verify at build time, else version by header)                                                                                                       |
+| `POST /v1/completions`      | Legacy text completion — passthrough if engine supports, low priority                                                                                                                                                                                                |
 
-Note: engines (vLLM/SGLang/llama.cpp/Ollama) all natively speak OpenAI-compat, so much of this group is proxy + auth + metering rather than translation.
+Even though engines (vLLM/SGLang/llama.cpp/Ollama) natively speak OpenAI-compat, Atlas **owns** this surface rather than proxying the engine's endpoint (m0-build-plan build-time decision 1): the gateway translates the internal representation ⇄ OpenAI wire itself, so behavior is identical across engines and matches the Anthropic surface's semantics (same auth, model aliases, context-window assertion, error mapping). Reasoning output is not surfaced here — the OpenAI chat surface has no portable thinking toggle, so `thinking` lives only on the Anthropic surface. `finish_reason` maps the internal stop reason: `end_turn`/`stop_sequence` → `stop`, `tool_use` → `tool_calls`, `max_tokens` → `length`.
 
 ## 3. Atlas admin API (`/api/v1/...`, native)
 
