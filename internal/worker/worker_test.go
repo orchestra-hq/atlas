@@ -1,0 +1,136 @@
+package worker
+
+import (
+	"context"
+	"flag"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/orchestra-hq/atlas/internal/core"
+)
+
+// TestMain lets the test binary impersonate llama-server: when ATLAS_FAKE_LLAMA
+// is set, it serves a minimal /health + /v1/chat/completions instead of running
+// the suite. Worker.Start then supervises os.Args[0] as if it were the engine.
+func TestMain(m *testing.M) {
+	if behavior := os.Getenv("ATLAS_FAKE_LLAMA"); behavior != "" {
+		runFakeLlama(behavior)
+		return
+	}
+	os.Exit(m.Run())
+}
+
+func runFakeLlama(behavior string) {
+	if behavior == "crash" {
+		os.Exit(3)
+	}
+
+	// llama-server's flags; we only need --port, ignore the rest.
+	fs := flag.NewFlagSet("fake", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	port := fs.String("port", "0", "")
+	// Allow unknown flags (--jinja, -m, --host, ...) by pre-filtering.
+	_ = fs.Parse(filterPortArg(os.Args[1:]))
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		if behavior == "loading" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"status":"ok"}`)
+	})
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}`)
+	})
+	_ = http.ListenAndServe("127.0.0.1:"+*port, mux)
+	os.Exit(0)
+}
+
+// filterPortArg reduces the engine arg list to just --port <n> so the fake's
+// minimal flag set parses cleanly.
+func filterPortArg(args []string) []string {
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--port" && i+1 < len(args) {
+			return []string{"--port", args[i+1]}
+		}
+	}
+	return nil
+}
+
+func fakeConfig(t *testing.T, behavior string) Config {
+	t.Helper()
+	t.Setenv("ATLAS_FAKE_LLAMA", behavior)
+	return Config{
+		BinPath:      os.Args[0],
+		Model:        "fake-model",
+		LogPath:      filepath.Join(t.TempDir(), "engine.log"),
+		ReadyTimeout: 5 * time.Second,
+	}
+}
+
+func TestStartReadyAndExecute(t *testing.T) {
+	w, err := Start(context.Background(), fakeConfig(t, "ready"))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Stop() })
+
+	resp, err := w.Execute(context.Background(), core.Request{
+		Model:     "fake-model",
+		MaxTokens: 16,
+		Messages:  []core.Message{{Role: core.RoleUser, Blocks: []core.ContentBlock{core.TextBlock("ping")}}},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if resp.Text() != "pong" || resp.StopReason != core.StopEndTurn {
+		t.Errorf("resp = %q / %q", resp.Text(), resp.StopReason)
+	}
+}
+
+func TestStartCrashSurfaces(t *testing.T) {
+	_, err := Start(context.Background(), fakeConfig(t, "crash"))
+	if err == nil {
+		t.Fatal("expected error when engine exits before ready")
+	}
+}
+
+func TestStartReadyTimeout(t *testing.T) {
+	cfg := fakeConfig(t, "loading")
+	cfg.ReadyTimeout = 1 * time.Second
+	start := time.Now()
+	_, err := Start(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected timeout error when engine never reports healthy")
+	}
+	if elapsed := time.Since(start); elapsed > 4*time.Second {
+		t.Errorf("timed out after %s, expected ~1s", elapsed)
+	}
+}
+
+func TestStopIdempotent(t *testing.T) {
+	w, err := Start(context.Background(), fakeConfig(t, "ready"))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := w.Stop(); err != nil {
+		t.Fatalf("first Stop: %v", err)
+	}
+	if err := w.Stop(); err != nil {
+		t.Fatalf("second Stop: %v", err)
+	}
+}
+
+func TestEndpoint(t *testing.T) {
+	w := &Worker{cfg: Config{Host: "127.0.0.1", Port: 9999}}
+	if got := w.Endpoint(); got != "http://127.0.0.1:9999" {
+		t.Errorf("Endpoint() = %q", got)
+	}
+}

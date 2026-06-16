@@ -30,6 +30,17 @@ uv run python run.py --require G1,G2          # exit 1 unless the listed groups 
 uv run python run.py --base-url http://host:port --engine llamacpp --model <id>   # against a real Atlas
 ```
 
+To run against a real local gateway end to end (what CI does):
+
+```sh
+go build -o atlas ./cmd/atlas
+curl -sSL -o model.gguf https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf
+./atlas up --model model.gguf --api-key dev-key &        # provisions llama.cpp, serves :8080
+cd conformance && uv run python run.py \
+  --base-url http://127.0.0.1:8080 --api-key dev-key \
+  --engine llamacpp --model qwen2.5-1.5b-instruct-q4_k_m --require G1
+```
+
 Exit codes: `0` ran (and any `--require` groups are green), `1` a required group is not green, `2` harness error (suite didn't run, or a group has no tests). Test failures outside `--require` do **not** fail the run — the suite is written before the product, and the matrix records exactly what isn't conformant yet.
 
 ## matrix.json
@@ -72,6 +83,8 @@ Group status: `fail` if any cell fails, else `pass` if any passes, else `skip`. 
 
 Every pytest test carries `group` / `criterion` / `client` markers; vitest tests carry the same coordinates in their title as `[Gx][cN][client]`.
 
-## Phase 1 status
+## Status
 
-The harness currently targets the **stub gateway** (`stubgw/`) — a deliberately partial `/v1/messages` (non-streaming text, Anthropic-shaped errors) that exists so the harness could be proven before any Atlas code. Against it: G1 and G7's envelope subset pass; G2/G3/G8 fail by design (streaming, tools, and the OpenAI surface don't exist yet); the rest are skipped placeholders citing their build phase. CI gates on `--require G1`; the gate widens as [m0-build-plan](../docs/m0-build-plan.md) phases land, and the target flips from stub to real gateway in phase 2.
+As of [m0-build-plan](../docs/m0-build-plan.md) phase 2, CI runs the harness against the **real Atlas gateway** (`atlas up` with a tiny llama.cpp model on a CPU runner), gating on `--require G1` — the phase-2 exit criterion. Against the real gateway today: G1 (non-streaming `/v1/messages`) and G7's error-envelope subset pass; G2/G3/G8 fail by design (streaming, tools, and the OpenAI surface land in phases 3/4/7); the rest are skipped placeholders citing their build phase. The gate widens as those phases land.
+
+The **stub gateway** (`stubgw/`) — a deliberately partial `/v1/messages` (non-streaming text, Anthropic-shaped errors) — remains in the tree as the default target when no `--base-url` is given. It exists so the harness mechanics can be exercised without standing up a model (the fast local loop); it is no longer the CI gate.
