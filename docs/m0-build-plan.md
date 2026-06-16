@@ -42,16 +42,14 @@ Tooling picked when the scaffold was built (2026-06-12). Not ADR material — sw
 | CI            | GitHub Actions on Blacksmith runners (`blacksmith-{2,4}vcpu-ubuntu-2404`)           | Standard `actions/*` work as-is — Blacksmith intercepts the cache API transparently; macOS/Windows builds are cross-compiled, no extra runners |
 | Repo hooks    | `.githooks/pre-commit` formats staged Go (`golangci-lint fmt`) and markdown         | Full lint stays in CI to keep commits fast                                                                                                     |
 
-## Engine runtime provisioning (proposal — closes the open question)
+## Engine runtime provisioning
 
-Proposed resolution of the [open question](open-questions.md): **M0 ships managed runtimes only (option c); containers (option b) arrive at M1** behind the same `RuntimeProvisioner` interface.
+**M0 ships managed runtimes only (option c); containers (option b) arrive at M1** behind the same `RuntimeProvisioner` interface. This was the last open design question; phase 2 implements the llama.cpp half (`internal/runtime`), so it is now settled rather than proposed.
 
-- **llama.cpp:** worker downloads a pinned prebuilt `llama-server` for its platform (CUDA/Metal/CPU) into the state dir. No host dependencies.
-- **vLLM:** worker bootstraps `uv` and creates a pinned venv in the state dir. Heavier, but no Docker requirement for first touch.
+- **llama.cpp:** worker downloads a pinned prebuilt `llama-server` for its platform (CUDA/Metal/CPU) into the state dir, sha256-verified against the pinned release. No host dependencies. _(Done — phase 2; pinned tag in `internal/runtime.LlamaCppTag`.)_
+- **vLLM:** worker bootstraps `uv` and creates a pinned venv in the state dir. Heavier, but no Docker requirement for first touch. _(Phase 8.)_
 
 Rationale: M0's hero path is `atlas up` on a dev box or single GPU machine — requiring Docker + NVIDIA container toolkit there hurts minutes-to-first-token, while M1's cloud fleets (where containers shine) is exactly when the container path lands. One honesty note for [positioning](positioning.md) angle #5: "no Python on the host" must mean _the user never installs or sees Python_ — the worker-managed vLLM venv does put Python in Atlas's state dir. The install-DX claim survives; the literal wording should be tightened when marketing copy is written.
-
-**This is the last open design question — sign-off on this section closes it.**
 
 ## Phases
 

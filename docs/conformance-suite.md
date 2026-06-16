@@ -25,7 +25,7 @@ runner ──> atlas up (single-node, fixture config: tier aliases → catalog m
 
 Fixture config deploys two models per engine — one reasoning-capable, one non-reasoning — and maps the three tier aliases onto them.
 
-The harness implementation lives in [/conformance](../conformance/README.md) (runner usage, `matrix.json` schema, current status). Built in m0-build-plan phase 1 — before the product — it initially runs against a deliberately partial stub gateway so the matrix shows real structured results from day one; the target flips to the real gateway in phase 2, and CI's `--require` gate widens as phases land.
+The harness implementation lives in [/conformance](../conformance/README.md) (runner usage, `matrix.json` schema, current status). Built in m0-build-plan phase 1 — before the product — it first ran against a deliberately partial stub gateway so the matrix showed real structured results from day one. From phase 2 on, CI runs it against the real gateway (`atlas up` with a tiny llama.cpp model on a CPU runner); the stub stays as the default no-model local target. CI's `--require` gate widens as phases land.
 
 ### Matrix
 
