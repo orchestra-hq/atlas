@@ -133,16 +133,16 @@ jobs:
           if ! curl -sf -o /dev/null http://127.0.0.1:8080/healthz; then
             echo "::error::Atlas did not become ready"; cat atlas.log; exit 1
           fi
-      # Gate: G1 (non-streaming) + G2 (SSE streaming) green on the real gateway
-      # — the phase-3 exit criterion. Remaining groups fail by design;
-      # matrix.json records what isn't conformant yet, and the gate widens as
-      # m0-build-plan phases land.
+      # Gate: G1 (non-streaming) + G2 (SSE streaming) + G3 (tool loop) green on
+      # the real gateway — the phase-4 exit criterion. Remaining groups fail by
+      # design; matrix.json records what isn't conformant yet, and the gate
+      # widens as m0-build-plan phases land.
       - name: Run harness
         run: |
           uv run --locked python run.py \
             --base-url http://127.0.0.1:8080 \
             --engine llamacpp --model "$CONF_MODEL_NAME" \
-            --require G1,G2
+            --require G1,G2,G3
         working-directory: conformance
       - name: Stop Atlas
         if: always()

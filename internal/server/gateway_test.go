@@ -344,6 +344,116 @@ func TestStreamEngineErrorEmitsErrorEvent(t *testing.T) {
 	}
 }
 
+// toolExecutor streams a short preamble then a single tool call, and returns
+// the same content from a non-streaming Execute.
+type toolExecutor struct{}
+
+func (toolExecutor) Execute(_ context.Context, _ core.Request) (core.Response, error) {
+	return core.Response{
+		Blocks: []core.ContentBlock{
+			core.TextBlock("Checking."),
+			core.ToolUseBlock("call_1", "get_weather", json.RawMessage(`{"city":"Paris"}`)),
+		},
+		StopReason: core.StopToolUse,
+		Usage:      core.Usage{InputTokens: 5, OutputTokens: 9},
+	}, nil
+}
+
+func (toolExecutor) ExecuteStream(_ context.Context, _ core.Request, sink core.StreamSink) error {
+	if err := sink.Text("Checking."); err != nil {
+		return err
+	}
+	if err := sink.ToolCallStart(0, "call_1", "get_weather"); err != nil {
+		return err
+	}
+	if err := sink.ToolCallDelta(0, `{"city":`); err != nil {
+		return err
+	}
+	if err := sink.ToolCallDelta(0, `"Paris"}`); err != nil {
+		return err
+	}
+	return sink.Done(core.StopToolUse, core.Usage{InputTokens: 5, OutputTokens: 9})
+}
+
+// toolArgsFromEvents concatenates input_json_delta fragments per block index.
+func toolArgsFromEvents(events []sseEvent) map[float64]string {
+	args := map[float64]string{}
+	for _, e := range events {
+		if e.name != "content_block_delta" {
+			continue
+		}
+		d := e.data["delta"].(map[string]any)
+		if d["type"] == "input_json_delta" {
+			idx := e.data["index"].(float64)
+			args[idx] += d["partial_json"].(string)
+		}
+	}
+	return args
+}
+
+func TestStreamToolUse(t *testing.T) {
+	srv := newTestServer(toolExecutor{})
+	defer srv.Close()
+
+	resp, events := streamPost(t, srv,
+		`{"model":"test-model","max_tokens":64,"stream":true,"tool_choice":{"type":"any"},`+
+			`"tools":[{"name":"get_weather","input_schema":{"type":"object"}}],`+
+			`"messages":[{"role":"user","content":"weather in Paris?"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+
+	// Two content blocks: text at index 0, tool_use at index 1.
+	starts := map[float64]string{}
+	for _, e := range events {
+		if e.name == "content_block_start" {
+			starts[e.data["index"].(float64)] = e.data["content_block"].(map[string]any)["type"].(string)
+		}
+	}
+	if starts[0] != "text" || starts[1] != "tool_use" {
+		t.Errorf("block types = %v", starts)
+	}
+
+	args := toolArgsFromEvents(events)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(args[1]), &parsed); err != nil {
+		t.Fatalf("tool args %q invalid: %v", args[1], err)
+	}
+	if parsed["city"] != "Paris" {
+		t.Errorf("args = %v", parsed)
+	}
+
+	for _, e := range events {
+		if e.name == "message_delta" && e.data["delta"].(map[string]any)["stop_reason"] != "tool_use" {
+			t.Errorf("stop_reason = %v", e.data["delta"])
+		}
+	}
+}
+
+func TestNonStreamingToolUse(t *testing.T) {
+	srv := newTestServer(toolExecutor{})
+	defer srv.Close()
+
+	resp, body := post(t, srv, testKey,
+		`{"model":"test-model","max_tokens":64,"tool_choice":{"type":"any"},`+
+			`"tools":[{"name":"get_weather","input_schema":{"type":"object"}}],`+
+			`"messages":[{"role":"user","content":"weather in Paris?"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %v", resp.StatusCode, body)
+	}
+	if body["stop_reason"] != "tool_use" {
+		t.Errorf("stop_reason = %v", body["stop_reason"])
+	}
+	content := body["content"].([]any)
+	tool := content[1].(map[string]any)
+	if tool["type"] != "tool_use" || tool["name"] != "get_weather" || tool["id"] != "call_1" {
+		t.Errorf("tool_use block = %v", tool)
+	}
+	if input := tool["input"].(map[string]any); input["city"] != "Paris" {
+		t.Errorf("input = %v", tool["input"])
+	}
+}
+
 func TestValidationErrors(t *testing.T) {
 	srv := newTestServer(&echoExecutor{reply: "x"})
 	defer srv.Close()

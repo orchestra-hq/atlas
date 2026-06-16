@@ -80,15 +80,122 @@ func TestExecuteTranslatesAndMaps(t *testing.T) {
 
 func TestFinishReasonMapping(t *testing.T) {
 	cases := map[string]core.StopReason{
-		"stop":   core.StopEndTurn,
-		"length": core.StopMaxTokens,
-		"":       core.StopEndTurn,
-		"weird":  core.StopEndTurn,
+		"stop":       core.StopEndTurn,
+		"length":     core.StopMaxTokens,
+		"tool_calls": core.StopToolUse,
+		"":           core.StopEndTurn,
+		"weird":      core.StopEndTurn,
 	}
 	for reason, want := range cases {
 		if got := mapFinishReason(reason); got != want {
 			t.Errorf("mapFinishReason(%q) = %q, want %q", reason, got, want)
 		}
+	}
+}
+
+func TestExecuteEmitsToolUseBlock(t *testing.T) {
+	// finish_reason "stop" but a tool_call present: stop_reason must still be tool_use.
+	srv := fakeServer(t, http.StatusOK, `{
+		"choices":[{"message":{"role":"assistant","content":"",
+			"tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}}]},
+			"finish_reason":"stop"}],
+		"usage":{"prompt_tokens":9,"completion_tokens":7}
+	}`, nil)
+	defer srv.Close()
+
+	a := New(srv.URL, "m", srv.Client())
+	resp, err := a.Execute(context.Background(), core.Request{
+		Model:     "m",
+		MaxTokens: 64,
+		Messages:  []core.Message{{Role: core.RoleUser, Blocks: []core.ContentBlock{core.TextBlock("weather in Paris?")}}},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if resp.StopReason != core.StopToolUse {
+		t.Errorf("stop_reason = %q, want tool_use", resp.StopReason)
+	}
+	if len(resp.Blocks) != 1 || resp.Blocks[0].Type != core.BlockToolUse {
+		t.Fatalf("blocks = %+v", resp.Blocks)
+	}
+	b := resp.Blocks[0]
+	if b.ID != "call_1" || b.Name != "get_weather" || string(b.Input) != `{"city":"Paris"}` {
+		t.Errorf("tool_use block = %+v", b)
+	}
+}
+
+func TestExecuteTranslatesToolsAndLoop(t *testing.T) {
+	var got chatRequest
+	srv := fakeServer(t, http.StatusOK, `{
+		"choices":[{"message":{"role":"assistant","content":"It is sunny."},"finish_reason":"stop"}],
+		"usage":{"prompt_tokens":3,"completion_tokens":4}
+	}`, &got)
+	defer srv.Close()
+
+	a := New(srv.URL, "m", srv.Client())
+	_, err := a.Execute(context.Background(), core.Request{
+		Model:     "m",
+		MaxTokens: 64,
+		Tools: []core.Tool{{
+			Name:        "get_weather",
+			Description: "Get weather",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}}}`),
+		}},
+		ToolChoice: &core.ToolChoice{Type: core.ToolChoiceAny},
+		Messages: []core.Message{
+			{Role: core.RoleUser, Blocks: []core.ContentBlock{core.TextBlock("weather in Paris?")}},
+			{Role: core.RoleAssistant, Blocks: []core.ContentBlock{
+				core.ToolUseBlock("call_1", "get_weather", json.RawMessage(`{"city":"Paris"}`)),
+			}},
+			{Role: core.RoleUser, Blocks: []core.ContentBlock{
+				core.ToolResultBlock("call_1", "sunny, 20C", false),
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	// tools translated to OpenAI function form, any -> required.
+	if len(got.Tools) != 1 || got.Tools[0].Type != "function" || got.Tools[0].Function.Name != "get_weather" {
+		t.Errorf("tools = %+v", got.Tools)
+	}
+	if got.ToolChoice != "required" {
+		t.Errorf("tool_choice = %v, want required", got.ToolChoice)
+	}
+	// messages: user, assistant(tool_calls), tool(result).
+	if len(got.Messages) != 3 {
+		t.Fatalf("messages = %+v", got.Messages)
+	}
+	asst := got.Messages[1]
+	if asst.Role != "assistant" || len(asst.ToolCalls) != 1 || asst.ToolCalls[0].ID != "call_1" || asst.ToolCalls[0].Function.Name != "get_weather" {
+		t.Errorf("assistant message = %+v", asst)
+	}
+	tool := got.Messages[2]
+	if tool.Role != "tool" || tool.ToolCallID != "call_1" || tool.Content != "sunny, 20C" {
+		t.Errorf("tool message = %+v", tool)
+	}
+}
+
+func TestToolChoiceMapping(t *testing.T) {
+	cases := []struct {
+		in   *core.ToolChoice
+		want any
+	}{
+		{nil, nil},
+		{&core.ToolChoice{Type: core.ToolChoiceAuto}, "auto"},
+		{&core.ToolChoice{Type: core.ToolChoiceAny}, "required"},
+		{&core.ToolChoice{Type: core.ToolChoiceNone}, "none"},
+	}
+	for _, c := range cases {
+		if got := toChatToolChoice(c.in); got != c.want {
+			t.Errorf("toChatToolChoice(%+v) = %v, want %v", c.in, got, c.want)
+		}
+	}
+	// Specific tool produces a function-selector object.
+	obj, ok := toChatToolChoice(&core.ToolChoice{Type: core.ToolChoiceTool, Name: "get_weather"}).(map[string]any)
+	if !ok || obj["type"] != "function" {
+		t.Fatalf("specific tool choice = %#v", obj)
 	}
 }
 
@@ -122,13 +229,16 @@ func TestExecuteNoChoices(t *testing.T) {
 	}
 }
 
-// recordSink captures the deltas and terminal signal a stream produces.
+// recordSink captures the deltas, tool-call events, and terminal signal a
+// stream produces.
 type recordSink struct {
-	deltas    []string
-	reason    core.StopReason
-	usage     core.Usage
-	done      bool
-	stopAfter int // return ErrStopStreaming after this many deltas (0 = never)
+	deltas     []string
+	toolStarts []string // "name" per ToolCallStart, in order
+	toolArgs   string   // concatenated tool-call argument fragments
+	reason     core.StopReason
+	usage      core.Usage
+	done       bool
+	stopAfter  int // return ErrStopStreaming after this many deltas (0 = never)
 }
 
 func (s *recordSink) Text(delta string) error {
@@ -136,6 +246,16 @@ func (s *recordSink) Text(delta string) error {
 	if s.stopAfter > 0 && len(s.deltas) >= s.stopAfter {
 		return core.ErrStopStreaming
 	}
+	return nil
+}
+
+func (s *recordSink) ToolCallStart(_ int, _, name string) error {
+	s.toolStarts = append(s.toolStarts, name)
+	return nil
+}
+
+func (s *recordSink) ToolCallDelta(_ int, argsFragment string) error {
+	s.toolArgs += argsFragment
 	return nil
 }
 
@@ -218,6 +338,37 @@ func TestExecuteStreamStopSignalEndsCleanly(t *testing.T) {
 	// Stopped after the first delta; Done is not called (the gateway finalizes).
 	if len(sink.deltas) != 1 || sink.done {
 		t.Errorf("deltas=%v done=%v, want 1 delta and no Done", sink.deltas, sink.done)
+	}
+}
+
+func TestExecuteStreamToolCall(t *testing.T) {
+	// id+name arrive first, then argument fragments across chunks, then finish.
+	body := "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"city\\\":\"}}]},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"Paris\\\"}\"}}]},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n" +
+		"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":7}}\n\n" +
+		"data: [DONE]\n\n"
+	srv := sseServer(t, body, nil)
+	defer srv.Close()
+
+	sink := &recordSink{}
+	a := New(srv.URL, "m", srv.Client())
+	if err := a.ExecuteStream(context.Background(), core.Request{
+		Model:     "m",
+		MaxTokens: 64,
+		Messages:  []core.Message{{Role: core.RoleUser, Blocks: []core.ContentBlock{core.TextBlock("weather?")}}},
+	}, sink); err != nil {
+		t.Fatalf("ExecuteStream: %v", err)
+	}
+	if len(sink.toolStarts) != 1 || sink.toolStarts[0] != "get_weather" {
+		t.Errorf("tool starts = %v", sink.toolStarts)
+	}
+	if sink.toolArgs != `{"city":"Paris"}` {
+		t.Errorf("tool args = %q", sink.toolArgs)
+	}
+	if !sink.done || sink.reason != core.StopToolUse {
+		t.Errorf("done=%v reason=%q, want tool_use", sink.done, sink.reason)
 	}
 }
 

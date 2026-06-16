@@ -137,6 +137,74 @@ func TestStreamWriterStopSequence(t *testing.T) {
 	}
 }
 
+func TestStreamWriterToolUse(t *testing.T) {
+	rec := httptest.NewRecorder()
+	sw, _ := NewStreamWriter(rec, "msg_t", "m")
+	_ = sw.Start(0)
+	_ = sw.TextDelta("Let me check.")
+	_ = sw.ToolUseStart("call_1", "get_weather")
+	_ = sw.ToolUseDelta(`{"city":`)
+	_ = sw.ToolUseDelta(`"Paris"}`)
+	_ = sw.Finish(core.StopToolUse, nil, core.Usage{InputTokens: 5, OutputTokens: 9})
+
+	events := parseSSE(t, rec.Body.String())
+	got := names(events)
+	want := []string{
+		"message_start",
+		"content_block_start", "content_block_delta", "content_block_stop", // text, index 0
+		"content_block_start", "content_block_delta", "content_block_delta", "content_block_stop", // tool_use, index 1
+		"message_delta", "message_stop",
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("event names = %v, want %v", got, want)
+	}
+
+	// The text block is index 0; the tool_use block is index 1 and carries id+name.
+	var toolStart sseEvent
+	for _, e := range events {
+		if e.name == "content_block_start" && e.data["index"].(float64) == 1 {
+			toolStart = e
+		}
+	}
+	block := toolStart.data["content_block"].(map[string]any)
+	if block["type"] != "tool_use" || block["id"] != "call_1" || block["name"] != "get_weather" {
+		t.Errorf("tool_use start block = %v", block)
+	}
+
+	// input_json_delta fragments concatenate to valid JSON arguments.
+	var args strings.Builder
+	for _, e := range events {
+		if e.name == "content_block_delta" {
+			d := e.data["delta"].(map[string]any)
+			if d["type"] == "input_json_delta" {
+				args.WriteString(d["partial_json"].(string))
+			}
+		}
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(args.String()), &parsed); err != nil {
+		t.Fatalf("concatenated args %q not valid JSON: %v", args.String(), err)
+	}
+	if parsed["city"] != "Paris" {
+		t.Errorf("args = %v", parsed)
+	}
+
+	if md := lastMessageDelta(events); md["stop_reason"] != "tool_use" {
+		t.Errorf("stop_reason = %v, want tool_use", md["stop_reason"])
+	}
+}
+
+// lastMessageDelta returns the delta object of the final message_delta event.
+func lastMessageDelta(events []sseEvent) map[string]any {
+	var md map[string]any
+	for _, e := range events {
+		if e.name == "message_delta" {
+			md = e.data["delta"].(map[string]any)
+		}
+	}
+	return md
+}
+
 func TestStreamWriterDropsEmptyDelta(t *testing.T) {
 	rec := httptest.NewRecorder()
 	sw, _ := NewStreamWriter(rec, "id", "m")

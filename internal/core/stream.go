@@ -7,8 +7,15 @@ import (
 )
 
 // StreamSink receives a streaming response incrementally. An engine adapter
-// emits zero or more Text deltas, then exactly one Done, in order. The gateway
-// implements a sink that translates these into Anthropic SSE events.
+// emits text deltas and tool-call events as the model produces them, then
+// exactly one Done, in order. The gateway implements a sink that translates
+// these into Anthropic SSE events (text_delta, input_json_delta, …).
+//
+// Tool calls are reported as a ToolCallStart (carrying the call's id and tool
+// name) followed by zero or more ToolCallDelta fragments whose concatenation is
+// the call's JSON arguments. index identifies the call within the turn; M0
+// engines (llama.cpp) stream one call's arguments to completion before starting
+// the next, so a sink may assume calls do not interleave.
 //
 // A sink method may return ErrStopStreaming to ask the engine to stop
 // generating and end the stream cleanly (the gateway uses this when a stop
@@ -16,6 +23,10 @@ import (
 type StreamSink interface {
 	// Text reports the next chunk of generated text. delta is never empty.
 	Text(delta string) error
+	// ToolCallStart reports that the model began a tool call.
+	ToolCallStart(index int, id, name string) error
+	// ToolCallDelta reports the next fragment of a tool call's JSON arguments.
+	ToolCallDelta(index int, argsFragment string) error
 	// Done reports normal end of generation with the engine's stop reason and
 	// final cumulative usage.
 	Done(reason StopReason, usage Usage) error

@@ -8,19 +8,35 @@ import (
 )
 
 // MessagesRequest is the POST /v1/messages wire request. Fields Atlas does not
-// yet honor (tools, thinking, metadata, …) are intentionally absent in phase 2
-// and land with their build-plan phases; unknown JSON keys are ignored rather
-// than rejected so forward-compatible clients keep working.
+// yet honor (thinking, metadata, …) are intentionally absent and land with
+// their build-plan phases; unknown JSON keys are ignored rather than rejected
+// so forward-compatible clients keep working.
 type MessagesRequest struct {
-	Model         string         `json:"model"`
-	System        StringOrBlocks `json:"system"`
-	Messages      []WireMessage  `json:"messages"`
-	MaxTokens     int            `json:"max_tokens"`
-	Temperature   *float64       `json:"temperature"`
-	TopP          *float64       `json:"top_p"`
-	TopK          *int           `json:"top_k"`
-	StopSequences []string       `json:"stop_sequences"`
-	Stream        bool           `json:"stream"`
+	Model         string          `json:"model"`
+	System        StringOrBlocks  `json:"system"`
+	Messages      []WireMessage   `json:"messages"`
+	MaxTokens     int             `json:"max_tokens"`
+	Temperature   *float64        `json:"temperature"`
+	TopP          *float64        `json:"top_p"`
+	TopK          *int            `json:"top_k"`
+	StopSequences []string        `json:"stop_sequences"`
+	Tools         []WireTool      `json:"tools"`
+	ToolChoice    *WireToolChoice `json:"tool_choice"`
+	Stream        bool            `json:"stream"`
+}
+
+// WireTool is one entry of the request's tools array.
+type WireTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"input_schema"`
+}
+
+// WireToolChoice is the request's tool_choice object. Name is set only for
+// type "tool"; disable_parallel_tool_use is accepted and ignored.
+type WireToolChoice struct {
+	Type string `json:"type"`
+	Name string `json:"name"`
 }
 
 // WireMessage is one turn on the wire. Content is a string or a list of blocks.
@@ -29,10 +45,54 @@ type WireMessage struct {
 	Content StringOrBlocks `json:"content"`
 }
 
-// WireBlock is a content block on the wire. Phase 2 is text-only.
+// WireBlock is a content block on the wire. The fields used depend on Type:
+// text uses Text; tool_use uses ID/Name/Input; tool_result uses
+// ToolUseID/Content/IsError. MarshalJSON emits only the relevant subset so
+// responses carry exactly the shape clients expect.
 type WireBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+
+	// tool_use
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
+
+	// tool_result
+	ToolUseID string         `json:"tool_use_id"`
+	Content   StringOrBlocks `json:"content"`
+	IsError   bool           `json:"is_error"`
+}
+
+// MarshalJSON renders a WireBlock with only the fields its Type uses. Atlas
+// emits text and tool_use blocks in responses; the others marshal for
+// completeness (tests, request round-trips).
+func (b WireBlock) MarshalJSON() ([]byte, error) {
+	switch b.Type {
+	case "tool_use":
+		input := b.Input
+		if len(input) == 0 {
+			input = json.RawMessage("{}")
+		}
+		return json.Marshal(struct {
+			Type  string          `json:"type"`
+			ID    string          `json:"id"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		}{b.Type, b.ID, b.Name, input})
+	case "tool_result":
+		return json.Marshal(struct {
+			Type      string `json:"type"`
+			ToolUseID string `json:"tool_use_id"`
+			Content   string `json:"content"`
+			IsError   bool   `json:"is_error,omitempty"`
+		}{b.Type, b.ToolUseID, b.Content.Text(), b.IsError})
+	default:
+		return json.Marshal(struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}{b.Type, b.Text})
+	}
 }
 
 // StringOrBlocks decodes the Anthropic content field, which is either a bare
@@ -99,12 +159,27 @@ func (r *MessagesRequest) ToCore() (core.Request, error) {
 		}
 		blocks := make([]core.ContentBlock, 0, len(m.Content.Blocks))
 		for j, b := range m.Content.Blocks {
-			if b.Type != "text" {
-				return core.Request{}, ErrInvalid("messages[%d].content[%d]: only text blocks are supported in this release", i, j)
+			switch b.Type {
+			case "text":
+				blocks = append(blocks, core.TextBlock(b.Text))
+			case "tool_use":
+				blocks = append(blocks, core.ToolUseBlock(b.ID, b.Name, b.Input))
+			case "tool_result":
+				blocks = append(blocks, core.ToolResultBlock(b.ToolUseID, b.Content.Text(), b.IsError))
+			default:
+				return core.Request{}, ErrInvalid("messages[%d].content[%d].type: unsupported block type %q", i, j, b.Type)
 			}
-			blocks = append(blocks, core.TextBlock(b.Text))
 		}
 		msgs = append(msgs, core.Message{Role: role, Blocks: blocks})
+	}
+
+	tools, err := toolsToCore(r.Tools)
+	if err != nil {
+		return core.Request{}, err
+	}
+	choice, err := toolChoiceToCore(r.ToolChoice)
+	if err != nil {
+		return core.Request{}, err
 	}
 
 	return core.Request{
@@ -116,7 +191,44 @@ func (r *MessagesRequest) ToCore() (core.Request, error) {
 		TopP:          r.TopP,
 		TopK:          r.TopK,
 		StopSequences: r.StopSequences,
+		Tools:         tools,
+		ToolChoice:    choice,
 	}, nil
+}
+
+// toolsToCore validates and translates the request's tools array.
+func toolsToCore(wire []WireTool) ([]core.Tool, error) {
+	if len(wire) == 0 {
+		return nil, nil
+	}
+	tools := make([]core.Tool, 0, len(wire))
+	for i, t := range wire {
+		if t.Name == "" {
+			return nil, ErrInvalid("tools[%d].name: field required", i)
+		}
+		tools = append(tools, core.Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
+	}
+	return tools, nil
+}
+
+// toolChoiceToCore validates and translates the request's tool_choice. A nil
+// input (field absent) means no constraint.
+func toolChoiceToCore(wire *WireToolChoice) (*core.ToolChoice, error) {
+	if wire == nil {
+		return nil, nil
+	}
+	t := core.ToolChoiceType(wire.Type)
+	switch t {
+	case core.ToolChoiceAuto, core.ToolChoiceAny, core.ToolChoiceNone:
+		return &core.ToolChoice{Type: t}, nil
+	case core.ToolChoiceTool:
+		if wire.Name == "" {
+			return nil, ErrInvalid("tool_choice.name: field required when type is %q", core.ToolChoiceTool)
+		}
+		return &core.ToolChoice{Type: t, Name: wire.Name}, nil
+	default:
+		return nil, ErrInvalid("tool_choice.type: must be one of auto, any, tool, none")
+	}
 }
 
 // MessagesResponse is the POST /v1/messages wire response.
@@ -143,8 +255,11 @@ type WireUsage struct {
 func FromCore(id, model string, resp core.Response, stopSequence *string) MessagesResponse {
 	content := make([]WireBlock, 0, len(resp.Blocks))
 	for _, b := range resp.Blocks {
-		if b.Type == core.BlockText {
+		switch b.Type {
+		case core.BlockText:
 			content = append(content, WireBlock{Type: "text", Text: b.Text})
+		case core.BlockToolUse:
+			content = append(content, WireBlock{Type: "tool_use", ID: b.ID, Name: b.Name, Input: b.Input})
 		}
 	}
 	return MessagesResponse{

@@ -33,9 +33,6 @@ it('[G1][c1][anthropic-ts] non-streaming single turn returns text', async () => 
   expect(message.usage.output_tokens).toBeGreaterThan(0);
 });
 
-// Expected to FAIL until phase 3 lands SSE streaming (the stub gateway
-// rejects stream=true on purpose) — part of the phase-1 structured-failure
-// deliverable. The tool-loop subset joins it when phase 4 starts.
 it('[G2][c2][anthropic-ts] streaming text deltas match the final message', async () => {
   const stream = client.messages.stream({
     model,
@@ -51,4 +48,37 @@ it('[G2][c2][anthropic-ts] streaming text deltas match the final message', async
   expect(final.stop_reason).toBe("end_turn");
   expect(textOf(final)).toBe(streamed);
   expect(streamed.length).toBeGreaterThan(0);
+});
+
+// Tool-loop subset on the TS client: streaming a tool call must surface a
+// tool_use block whose input_json_delta fragments the SDK reassembles into a
+// valid input object.
+const WEATHER_TOOL: Anthropic.Tool = {
+  name: "get_weather",
+  description: "Get the current weather for a city.",
+  input_schema: {
+    type: "object",
+    properties: { city: { type: "string", description: "City name" } },
+    required: ["city"],
+  },
+};
+
+it('[G3][c3][anthropic-ts] streaming tool use yields a valid tool_use block', async () => {
+  const stream = client.messages.stream({
+    model,
+    max_tokens: 256,
+    temperature: 0,
+    tools: [WEATHER_TOOL],
+    tool_choice: { type: "any" },
+    messages: [{ role: "user", content: "What is the weather in Paris right now?" }],
+  });
+  const final = await stream.finalMessage();
+
+  expect(final.stop_reason).toBe("tool_use");
+  const toolUse = final.content.find(
+    (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
+  );
+  expect(toolUse).toBeDefined();
+  expect(toolUse!.name).toBe("get_weather");
+  expect((toolUse!.input as { city?: string }).city).toBeTruthy();
 });
