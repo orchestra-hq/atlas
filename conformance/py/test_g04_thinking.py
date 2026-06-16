@@ -28,7 +28,7 @@ pytestmark = [
 def test_thinking_block_before_text(anthropic_client, reasoning_model):
     message = anthropic_client.messages.create(
         model=reasoning_model,
-        max_tokens=512,
+        max_tokens=128,
         temperature=0,
         thinking={"type": "enabled", "budget_tokens": 1024},
         messages=[{"role": "user", "content": "What is 17 times 19? Reason it through."}],
@@ -46,7 +46,7 @@ def test_budget_tokens_accepted(anthropic_client, reasoning_model):
     # an error, and never enforced by truncation.
     message = anthropic_client.messages.create(
         model=reasoning_model,
-        max_tokens=512,
+        max_tokens=128,
         temperature=0,
         thinking={"type": "enabled", "budget_tokens": 2048},
         messages=[{"role": "user", "content": "Briefly, why is the sky blue?"}],
@@ -58,7 +58,7 @@ def test_thinking_multiturn_echo(anthropic_client, reasoning_model):
     history = [{"role": "user", "content": "What is 8 times 7? Reason it through."}]
     first = anthropic_client.messages.create(
         model=reasoning_model,
-        max_tokens=512,
+        max_tokens=128,
         temperature=0,
         thinking={"type": "enabled", "budget_tokens": 1024},
         messages=history,
@@ -69,7 +69,7 @@ def test_thinking_multiturn_echo(anthropic_client, reasoning_model):
     history.append({"role": "user", "content": "Now double that."})
     second = anthropic_client.messages.create(
         model=reasoning_model,
-        max_tokens=512,
+        max_tokens=128,
         temperature=0,
         thinking={"type": "enabled", "budget_tokens": 1024},
         messages=history,
@@ -85,7 +85,7 @@ def test_thinking_delta_streams(base_url, api_key, reasoning_model):
         api_key,
         {
             "model": reasoning_model,
-            "max_tokens": 512,
+            "max_tokens": 128,
             "temperature": 0,
             "thinking": {"type": "enabled", "budget_tokens": 1024},
             "messages": [{"role": "user", "content": "What is 17 times 19? Reason it through."}],
@@ -118,7 +118,7 @@ def test_non_reasoning_model_graceful(anthropic_client, model):
     # thinking blocks and no error (ADR-0005 point 2).
     message = anthropic_client.messages.create(
         model=model,
-        max_tokens=256,
+        max_tokens=128,
         temperature=0,
         thinking={"type": "enabled", "budget_tokens": 1024},
         messages=[{"role": "user", "content": "Say hello."}],
