@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt tidy snapshot conformance clean
+.PHONY: build test lint fmt tidy snapshot conformance clean check ship
 
 build:
 	go build -o bin/atlas ./cmd/atlas
@@ -27,3 +27,13 @@ conformance:
 
 clean:
 	rm -rf bin dist
+
+# Local pre-flight: format + vet + lint + test + tidy (the gates CI runs).
+check:
+	@bash scripts/check.sh
+
+# One command from working changes to a squash-merge into main: clean, check,
+# commit, push, open PR, wait for CI, then sync + delete the branch.
+#   make ship MSG="PR title" [BODY=path/to/body.md]
+ship:
+	@bash scripts/ship.sh "$(MSG)" $(BODY)
