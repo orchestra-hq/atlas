@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -66,6 +67,7 @@ type Gateway struct {
 	aliases   map[string]string // alias -> canonical name
 	order     []string          // canonical names, registration order (listing)
 	createdAt string            // wire created_at stamped on model objects
+	logger    *slog.Logger      // one structured line per API request (G10)
 }
 
 // NewGateway builds a gateway that accepts apiKey, serves each model in models
@@ -89,6 +91,14 @@ func NewGateway(apiKey string, models []Model, aliases map[string]string) *Gatew
 		aliases:   aliases,
 		order:     order,
 		createdAt: time.Now().UTC().Format(time.RFC3339),
+		logger:    slog.Default(),
+	}
+}
+
+// SetLogger overrides the gateway's request logger (default slog.Default()).
+func (g *Gateway) SetLogger(l *slog.Logger) {
+	if l != nil {
+		g.logger = l
 	}
 }
 
@@ -109,10 +119,27 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/chat/completions", g.handleChatCompletions)
 	mux.HandleFunc("GET /v1/models", g.handleListModels)
 	mux.HandleFunc("GET /v1/models/{id}", g.handleGetModel)
+	// Liveness: the process is up and serving. Says nothing about whether a
+	// model can answer — use /readyz for that.
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		anthropic.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	return mux
+	// Readiness: a model is servable. In M0 single-node mode a model is
+	// registered only after its worker reports healthy (worker.Start blocks on
+	// the engine's /health), so "has a registered model" is exactly "a model is
+	// servable". 503 until then, so an orchestrator can gate traffic on it.
+	mux.HandleFunc("GET /readyz", g.handleReadyz)
+	return g.withRequestLog(mux)
+}
+
+// handleReadyz reports readiness: 200 once at least one model is servable,
+// 503 otherwise (G10, criterion 8).
+func (g *Gateway) handleReadyz(w http.ResponseWriter, _ *http.Request) {
+	if len(g.models) == 0 {
+		anthropic.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "no models servable"})
+		return
+	}
+	anthropic.WriteJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 // maxRequestBytes caps a request body. Generous for chat; a hard ceiling so a
@@ -179,6 +206,7 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 		stopSeq = &seq
 	}
 
+	recordUsage(r.Context(), coreReq.Model, resp.Usage.InputTokens, resp.Usage.OutputTokens)
 	anthropic.WriteJSON(w, http.StatusOK, anthropic.FromCore(newMessageID(), coreReq.Model, resp, stopSeq))
 }
 
@@ -255,6 +283,7 @@ func (g *Gateway) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	recordUsage(r.Context(), coreReq.Model, n, 0)
 	anthropic.WriteJSON(w, http.StatusOK, anthropic.CountTokensResponse{InputTokens: n})
 }
 
@@ -335,6 +364,7 @@ func (g *Gateway) streamMessages(w http.ResponseWriter, r *http.Request, exec Ex
 		return
 	}
 
+	recordUsage(r.Context(), req.Model, sink.usage.InputTokens, sink.usage.OutputTokens)
 	_ = sw.Finish(sink.reason, sink.stopSeq, sink.usage)
 }
 
