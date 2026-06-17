@@ -1,0 +1,111 @@
+name: Docker
+
+# Container images for Atlas (ADR-0006). On a PR we build the slim image only,
+# as a cheap proof the Dockerfile still works (mirroring the release dry-run) —
+# nothing is pushed and the heavy CUDA build is skipped. On a v* tag or a manual
+# dispatch we log in to GHCR and push: the multi-arch slim image plus the
+# linux/amd64 CUDA "batteries-included" image, version-pinned like the binary.
+
+on:
+  pull_request:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/orchestra-hq/atlas
+
+jobs:
+  # PR machinery check: build the slim image for the host arch and smoke it.
+  # No registry login, no push, no CUDA — keep per-PR cost low.
+  build:
+    name: Build slim (no push)
+    if: github.event_name == 'pull_request'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: slim
+          load: true
+          tags: atlas:slim-ci
+          build-args: |
+            VERSION=ci-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test
+        run: docker run --rm atlas:slim-ci version
+
+  # Release/dispatch: push the multi-arch slim image and the CUDA image to GHCR.
+  publish:
+    name: Publish to GHCR
+    if: github.event_name != 'pull_request'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      packages: write # push to GHCR under the org namespace
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-qemu-action@v3 # arm64 emulation for the slim multi-arch build
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # slim is the default image, so it carries the unsuffixed and :latest tags.
+      - name: Tags for slim
+        id: meta_slim
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=ref,event=tag
+            type=raw,value=slim
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+      - name: Build and push slim (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: slim
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_slim.outputs.tags }}
+          labels: ${{ steps.meta_slim.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('0.0.0-dev+{0}', github.sha) }}
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # CUDA image: linux/amd64 only, suffixed tags (never :latest). Heavy build
+      # (bakes the vLLM venv); the GPU end-to-end proof is the nightly acceptance
+      # run, not this push.
+      - name: Tags for cuda
+        id: meta_cuda
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=cuda
+            type=raw,value=${{ github.ref_name }}-cuda,enable=${{ github.ref_type == 'tag' }}
+      - name: Build and push cuda (amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: cuda
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta_cuda.outputs.tags }}
+          labels: ${{ steps.meta_cuda.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('0.0.0-dev+{0}', github.sha) }}
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
