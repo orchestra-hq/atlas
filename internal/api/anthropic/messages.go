@@ -26,8 +26,9 @@ type MessagesRequest struct {
 	Stream        bool            `json:"stream"`
 }
 
-// WireThinking is the request's thinking object (ADR-0005). Type is "enabled"
-// or "disabled"; budget_tokens is advisory and only meaningful when enabled.
+// WireThinking is the request's thinking object (ADR-0005). Type is "enabled",
+// "adaptive" (Claude Code's default — model decides), or "disabled";
+// budget_tokens is advisory and only meaningful when thinking is allowed.
 type WireThinking struct {
 	Type         string `json:"type"`
 	BudgetTokens int    `json:"budget_tokens"`
@@ -227,17 +228,24 @@ func (r *MessagesRequest) ToCore() (core.Request, error) {
 // input (field absent) means the client did not ask for thinking. budget_tokens
 // is advisory (ADR-0005) and not range-checked: Atlas never enforces it, so a
 // small value is accepted rather than rejected the way the upstream API would.
+//
+// "adaptive" is the mode Claude Code sends by default (the M0 demo harness):
+// the model decides whether and how much to reason. Atlas has no budget to
+// allocate, so it maps adaptive to thinking-allowed exactly like "enabled" —
+// reasoning models may reason, non-reasoning models degrade gracefully
+// (ADR-0005). Rejecting it would 400 every Claude Code request, the precise
+// failure ADR-0005 exists to prevent; it surfaced via the G9 smoke test.
 func thinkingToCore(wire *WireThinking) (*core.ThinkingConfig, error) {
 	if wire == nil {
 		return nil, nil
 	}
 	switch wire.Type {
-	case "enabled":
+	case "enabled", "adaptive":
 		return &core.ThinkingConfig{Enabled: true, BudgetTokens: wire.BudgetTokens}, nil
 	case "disabled":
 		return &core.ThinkingConfig{Enabled: false}, nil
 	default:
-		return nil, ErrInvalid("thinking.type: must be %q or %q", "enabled", "disabled")
+		return nil, ErrInvalid("thinking.type: must be %q, %q, or %q", "enabled", "adaptive", "disabled")
 	}
 }
 

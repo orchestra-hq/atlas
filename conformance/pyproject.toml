@@ -20,5 +20,5 @@ testpaths = ["py"]
 markers = [
     "group(name): conformance group from docs/conformance-suite.md (G1..G10)",
     "criterion(n): acceptance criterion number from docs/m0-acceptance.md",
-    "client(name): client under test (anthropic-py, openai-py, wire, agent-sdk)",
+    "client(name): client under test (anthropic-py, openai-py, wire, agent-sdk, claude-code)",
 ]

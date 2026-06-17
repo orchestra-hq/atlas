@@ -144,20 +144,23 @@ jobs:
           if ! curl -sf -o /dev/null http://127.0.0.1:8080/readyz; then
             echo "::error::Atlas did not become ready"; cat "$ATLAS_LOG_FILE"; exit 1
           fi
-      # Gate: G1-G8 + G10 green on the real gateway — through the phase-10 exit
-      # criterion: messages, streaming, tools, thinking, models+aliases,
+      # Gate: G1-G10 green on the real gateway — the full M0 surface on the
+      # llama.cpp CPU tier: messages, streaming, tools, thinking, models+aliases,
       # count_tokens, Anthropic-shaped errors (incl. pre-dispatch context-window
-      # rejection), the OpenAI /v1/chat/completions surface, and the ops minimum
-      # (/healthz, /readyz, token counts in logs). G9 (agent + Claude Code smoke)
-      # lands in phase 11; it fails by design until then, and matrix.json records
-      # what isn't conformant yet.
+      # rejection), the OpenAI /v1/chat/completions surface, the ops minimum
+      # (/healthz, /readyz, token counts in logs), and G9 (agent harness). G9's
+      # agent-sdk cell drives a >=3-call streamed tool loop through Atlas; its
+      # real-Claude-Code drop-in cell is opt-in (CONF_CLAUDE_CODE_SMOKE) — the
+      # 1.5B CPU-tier model drives Claude Code only intermittently, so that cell
+      # and the vLLM full matrix are the capable/GPU acceptance tier (M0 "done"
+      # is gated on that run; see docs/open-questions.md), not the per-PR CPU gate.
       - name: Run harness
         run: |
           uv run --locked python run.py \
             --base-url http://127.0.0.1:8080 \
             --engine llamacpp --model "$CONF_MODEL_NAME" \
             --reasoning-model "$CONF_REASONING_NAME" \
-            --require G1,G2,G3,G4,G5,G6,G7,G8,G10
+            --require G1,G2,G3,G4,G5,G6,G7,G8,G9,G10
         working-directory: conformance
       - name: Stop Atlas
         if: always()
