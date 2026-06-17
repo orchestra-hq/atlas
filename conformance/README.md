@@ -34,18 +34,18 @@ To run against a real local gateway end to end (what CI does):
 
 ```sh
 go build -o atlas ./cmd/atlas
-curl -sSL -o qwen2.5-1.5b.gguf https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf
-curl -sSL -o qwen3-0.6b.gguf https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf
-# Two models: a non-reasoning model and a reasoning one (G4 needs both). Repeat --model.
-./atlas up --model qwen2.5-1.5b.gguf --model qwen3-0.6b.gguf \
-  --alias claude-sonnet-4-6=qwen2.5-1.5b-instruct-q4_k_m \
-  --alias claude-haiku-4-5=qwen2.5-1.5b-instruct-q4_k_m \
-  --alias claude-opus-4-1=Qwen3-0.6B-Q8_0 \
-  --api-key dev-key &   # provisions llama.cpp, serves :8080
+# Pull two starter-catalog models from cold: a non-reasoning one and a
+# reasoning one (G4 needs both). atlas up would also pull on demand.
+./atlas pull qwen2.5-1.5b-instruct qwen3-0.6b
+./atlas up --model qwen2.5-1.5b-instruct --model qwen3-0.6b \
+  --alias claude-sonnet-4-6=qwen2.5-1.5b-instruct \
+  --alias claude-haiku-4-5=qwen2.5-1.5b-instruct \
+  --alias claude-opus-4-1=qwen3-0.6b \
+  --api-key dev-key &   # provisions llama.cpp, boots from the store, serves :8080
 cd conformance && uv run python run.py \
   --base-url http://127.0.0.1:8080 --api-key dev-key \
-  --engine llamacpp --model qwen2.5-1.5b-instruct-q4_k_m \
-  --reasoning-model Qwen3-0.6B-Q8_0 --require G1,G2,G3,G4,G5,G6,G7,G8
+  --engine llamacpp --model qwen2.5-1.5b-instruct \
+  --reasoning-model qwen3-0.6b --require G1,G2,G3,G4,G5,G6,G7,G8
 ```
 
 The harness is engine-agnostic, so the same suite runs against a vLLM-backed Atlas on a GPU host (the full-matrix tier — not yet wired into CI; see [open-questions.md](../docs/open-questions.md)):
@@ -108,6 +108,6 @@ Every pytest test carries `group` / `criterion` / `client` markers; vitest tests
 
 ## Status
 
-As of [m0-build-plan](../docs/m0-build-plan.md) phase 8, CI runs the harness against the **real Atlas gateway** (`atlas up` with two tiny llama.cpp models — one non-reasoning, one reasoning — plus tier aliases on a CPU runner), gating on `--require G1,G2,G3,G4,G5,G6,G7,G8` — through the phase-7 exit criterion. Against the real gateway today: G1 (non-streaming `/v1/messages`), G2 (SSE streaming), G3 (tool loop: `tool_use`/`tool_result` round-trip, `input_json_delta` streaming, tool_choice variants, parallel calls, `is_error`), G4 (thinking: `thinking` blocks before text, `thinking_delta` streaming, multi-turn echo, advisory `budget_tokens`, graceful no-op on the non-reasoning model), G5 (`/v1/models` + aliases + context-window metadata), G6 (`count_tokens` parity vs `usage.input_tokens` and alias/canonical agreement), G7's gateway-shape cases (including pre-dispatch context-window rejection), and G8 (OpenAI `/v1/chat/completions` with streaming + tools, `finish_reason` mapping, usage fields) pass. The engine-down 529 retry case remains skipped until the harness gains deterministic engine lifecycle control. The gate runs on **llama.cpp**; the phase-8 vLLM adapter is unit-tested but its conformance run is the full-matrix (GPU) tier, not yet wired into CI — see [open-questions.md](../docs/open-questions.md). Note: `tool_choice` forcing is best-effort on the pinned llama.cpp build (same doc).
+As of [m0-build-plan](../docs/m0-build-plan.md) phase 9, CI runs the harness against the **real Atlas gateway**, booting two tiny llama.cpp models **from cold via the starter catalog** (`atlas pull qwen2.5-1.5b-instruct qwen3-0.6b` into the content-addressable store, then `atlas up --model qwen2.5-1.5b-instruct --model qwen3-0.6b` plus tier aliases on a CPU runner), gating on `--require G1,G2,G3,G4,G5,G6,G7,G8` — through the phase-7 exit criterion. Against the real gateway today: G1 (non-streaming `/v1/messages`), G2 (SSE streaming), G3 (tool loop: `tool_use`/`tool_result` round-trip, `input_json_delta` streaming, tool_choice variants, parallel calls, `is_error`), G4 (thinking: `thinking` blocks before text, `thinking_delta` streaming, multi-turn echo, advisory `budget_tokens`, graceful no-op on the non-reasoning model), G5 (`/v1/models` + aliases + context-window metadata), G6 (`count_tokens` parity vs `usage.input_tokens` and alias/canonical agreement), G7's gateway-shape cases (including pre-dispatch context-window rejection), and G8 (OpenAI `/v1/chat/completions` with streaming + tools, `finish_reason` mapping, usage fields) pass. The engine-down 529 retry case remains skipped until the harness gains deterministic engine lifecycle control. The gate runs on **llama.cpp**; the vLLM adapter (phase 8) and the catalog's vLLM tiers (phase 9) are unit-tested but their conformance run is the full-matrix (GPU) tier, not yet wired into CI — see [open-questions.md](../docs/open-questions.md). Note: `tool_choice` forcing is best-effort on the pinned llama.cpp build (same doc).
 
 The **stub gateway** (`stubgw/`) — a deliberately partial `/v1/messages` (non-streaming text, Anthropic-shaped errors) — remains in the tree as the default target when no `--base-url` is given. It exists so the harness mechanics can be exercised without standing up a model (the fast local loop); it is no longer the CI gate.
