@@ -47,7 +47,7 @@ Tooling picked when the scaffold was built (2026-06-12). Not ADR material — sw
 **M0 ships managed runtimes only (option c); containers (option b) arrive at M1** behind the same `RuntimeProvisioner` interface. This was the last open design question; phase 2 implements the llama.cpp half (`internal/runtime`), so it is now settled rather than proposed.
 
 - **llama.cpp:** worker downloads a pinned prebuilt `llama-server` for its platform (CUDA/Metal/CPU) into the state dir, sha256-verified against the pinned release. No host dependencies. _(Done — phase 2; pinned tag in `internal/runtime.LlamaCppTag`.)_
-- **vLLM:** worker bootstraps `uv` and creates a pinned venv in the state dir. Heavier, but no Docker requirement for first touch. _(Phase 8.)_
+- **vLLM:** worker bootstraps a pinned `uv` (downloaded + sha256-verified, like the llama.cpp binary) and creates a pinned venv (`vllm==<ver>`) in the state dir. Heavier, but no Docker requirement for first touch. _(Done — phase 8; pinned versions in `internal/runtime.UvVersion` / `VLLMVersion`, uv digests in `uvAssets`.)_
 
 Rationale: M0's hero path is `atlas up` on a dev box or single GPU machine — requiring Docker + NVIDIA container toolkit there hurts minutes-to-first-token, while M1's cloud fleets (where containers shine) is exactly when the container path lands. One honesty note for [positioning](positioning.md) angle #5: "no Python on the host" must mean _the user never installs or sees Python_ — the worker-managed vLLM venv does put Python in Atlas's state dir. The install-DX claim survives; the literal wording should be tightened when marketing copy is written.
 
@@ -71,6 +71,8 @@ Each phase's exit criterion is conformance groups passing (cumulatively) on the 
 | 11    | Agent SDK end-to-end + Claude Code smoke; full acceptance run on (a) llama.cpp and (b) vLLM                            | G9 — **M0 done**                          |
 
 Phases 2–7 run llama.cpp only (cheapest loop, runs in CPU CI); vLLM lands once the surface is conformant, mostly exercising translation config rather than new logic.
+
+Phase 8 is split for hardware reasons: the **code** (vLLM adapter, uv runtime provisioning, `atlas up --engine`) lands now, sharing the core⇄OpenAI translation with llama.cpp via `internal/engines/openaichat` so both engines produce one set of semantics. Its exit criterion — _all groups green on both engines_ — is the full-matrix tier (see [Testing tiers](#testing-tiers)), which needs a CUDA runner: vLLM does not run on the CPU PR runner. Standing up that nightly/GPU conformance run (and registering the runner) is tracked as a follow-up in [open-questions.md](open-questions.md); the per-PR gate stays llama.cpp `G1–G8`. The vLLM adapter's translation is unit-tested in the shared package; only the engine-specific token-count and context-window endpoints are vLLM-only code.
 
 ## Testing tiers
 

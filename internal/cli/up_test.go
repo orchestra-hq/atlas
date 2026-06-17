@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/orchestra-hq/atlas/internal/worker"
 )
 
 func TestModelArgs(t *testing.T) {
@@ -19,20 +21,23 @@ func TestModelArgs(t *testing.T) {
 	}
 
 	tests := []struct {
-		name  string
-		model string
-		want  []string
+		name   string
+		engine worker.Engine
+		model  string
+		want   []string
 	}{
-		{"local gguf path", localGGUF, []string{"-m", localGGUF}},
-		{"existing file without extension", noExtFile, []string{"-m", noExtFile}},
-		{"gguf suffix not on disk", "/not/here/model.gguf", []string{"-m", "/not/here/model.gguf"}},
-		{"hf spec", "ggml-org/Qwen2.5-0.5B-Instruct-GGUF", []string{"-hf", "ggml-org/Qwen2.5-0.5B-Instruct-GGUF"}},
-		{"hf spec with quant", "unsloth/Qwen3-GGUF:Q4_K_M", []string{"-hf", "unsloth/Qwen3-GGUF:Q4_K_M"}},
+		{"llamacpp local gguf path", worker.EngineLlamaCpp, localGGUF, []string{"-m", localGGUF}},
+		{"llamacpp existing file without extension", worker.EngineLlamaCpp, noExtFile, []string{"-m", noExtFile}},
+		{"llamacpp gguf suffix not on disk", worker.EngineLlamaCpp, "/not/here/model.gguf", []string{"-m", "/not/here/model.gguf"}},
+		{"llamacpp hf spec", worker.EngineLlamaCpp, "ggml-org/Qwen2.5-0.5B-Instruct-GGUF", []string{"-hf", "ggml-org/Qwen2.5-0.5B-Instruct-GGUF"}},
+		{"llamacpp hf spec with quant", worker.EngineLlamaCpp, "unsloth/Qwen3-GGUF:Q4_K_M", []string{"-hf", "unsloth/Qwen3-GGUF:Q4_K_M"}},
+		{"vllm hf repo positional", worker.EngineVLLM, "Qwen/Qwen2.5-1.5B-Instruct", []string{"Qwen/Qwen2.5-1.5B-Instruct"}},
+		{"vllm local path positional", worker.EngineVLLM, localGGUF, []string{localGGUF}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := modelArgs(tc.model); !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("modelArgs(%q) = %v, want %v", tc.model, got, tc.want)
+			if got := modelArgs(tc.engine, tc.model); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("modelArgs(%q, %q) = %v, want %v", tc.engine, tc.model, got, tc.want)
 			}
 		})
 	}
@@ -46,16 +51,31 @@ func TestModelDisplayName(t *testing.T) {
 	}
 
 	tests := []struct {
-		model string
-		want  string
+		engine worker.Engine
+		model  string
+		want   string
 	}{
-		{localGGUF, "Qwen2.5-0.5B"},
-		{"/not/here/foo.gguf", "foo"},
-		{"ggml-org/Qwen2.5-0.5B-Instruct-GGUF", "ggml-org/Qwen2.5-0.5B-Instruct-GGUF"},
+		{worker.EngineLlamaCpp, localGGUF, "Qwen2.5-0.5B"},
+		{worker.EngineLlamaCpp, "/not/here/foo.gguf", "foo"},
+		{worker.EngineLlamaCpp, "ggml-org/Qwen2.5-0.5B-Instruct-GGUF", "ggml-org/Qwen2.5-0.5B-Instruct-GGUF"},
+		// vLLM serves under the ref as-is, so a local path is not stripped.
+		{worker.EngineVLLM, "Qwen/Qwen2.5-1.5B-Instruct", "Qwen/Qwen2.5-1.5B-Instruct"},
+		{worker.EngineVLLM, localGGUF, localGGUF},
 	}
 	for _, tc := range tests {
-		if got := modelDisplayName(tc.model); got != tc.want {
-			t.Errorf("modelDisplayName(%q) = %q, want %q", tc.model, got, tc.want)
+		if got := modelDisplayName(tc.engine, tc.model); got != tc.want {
+			t.Errorf("modelDisplayName(%q, %q) = %q, want %q", tc.engine, tc.model, got, tc.want)
 		}
+	}
+}
+
+func TestParseEngine(t *testing.T) {
+	for _, s := range []string{"llamacpp", "vllm"} {
+		if _, err := parseEngine(s); err != nil {
+			t.Errorf("parseEngine(%q) errored: %v", s, err)
+		}
+	}
+	if _, err := parseEngine("sglang"); err == nil {
+		t.Error("expected error for unknown engine")
 	}
 }
