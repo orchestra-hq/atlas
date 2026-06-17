@@ -1,0 +1,13 @@
+# Keep the build context small: the image build only needs Go sources, the
+# module files, and go:embed'd assets (catalog/). Everything else is noise.
+.git
+.github
+.atlas-state
+models
+bin
+dist
+docs
+scripts
+conformance
+*.log
+.DS_Store
