@@ -18,8 +18,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/orchestra-hq/atlas/catalog"
 	atlasruntime "github.com/orchestra-hq/atlas/internal/runtime"
 	"github.com/orchestra-hq/atlas/internal/server"
+	"github.com/orchestra-hq/atlas/internal/store"
 	"github.com/orchestra-hq/atlas/internal/worker"
 )
 
@@ -76,6 +78,20 @@ func runUp(ctx context.Context, cmd *cobra.Command, opts *upOptions) error {
 		return fmt.Errorf("create state dir: %w", err)
 	}
 
+	cat, err := catalog.Load()
+	if err != nil {
+		return err
+	}
+	st := store.New(filepath.Join(opts.stateDir, "store"))
+
+	// Fail fast on an engine/catalog mismatch before the (possibly slow) runtime
+	// provisioning below: a catalog model dictates its own engine.
+	for _, spec := range opts.models {
+		if entry, ok := cat.Lookup(spec); ok && worker.Engine(entry.Engine) != engine {
+			return fmt.Errorf("model %q is a %s catalog model; rerun with --engine %s", entry.Name, entry.Engine, entry.Engine)
+		}
+	}
+
 	// 1. Provision the pinned runtime for the selected engine on this platform.
 	prov := &atlasruntime.Provisioner{Dir: filepath.Join(opts.stateDir, "runtimes")}
 	binPath, err := provisionEngine(ctx, cmd, prov, engine)
@@ -83,26 +99,31 @@ func runUp(ctx context.Context, cmd *cobra.Command, opts *upOptions) error {
 		return err
 	}
 
-	// 2. Launch an engine per requested model and wait for each to load. Every
-	// model gets its own llama-server (one set of weights apiece); the gateway
-	// routes by model name. Once a model is ready we read its context window
-	// from the engine, so the gateway can assert request fit and report it.
+	// 2. Resolve and launch an engine per requested model and wait for each to
+	// load. Each --model value is a catalog name (pulled from cold into the
+	// store if needed), a local path, or an engine spec. Every model gets its
+	// own engine subprocess; the gateway routes by served name. Once a model is
+	// ready we read its context window from the engine (falling back to the
+	// catalog hint), so the gateway can assert request fit and report it.
 	var models []server.Model
 	seen := map[string]bool{}
 	for _, spec := range opts.models {
-		modelName := modelDisplayName(engine, spec)
-		if seen[modelName] {
-			return fmt.Errorf("duplicate model %q", modelName)
+		rm, err := resolveModel(ctx, cmd, engine, st, cat, spec)
+		if err != nil {
+			return err
 		}
-		seen[modelName] = true
-		cmd.Printf("Loading model %q (this can take a while on first run)…\n", modelName)
+		if seen[rm.served] {
+			return fmt.Errorf("duplicate model %q", rm.served)
+		}
+		seen[rm.served] = true
+		cmd.Printf("Loading model %q (this can take a while on first run)…\n", rm.served)
 		w, err := worker.Start(ctx, worker.Config{
 			Engine:    engine,
 			BinPath:   binPath,
-			ModelArgs: modelArgs(engine, spec),
-			ExtraArgs: opts.engineArgs,
-			Model:     modelName,
-			LogPath:   filepath.Join(opts.stateDir, string(engine)+"-"+modelName+".log"),
+			ModelArgs: rm.modelArgs,
+			ExtraArgs: append(append([]string{}, opts.engineArgs...), rm.engineArgs...),
+			Model:     rm.served,
+			LogPath:   filepath.Join(opts.stateDir, string(engine)+"-"+rm.served+".log"),
 		})
 		if err != nil {
 			return err
@@ -111,9 +132,14 @@ func runUp(ctx context.Context, cmd *cobra.Command, opts *upOptions) error {
 
 		ctxWindow, err := w.ContextWindow(ctx)
 		if err != nil {
-			cmd.Printf("  warning: could not read context window for %q (%v); fit assertion disabled\n", modelName, err)
+			if rm.ctxHint > 0 {
+				ctxWindow = rm.ctxHint
+				cmd.Printf("  note: using catalog context window %d for %q (engine query failed: %v)\n", ctxWindow, rm.served, err)
+			} else {
+				cmd.Printf("  warning: could not read context window for %q (%v); fit assertion disabled\n", rm.served, err)
+			}
 		}
-		models = append(models, server.Model{Name: modelName, Exec: w, ContextWindow: ctxWindow})
+		models = append(models, server.Model{Name: rm.served, Exec: w, ContextWindow: ctxWindow})
 	}
 
 	aliases, err := parseAliases(opts.aliases, seen)
