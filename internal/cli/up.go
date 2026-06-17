@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -147,8 +148,11 @@ func runUp(ctx context.Context, cmd *cobra.Command, opts *upOptions) error {
 		return err
 	}
 
-	// 3. Serve the gateway, routing each served model to its worker.
+	// 3. Serve the gateway, routing each served model to its worker. Request
+	// logs (one structured line per request, with token counts — G10) go to
+	// stderr, alongside the human-readable banner on stdout.
 	gw := server.NewGateway(opts.apiKey, models, aliases)
+	gw.SetLogger(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	srv := &http.Server{
 		Addr:              opts.addr,
 		Handler:           gw.Handler(),

@@ -27,7 +27,11 @@ The starter catalog (`/catalog`) carries two fields the build wires through to *
 1. **Per-model sampling defaults** (`sampling.temperature` / `top_p`) — recorded per entry (wrong defaults visibly degrade tool calling, [model-catalog-m0.md](research/model-catalog-m0.md) finding 3) but not yet applied when a request omits the field. Applying them means threading the catalog entry into `server.Model` and defaulting in the adapter's request build.
 2. **Tier metadata** (`tier: haiku|sonnet|opus`) — recorded but does not auto-generate the `claude-*` aliases; `atlas up --alias` is still explicit.
 
-**Open:** apply both in phase 10 CLI polish (cheap, additive), or leave sampling to the operator via `--engine-arg` and aliases to `--alias`? Neither blocks the cold-boot exit criterion. Also parked here: the larger gguf tiers (the research-doc 9B–35B models) are not in the shipped catalog because their exact quant digests are not yet pinned — add them as each is verified at build time (pinning is required: `internal/catalog` rejects a gguf entry without a 64-hex sha256).
+**Open:** apply both, or leave sampling to the operator via `--engine-arg` and aliases to `--alias`? Neither blocks any M0 exit criterion. Phase 10 (CLI polish) landed without picking these up — it focused on the ops minimum (`/readyz`, request-log token counts) and the `run`/`ps` commands — so both remain deferred (candidates for phase 11 or a later pass). Also parked here: the larger gguf tiers (the research-doc 9B–35B models) are not in the shipped catalog because their exact quant digests are not yet pinned — add them as each is verified at build time (pinning is required: `internal/catalog` rejects a gguf entry without a 64-hex sha256).
+
+## Readiness does not re-probe a live engine (phase 10)
+
+`/readyz` returns 200 once a model is registered, and in single-node mode a model is registered only after its worker's `Start` confirms the engine reported healthy — so at startup "ready" genuinely means "a model can answer". It is **not** a live probe: if an engine subprocess dies _after_ registration, `/readyz` keeps returning 200 (the next request surfaces the failure as a 529). For M0's single-node hero path this is acceptable; a periodic worker health re-probe feeding readiness is an M1 concern, alongside the remote-worker hub. Stated as an assumption rather than silently shipped.
 
 ## Resolved
 

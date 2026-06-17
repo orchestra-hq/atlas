@@ -39,6 +39,18 @@ def model() -> str:
 
 
 @pytest.fixture(scope="session")
+def atlas_log_path() -> str:
+    # Path to the file the target writes its request log to (G10 asserts token
+    # counts appear there). Black-box otherwise, so this is the one place the
+    # suite reads server-side output; CI sets it to atlas.log. Skip when unset
+    # (stub gateway, or an external target whose logs the suite cannot see).
+    value = os.environ.get("ATLAS_LOG_FILE")
+    if not value:
+        pytest.skip("ATLAS_LOG_FILE not set — cannot inspect server logs for token counts")
+    return value
+
+
+@pytest.fixture(scope="session")
 def reasoning_model() -> str:
     # The reasoning-capable model (G4). Optional: when no reasoning model is
     # deployed (e.g. the stub gateway), reasoning cases skip rather than fail.

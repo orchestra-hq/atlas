@@ -36,6 +36,11 @@ def get_models(base_url: str, api_key: str | None) -> httpx.Response:
     return httpx.get(f"{base_url}/v1/models", headers=headers(api_key), timeout=30)
 
 
+def get(base_url: str, path: str) -> httpx.Response:
+    """GET an unauthenticated path (e.g. /healthz, /readyz)."""
+    return httpx.get(f"{base_url}{path}", timeout=30)
+
+
 def get_model(base_url: str, api_key: str | None, model_id: str) -> httpx.Response:
     """GET /v1/models/{id} as raw wire JSON."""
     return httpx.get(f"{base_url}/v1/models/{model_id}", headers=headers(api_key), timeout=30)

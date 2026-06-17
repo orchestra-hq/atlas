@@ -69,6 +69,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	resp, _ = core.ApplyStopSequences(resp, stops)
+	recordUsage(r.Context(), coreReq.Model, resp.Usage.InputTokens, resp.Usage.OutputTokens)
 	openai.WriteJSON(w, http.StatusOK, openai.FromCore(newCompletionID(), time.Now().Unix(), coreReq.Model, resp))
 }
 
@@ -100,6 +101,7 @@ func (g *Gateway) streamChatCompletion(w http.ResponseWriter, r *http.Request, e
 		return
 	}
 
+	recordUsage(r.Context(), req.Model, sink.usage.InputTokens, sink.usage.OutputTokens)
 	_ = sw.Finish(sink.reason, sink.usage, includeUsage)
 }
 

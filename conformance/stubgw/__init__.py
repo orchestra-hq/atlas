@@ -59,6 +59,14 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(status, {"type": "error", "error": {"type": err_type, "message": message}})
 
     def do_GET(self):  # noqa: N802 — http.server API
+        # Ops minimum (G10): liveness always OK; readiness OK because the stub
+        # always has its one model servable.
+        if self.path == "/healthz":
+            self._send_json(200, {"status": "ok"})
+            return
+        if self.path == "/readyz":
+            self._send_json(200, {"status": "ready"})
+            return
         self._send_error(404, "not_found_error", f"stub gateway: no route for GET {self.path}")
 
     def do_POST(self):  # noqa: N802 — http.server API
