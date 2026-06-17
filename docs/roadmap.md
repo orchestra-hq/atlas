@@ -18,6 +18,18 @@ Phased so every milestone ends in something demoable and marketable. Dates inten
 
 Cut from M0: web console, multi-node, API key management, usage metering (log counts only).
 
+## M0.5 — Release & prove: "Installable, and proven on a real GPU"
+
+**Demo:** `brew install atlas` (or `curl get.atlas.dev | sh`, or `docker run … ghcr.io/orchestra-hq/atlas`), then `sky launch atlas.yaml` to bring up Atlas on a cheapest-available cloud GPU and point Claude Code at it; meanwhile a nightly job proves the full suite green on both engines. Closes out M0: a green GPU acceptance run is what flips M0 to _done_. Rationale + survey: [research/distribution-deployment-and-gpu-ci.md](research/distribution-deployment-and-gpu-ci.md); decisions: [ADR-0006](decisions/0006-packaging-and-deployment.md).
+
+- **Docker images** to GHCR (pulled forward from M2): one image, role by subcommand; slim + CUDA "batteries-included" (vLLM) variants
+- **Nightly GPU acceptance** — SkyPilot recipe from a CPU runner spins up a spot GPU, runs `G1–G10` + the real Claude Code smoke (`CONF_CLAUDE_CODE_SMOKE=1`) on **llama.cpp and vLLM**, tears down (machulav/ephemeral-EC2 as fallback). This is the deferred capable/GPU tier from [open-questions.md](open-questions.md)
+- **Deploy recipes:** the SkyPilot one-command cloud-GPU recipe (canonical) + the boring "single GPU box + SSH tunnel/TLS from your laptop" path
+- **Release plumbing:** `get.atlas.dev | sh`, a Homebrew tap, signed GitHub Releases (mostly already via GoReleaser)
+- **Usage-scenarios doc:** persona → path (laptop / single cloud GPU / dial-out fleet)
+
+SkyPilot is fenced to one CI workflow + one optional `examples/` recipe; the Atlas binary never depends on it (ADR-0006).
+
 ## M1 — Fleet: "Join three machines, one endpoint"
 
 **Demo:** `atlas server` on a VPS; `atlas worker --join <token>` on a 4090 box and a Mac; deploy two models; one authenticated endpoint serves both.
@@ -36,7 +48,7 @@ Cut from M0: web console, multi-node, API key management, usage metering (log co
 - Replicas + load balancing across instances; basic queueing/backpressure with sane 429/529 behavior
 - SGLang + MLX adapters; engine version pinning/upgrade flow
 - Catalog expansion + published agent-capability test results per model
-- Packaging: Docker images, compose file, systemd units, (k8s manifests as packaging only)
+- Packaging: compose file, systemd units, (k8s manifests as packaging only) — Docker images themselves land in M0.5
 - Reference IaC under `examples/` — AWS Terraform first (~100-line bar, see [deployment-aws.md](deployment-aws.md)); `s3://` model sources
 - Observability: Prometheus metrics endpoint, structured logs
 
