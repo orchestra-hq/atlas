@@ -24,11 +24,13 @@ import (
 )
 
 type upOptions struct {
-	models   []string
-	aliases  []string
-	addr     string
-	apiKey   string
-	stateDir string
+	models     []string
+	aliases    []string
+	engine     string
+	engineArgs []string
+	addr       string
+	apiKey     string
+	stateDir   string
 }
 
 func newUpCmd() *cobra.Command {
@@ -48,6 +50,10 @@ func newUpCmd() *cobra.Command {
 		"model to serve: a path to a .gguf file or a Hugging Face spec (e.g. ggml-org/Qwen2.5-0.5B-Instruct-GGUF); repeat to serve several (required)")
 	cmd.Flags().StringArrayVar(&opts.aliases, "alias", nil,
 		"model alias as name=target, e.g. claude-sonnet-4-6=qwen2.5-1.5b-instruct-q4_k_m; repeat for several (docs/api-surface.md)")
+	cmd.Flags().StringVar(&opts.engine, "engine", string(worker.EngineLlamaCpp),
+		"inference engine: llamacpp (prebuilt binary) or vllm (uv-managed venv, GPU)")
+	cmd.Flags().StringArrayVar(&opts.engineArgs, "engine-arg", nil,
+		"extra argument passed verbatim to every engine subprocess; repeat for several (e.g. --engine-arg=--reasoning-parser --engine-arg=qwen3)")
 	cmd.Flags().StringVar(&opts.addr, "addr", "127.0.0.1:8080", "address the gateway listens on")
 	cmd.Flags().StringVar(&opts.apiKey, "api-key", "", "API key clients must present; a random key is generated if unset")
 	cmd.Flags().StringVar(&opts.stateDir, "state-dir", defaultStateDir(), "directory for runtimes, weights, and logs")
@@ -62,14 +68,17 @@ func runUp(ctx context.Context, cmd *cobra.Command, opts *upOptions) error {
 	if opts.apiKey == "" {
 		opts.apiKey = generateAPIKey()
 	}
+	engine, err := parseEngine(opts.engine)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(opts.stateDir, 0o755); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
 	}
 
-	// 1. Provision the pinned llama.cpp runtime for this platform.
-	cmd.Printf("Provisioning llama.cpp runtime (%s) for %s/%s…\n", atlasruntime.LlamaCppTag, runtime.GOOS, runtime.GOARCH)
+	// 1. Provision the pinned runtime for the selected engine on this platform.
 	prov := &atlasruntime.Provisioner{Dir: filepath.Join(opts.stateDir, "runtimes")}
-	binPath, err := prov.EnsureLlamaServer(ctx, runtime.GOOS, runtime.GOARCH)
+	binPath, err := provisionEngine(ctx, cmd, prov, engine)
 	if err != nil {
 		return err
 	}
@@ -81,17 +90,19 @@ func runUp(ctx context.Context, cmd *cobra.Command, opts *upOptions) error {
 	var models []server.Model
 	seen := map[string]bool{}
 	for _, spec := range opts.models {
-		modelName := modelDisplayName(spec)
+		modelName := modelDisplayName(engine, spec)
 		if seen[modelName] {
 			return fmt.Errorf("duplicate model %q", modelName)
 		}
 		seen[modelName] = true
 		cmd.Printf("Loading model %q (this can take a while on first run)…\n", modelName)
 		w, err := worker.Start(ctx, worker.Config{
+			Engine:    engine,
 			BinPath:   binPath,
-			ModelArgs: modelArgs(spec),
+			ModelArgs: modelArgs(engine, spec),
+			ExtraArgs: opts.engineArgs,
 			Model:     modelName,
-			LogPath:   filepath.Join(opts.stateDir, "llama-server-"+modelName+".log"),
+			LogPath:   filepath.Join(opts.stateDir, string(engine)+"-"+modelName+".log"),
 		})
 		if err != nil {
 			return err
@@ -148,20 +159,56 @@ func runUp(ctx context.Context, cmd *cobra.Command, opts *upOptions) error {
 	}
 }
 
-// modelArgs turns the --model value into llama-server arguments. A path to an
+// parseEngine validates the --engine value.
+func parseEngine(s string) (worker.Engine, error) {
+	switch worker.Engine(s) {
+	case worker.EngineLlamaCpp:
+		return worker.EngineLlamaCpp, nil
+	case worker.EngineVLLM:
+		return worker.EngineVLLM, nil
+	default:
+		return "", fmt.Errorf("invalid --engine %q: want llamacpp or vllm", s)
+	}
+}
+
+// provisionEngine provisions the selected engine's runtime for this platform
+// and returns the engine binary's path: the pinned llama-server, or the
+// uv-managed venv's vllm entrypoint.
+func provisionEngine(ctx context.Context, cmd *cobra.Command, prov *atlasruntime.Provisioner, engine worker.Engine) (string, error) {
+	switch engine {
+	case worker.EngineVLLM:
+		cmd.Printf("Provisioning vLLM runtime (uv %s, vllm %s) for %s/%s — this can take a while on first run…\n",
+			atlasruntime.UvVersion, atlasruntime.VLLMVersion, runtime.GOOS, runtime.GOARCH)
+		return prov.EnsureVLLM(ctx, runtime.GOOS, runtime.GOARCH)
+	default:
+		cmd.Printf("Provisioning llama.cpp runtime (%s) for %s/%s…\n", atlasruntime.LlamaCppTag, runtime.GOOS, runtime.GOARCH)
+		return prov.EnsureLlamaServer(ctx, runtime.GOOS, runtime.GOARCH)
+	}
+}
+
+// modelArgs turns the --model value into the engine's model-selection
+// arguments. For vLLM the value is the model ref passed positionally to
+// `vllm serve` (an HF repo id or a local path). For llama.cpp, a path to an
 // existing file (or anything ending in .gguf) is loaded with -m; otherwise the
-// value is treated as a Hugging Face spec and passed to -hf, which downloads
-// and caches the weights.
-func modelArgs(model string) []string {
+// value is a Hugging Face spec passed to -hf, which downloads and caches it.
+func modelArgs(engine worker.Engine, model string) []string {
+	if engine == worker.EngineVLLM {
+		return []string{model}
+	}
 	if strings.HasSuffix(model, ".gguf") || fileExists(model) {
 		return []string{"-m", model}
 	}
 	return []string{"-hf", model}
 }
 
-// modelDisplayName is the logical name clients address. For a local file it is
-// the base filename without extension; for an HF spec it is the spec itself.
-func modelDisplayName(model string) string {
+// modelDisplayName is the logical name clients address. For vLLM it is the
+// model ref as-is (vLLM serves the model under that id, and the adapter echoes
+// it back in requests). For llama.cpp a local file uses its base filename
+// without extension; an HF spec is the spec itself.
+func modelDisplayName(engine worker.Engine, model string) string {
+	if engine == worker.EngineVLLM {
+		return model
+	}
 	if strings.HasSuffix(model, ".gguf") || fileExists(model) {
 		base := filepath.Base(model)
 		return strings.TrimSuffix(base, filepath.Ext(base))

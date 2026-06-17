@@ -14,14 +14,39 @@ import (
 
 	"github.com/orchestra-hq/atlas/internal/core"
 	"github.com/orchestra-hq/atlas/internal/engines/llamacpp"
+	"github.com/orchestra-hq/atlas/internal/engines/vllm"
 )
 
-// Config configures a single-engine worker supervising one llama-server.
+// Engine selects which inference engine a worker supervises. Both speak an
+// OpenAI-compatible endpoint (build-time decision 1); they differ in how the
+// subprocess is launched and which adapter drives token counting and the
+// context-window query.
+type Engine string
+
+// The engines Atlas supervises in M0.
+const (
+	EngineLlamaCpp Engine = "llamacpp"
+	EngineVLLM     Engine = "vllm"
+)
+
+// engineAdapter is the gateway-facing capability set both adapters provide.
+type engineAdapter interface {
+	Execute(ctx context.Context, req core.Request) (core.Response, error)
+	ExecuteStream(ctx context.Context, req core.Request, sink core.StreamSink) error
+	CountTokens(ctx context.Context, req core.Request) (int, error)
+	ContextWindow(ctx context.Context) (int, error)
+}
+
+// Config configures a single-engine worker supervising one engine subprocess.
 type Config struct {
-	// BinPath is the llama-server binary (from the runtime provisioner).
+	// Engine selects the inference engine; empty defaults to llama.cpp.
+	Engine Engine
+	// BinPath is the engine binary (from the runtime provisioner): llama-server
+	// for llama.cpp, or the venv's vllm entrypoint for vLLM.
 	BinPath string
-	// ModelArgs select the weights, e.g. {"-hf", "repo:quant"} or
-	// {"-m", "/path/model.gguf"}.
+	// ModelArgs select the weights: for llama.cpp {"-hf", "repo:quant"} or
+	// {"-m", "/path/model.gguf"}; for vLLM the model ref as a positional
+	// argument to `vllm serve`, e.g. {"Qwen/Qwen2.5-1.5B-Instruct"}.
 	ModelArgs []string
 	// Model is the logical name clients address; echoed to the engine.
 	Model string
@@ -46,7 +71,7 @@ type Worker struct {
 	cfg     Config
 	cmd     *exec.Cmd
 	logFile *os.File
-	adapter *llamacpp.Adapter
+	adapter engineAdapter
 
 	// done is closed once the subprocess exits; waitErr holds the result and
 	// is only read after done is closed.
@@ -71,14 +96,14 @@ func Start(ctx context.Context, cfg Config) (*Worker, error) {
 		}
 		cfg.Port = port
 	}
-
-	args := []string{
-		"--host", cfg.Host,
-		"--port", fmt.Sprint(cfg.Port),
-		"--jinja", // native chat template, tool + thinking parsing (catalog research)
+	if cfg.Engine == "" {
+		cfg.Engine = EngineLlamaCpp
 	}
-	args = append(args, cfg.ModelArgs...)
-	args = append(args, cfg.ExtraArgs...)
+
+	args, adapter, err := engineSetup(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	cmd := exec.Command(cfg.BinPath, args...)
 	var logFile *os.File
@@ -103,7 +128,7 @@ func Start(ctx context.Context, cfg Config) (*Worker, error) {
 		cfg:     cfg,
 		cmd:     cmd,
 		logFile: logFile,
-		adapter: llamacpp.New(fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port), cfg.Model, &http.Client{}),
+		adapter: adapter,
 		done:    make(chan struct{}),
 	}
 	// Single reaper: cmd.Wait runs exactly once here.
@@ -117,6 +142,36 @@ func Start(ctx context.Context, cfg Config) (*Worker, error) {
 		return nil, err
 	}
 	return w, nil
+}
+
+// engineSetup builds the engine's command-line arguments and the adapter that
+// drives it, per cfg.Engine. Both engines expose an OpenAI-compatible endpoint
+// on cfg.Host:cfg.Port; they differ in how the subprocess takes its host/port
+// and model arguments.
+func engineSetup(cfg Config) (args []string, adapter engineAdapter, err error) {
+	baseURL := fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
+	port := fmt.Sprint(cfg.Port)
+	switch cfg.Engine {
+	case EngineLlamaCpp:
+		args = []string{
+			"--host", cfg.Host,
+			"--port", port,
+			"--jinja", // native chat template, tool + thinking parsing (catalog research)
+		}
+		args = append(args, cfg.ModelArgs...)
+		args = append(args, cfg.ExtraArgs...)
+		return args, llamacpp.New(baseURL, cfg.Model, &http.Client{}), nil
+	case EngineVLLM:
+		// `vllm serve <model> --host H --port P [extra]`: the model is positional
+		// (ModelArgs), tool/reasoning parser flags come from ExtraArgs.
+		args = []string{"serve"}
+		args = append(args, cfg.ModelArgs...)
+		args = append(args, "--host", cfg.Host, "--port", port)
+		args = append(args, cfg.ExtraArgs...)
+		return args, vllm.New(baseURL, cfg.Model, &http.Client{}), nil
+	default:
+		return nil, nil, fmt.Errorf("worker: unknown engine %q", cfg.Engine)
+	}
 }
 
 // Endpoint returns the loopback URL the engine is listening on.

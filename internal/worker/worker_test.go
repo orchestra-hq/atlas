@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -84,6 +85,77 @@ func fakeConfig(t *testing.T, behavior string) Config {
 		Model:        "fake-model",
 		LogPath:      filepath.Join(t.TempDir(), "engine.log"),
 		ReadyTimeout: 5 * time.Second,
+	}
+}
+
+func TestEngineSetupArgs(t *testing.T) {
+	base := Config{Host: "127.0.0.1", Port: 8000, Model: "m", ExtraArgs: []string{"--flag"}}
+
+	t.Run("llamacpp", func(t *testing.T) {
+		cfg := base
+		cfg.Engine = EngineLlamaCpp
+		cfg.ModelArgs = []string{"-hf", "repo:Q4"}
+		args, adapter, err := engineSetup(cfg)
+		if err != nil {
+			t.Fatalf("engineSetup: %v", err)
+		}
+		if adapter == nil {
+			t.Fatal("nil adapter")
+		}
+		// --host/--port precede the model args; --jinja present; extra appended.
+		want := []string{"--host", "127.0.0.1", "--port", "8000", "--jinja", "-hf", "repo:Q4", "--flag"}
+		if !reflect.DeepEqual(args, want) {
+			t.Errorf("args = %v, want %v", args, want)
+		}
+	})
+
+	t.Run("vllm", func(t *testing.T) {
+		cfg := base
+		cfg.Engine = EngineVLLM
+		cfg.ModelArgs = []string{"Qwen/Qwen2.5-1.5B-Instruct"}
+		args, adapter, err := engineSetup(cfg)
+		if err != nil {
+			t.Fatalf("engineSetup: %v", err)
+		}
+		if adapter == nil {
+			t.Fatal("nil adapter")
+		}
+		// `serve <model> --host H --port P [extra]`: model is positional.
+		want := []string{"serve", "Qwen/Qwen2.5-1.5B-Instruct", "--host", "127.0.0.1", "--port", "8000", "--flag"}
+		if !reflect.DeepEqual(args, want) {
+			t.Errorf("args = %v, want %v", args, want)
+		}
+	})
+
+	t.Run("unknown", func(t *testing.T) {
+		cfg := base
+		cfg.Engine = Engine("sglang")
+		if _, _, err := engineSetup(cfg); err == nil {
+			t.Fatal("expected error for unknown engine")
+		}
+	})
+}
+
+func TestStartVLLMEngineExecutes(t *testing.T) {
+	cfg := fakeConfig(t, "ready")
+	cfg.Engine = EngineVLLM
+	cfg.ModelArgs = []string{"fake-model"} // positional model ref for `vllm serve`
+	w, err := Start(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Stop() })
+
+	resp, err := w.Execute(context.Background(), core.Request{
+		Model:     "fake-model",
+		MaxTokens: 16,
+		Messages:  []core.Message{{Role: core.RoleUser, Blocks: []core.ContentBlock{core.TextBlock("ping")}}},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if resp.Text() != "pong" || resp.StopReason != core.StopEndTurn {
+		t.Errorf("resp = %q / %q", resp.Text(), resp.StopReason)
 	}
 }
 
