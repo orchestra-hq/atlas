@@ -17,8 +17,8 @@ runner ──> atlas up (single-node, fixture config: tier aliases → catalog m
    │
    ├─ pytest        : Anthropic Python SDK + OpenAI SDK + wire-level SSE capture
    ├─ vitest        : Anthropic TS SDK (streaming + tool loop subset)
-   ├─ agent-sdk run : scripted Claude Agent SDK task (≥3 tool calls)
-   └─ claude-code   : scripted smoke task via ANTHROPIC_BASE_URL
+   ├─ agent-sdk     : streamed agent loop, ≥3 client-side tool calls (G9)
+   └─ claude-code   : real `claude` binary smoke via ANTHROPIC_BASE_URL (G9, capable tier)
    │
    └──> JUnit + matrix.json ──> published compat matrix (CI artifact)
 ```
@@ -73,7 +73,10 @@ OpenAI SDK completes the G3 task against `/v1/chat/completions` with streaming +
 
 ### G9 — Agent harness end-to-end (criterion 1)
 
-Scripted Claude Agent SDK task completes with ≥3 client-side tool calls, streamed. Claude Code smoke test: `ANTHROPIC_BASE_URL` pointed at Atlas, scripted non-interactive task (edit + verify a file in a sandbox repo) exits successfully.
+Two real-client cells exercise the agent loop through Atlas:
+
+- **agent-sdk** (per-PR, CPU tier): a streamed agent loop completes ≥3 client-side tool calls — request → `tool_use` → client executes → `tool_result` → repeat — driven on the small catalog model. The tool is forced each turn (`tool_choice`), so the loop is deterministic: what is under test is Atlas's streamed multi-turn tool wire path, not the model's planning.
+- **claude-code** (capable tier, opt-in via `CONF_CLAUDE_CODE_SMOKE`): the real `claude` binary, `ANTHROPIC_BASE_URL` pointed at Atlas, runs a non-interactive edit-and-verify task in a sandbox and exits successfully. This is the literal drop-in promise. It is off by default because the small CPU-tier model drives Claude Code only intermittently; reliable Claude Code drop-in — and the dedicated **Claude Agent SDK** package's model-initiated custom-tool loop — need a capable model and run in the full-matrix/GPU acceptance tier (see [open-questions.md](open-questions.md)). The smoke earns its keep: it caught Atlas rejecting Claude Code's default `thinking.type: "adaptive"` (now fixed).
 
 ### G10 — Ops minimum (criterion 8)
 

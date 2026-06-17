@@ -240,6 +240,24 @@ func TestToCoreThinkingErrors(t *testing.T) {
 	}
 }
 
+// Claude Code (the M0 demo harness) sends thinking.type "adaptive" by default;
+// Atlas must accept it as thinking-allowed, not 400 (ADR-0005 — "never an
+// error"). Found via the G9 Claude Code smoke test.
+func TestToCoreThinkingAdaptive(t *testing.T) {
+	body := `{"model":"m","max_tokens":1,"messages":[{"role":"user","content":"x"}],"thinking":{"type":"adaptive"}}`
+	var req MessagesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got, err := req.ToCore()
+	if err != nil {
+		t.Fatalf("ToCore: %v", err)
+	}
+	if got.Thinking == nil || !got.Thinking.Enabled {
+		t.Errorf("adaptive thinking should be enabled, got %+v", got.Thinking)
+	}
+}
+
 func TestFromCoreThinking(t *testing.T) {
 	resp := core.Response{
 		Blocks: []core.ContentBlock{
