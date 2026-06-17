@@ -1,0 +1,61 @@
+# SkyPilot recipe for the Atlas GPU acceptance run (M0.5, ADR-0006).
+#
+# This is the OUTER stage: it asks SkyPilot to bring up the cheapest available
+# GPU on whatever cloud you have enabled, sync the repo, install prerequisites,
+# and run the provider-agnostic scripts/acceptance.sh on it. Tearing the host
+# down afterward is the caller's job (`sky down`, or `sky launch --down`).
+#
+# SkyPilot is a convenience at the edge here, not an Atlas dependency: the work
+# that proves conformance is scripts/acceptance.sh, which runs identically on a
+# box you launched by hand or via machulav/ec2-github-runner. Swap this file out
+# and nothing about how Atlas builds, ships, or runs changes.
+#
+# Run it yourself (needs a cloud account with a GPU quota + `pip install
+# 'skypilot[aws]'` and `sky check`):
+#
+#   sky launch -c atlas-acceptance examples/acceptance/atlas-acceptance.sky.yaml --down -y
+#
+# The nightly workflow (.github/workflows/nightly-gpu.yml) drives exactly this.
+
+name: atlas-acceptance
+
+resources:
+  # ~24GB single GPU is enough for a capable ~8B model; let SkyPilot pick the
+  # cheapest of these across enabled clouds/regions.
+  accelerators: { L4: 1, A10G: 1, A10: 1 }
+  use_spot: true
+  disk_size: 128 # vLLM + CUDA wheels + an 8B model need room
+
+# Synced to the remote host. Run `sky launch` from the repo root so "." is the
+# Atlas checkout.
+workdir: .
+
+envs:
+  # A green run on BOTH engines flips M0 to "done". Override engines/models here
+  # or via `sky launch --env KEY=VALUE` to tune (see scripts/acceptance.sh).
+  ACCEPTANCE_ENGINES: vllm llamacpp
+  CONF_CLAUDE_CODE_SMOKE: "1"
+  GO_VERSION: 1.26.4
+
+setup: |
+  set -euo pipefail
+  # Go (pure-Go build needs only the compiler; matches go.mod toolchain).
+  if ! /usr/local/go/bin/go version 2>/dev/null | grep -q "go${GO_VERSION}"; then
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tgz
+    sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf /tmp/go.tgz
+  fi
+  # uv (installs to ~/.local/bin).
+  command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
+  # Node 22 (for the vitest half of the harness).
+  if ! command -v node >/dev/null; then
+    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+    sudo apt-get install -y nodejs
+  fi
+  # Claude Code CLI (for the real drop-in smoke; CONF_CLAUDE_CODE_SMOKE=1).
+  command -v claude >/dev/null || sudo npm i -g @anthropic-ai/claude-code
+
+run: |
+  set -euo pipefail
+  export PATH="/usr/local/go/bin:$HOME/.local/bin:$PATH"
+  nvidia-smi || { echo "no GPU visible on the host" >&2; exit 1; }
+  bash scripts/acceptance.sh
