@@ -1,0 +1,59 @@
+name: Nightly GPU acceptance
+
+# The capable/GPU acceptance run that flips M0 to "done" (M0.5, ADR-0006):
+# from a CPU runner, use SkyPilot to bring up a spot GPU, run the full
+# conformance gate (G1–G10) + the real Claude Code smoke on both engines via
+# scripts/acceptance.sh, then tear the GPU down. SkyPilot is fenced to this one
+# workflow + the one examples/ recipe — never an Atlas dependency (ADR-0006).
+#
+# Dormant until enabled: the job is gated on the repo variable
+# GPU_ACCEPTANCE_ENABLED=true, so this lands without firing (and failing)
+# nightly before the AWS side is wired up. See examples/acceptance/README.md
+# for the one-time AWS/OIDC setup the repo owner does, then flip the variable.
+
+on:
+  schedule:
+    - cron: "0 7 * * *" # 07:00 UTC nightly
+  workflow_dispatch:
+    inputs:
+      engines:
+        description: Engines to run (space-separated)
+        default: vllm llamacpp
+
+permissions:
+  id-token: write # mint the OIDC token AWS exchanges for short-lived creds
+  contents: read
+
+jobs:
+  acceptance:
+    name: GPU acceptance (SkyPilot)
+    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      # Exchange the workflow's OIDC token for short-lived AWS creds — no static
+      # access keys stored in the repo. AWS_ROLE_ARN is a repo secret; the role
+      # trusts this repo's OIDC subject (see examples/acceptance/README.md).
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install SkyPilot
+        # Pinned; bump after validating on the first manual dispatch.
+        run: pip install "skypilot[aws]==0.8.0"
+      - name: Verify cloud access
+        run: sky check aws
+      # `sky launch --down` auto-tears-down after the run; --retry-until-up rides
+      # out spot capacity gaps. The explicit `sky down` below is the safety net.
+      - name: Launch acceptance on a spot GPU
+        run: |
+          sky launch -c atlas-nightly examples/acceptance/atlas-acceptance.sky.yaml \
+            --env ACCEPTANCE_ENGINES="${{ github.event.inputs.engines || 'vllm llamacpp' }}" \
+            --yes --down --retry-until-up
+      - name: Tear down
+        if: always()
+        run: sky down atlas-nightly --yes || true
