@@ -13,7 +13,9 @@ import (
 	"github.com/orchestra-hq/atlas/internal/wire"
 )
 
-const (
+// Reconnect/heartbeat timings. Package-level vars (not consts) so tests can
+// shrink them; production code never reassigns them.
+var (
 	heartbeatInterval = 10 * time.Second
 	reconnectInitial  = 1 * time.Second
 	reconnectMax      = 60 * time.Second
@@ -48,9 +50,16 @@ func Dial(ctx context.Context, cfg DialConfig) error {
 			return ctx.Err()
 		}
 
-		err := dialOnce(ctx, cfg, hw, log)
+		joined, err := dialOnce(ctx, cfg, hw, log)
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		// A connection that successfully joined and then dropped is not a
+		// failure to reach the server — reset the backoff so a healthy worker
+		// that blips offline reconnects promptly rather than inheriting a long
+		// delay accumulated over its uptime.
+		if joined {
+			backoff = reconnectInitial
 		}
 		if err != nil {
 			log.Info("worker disconnected, reconnecting", "delay", backoff, "error", err)
@@ -69,10 +78,14 @@ func Dial(ctx context.Context, cfg DialConfig) error {
 	}
 }
 
-func dialOnce(ctx context.Context, cfg DialConfig, hw wire.Hardware, log *slog.Logger) error {
+// dialOnce makes one connection attempt and runs it until it drops or ctx is
+// cancelled. The returned joined reports whether the join handshake completed
+// (so the caller can reset reconnect backoff for a connection that was healthy
+// before dropping, vs. one that never reached the server).
+func dialOnce(ctx context.Context, cfg DialConfig, hw wire.Hardware, log *slog.Logger) (joined bool, err error) {
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, cfg.ServerURL, nil)
 	if err != nil {
-		return fmt.Errorf("dial %s: %w", cfg.ServerURL, err)
+		return false, fmt.Errorf("dial %s: %w", cfg.ServerURL, err)
 	}
 	defer func() { _ = conn.Close() }()
 
@@ -83,26 +96,26 @@ func dialOnce(ctx context.Context, cfg DialConfig, hw wire.Hardware, log *slog.L
 		Name:     cfg.Name,
 	})
 	if err != nil {
-		return fmt.Errorf("encode join: %w", err)
+		return false, fmt.Errorf("encode join: %w", err)
 	}
 	if err := writeMsg(conn, joinMsg); err != nil {
-		return fmt.Errorf("send join: %w", err)
+		return false, fmt.Errorf("send join: %w", err)
 	}
 
 	_, ackData, err := conn.ReadMessage()
 	if err != nil {
-		return fmt.Errorf("read join_ack: %w", err)
+		return false, fmt.Errorf("read join_ack: %w", err)
 	}
 	var ackEnv wire.Message
 	if err := json.Unmarshal(ackData, &ackEnv); err != nil || ackEnv.Type != wire.MsgJoinAck {
-		return fmt.Errorf("expected join_ack, got %q", ackEnv.Type)
+		return false, fmt.Errorf("expected join_ack, got %q", ackEnv.Type)
 	}
 	var ack wire.JoinAckPayload
 	if err := json.Unmarshal(ackEnv.Payload, &ack); err != nil {
-		return fmt.Errorf("parse join_ack: %w", err)
+		return false, fmt.Errorf("parse join_ack: %w", err)
 	}
 	if !ack.Accepted {
-		return fmt.Errorf("join rejected by server: %s", ack.Reason)
+		return false, fmt.Errorf("join rejected by server: %s", ack.Reason)
 	}
 
 	log.Info("joined server", "worker_id", ack.WorkerID, "server", cfg.ServerURL)
@@ -128,16 +141,16 @@ func dialOnce(ctx context.Context, cfg DialConfig, hw wire.Hardware, log *slog.L
 		case <-ctx.Done():
 			_ = conn.WriteMessage(websocket.CloseMessage,
 				websocket.FormatCloseMessage(websocket.CloseNormalClosure, "shutting down"))
-			return nil
+			return true, nil
 		case err := <-readErr:
-			return err
+			return true, err
 		case <-heartbeat.C:
 			hbMsg, err := wire.Encode(wire.MsgHeartbeat, "", wire.HeartbeatPayload{WorkerID: ack.WorkerID})
 			if err != nil {
-				return err
+				return true, err
 			}
 			if err := writeMsg(conn, hbMsg); err != nil {
-				return fmt.Errorf("send heartbeat: %w", err)
+				return true, fmt.Errorf("send heartbeat: %w", err)
 			}
 		}
 	}
