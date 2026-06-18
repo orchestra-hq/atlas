@@ -25,6 +25,9 @@ func newRootCmd() *cobra.Command {
 	}
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newUpCmd())
+	root.AddCommand(newServerCmd())
+	root.AddCommand(newWorkerCmd())
+	root.AddCommand(newWorkersCmd())
 	root.AddCommand(newPullCmd())
 	root.AddCommand(newRunCmd())
 	root.AddCommand(newPsCmd())
