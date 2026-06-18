@@ -23,7 +23,9 @@ Teams building on LLMs increasingly want control over where the model runs and w
 | [docs/research/distribution-deployment-and-gpu-ci.md](docs/research/distribution-deployment-and-gpu-ci.md) | How Atlas is packaged, deployed, and proven on GPUs (M0.5)       |
 | [docs/architecture.md](docs/architecture.md)                                                               | How Atlas runs: control plane, workers, request flow, scheduling |
 | [docs/api-surface.md](docs/api-surface.md)                                                                 | The APIs Atlas exposes (Anthropic-compat, OpenAI-compat, admin)  |
+| [docs/usage-scenarios.md](docs/usage-scenarios.md)                                                         | Which path fits you: laptop / single cloud GPU / fleet           |
 | [docs/docker.md](docs/docker.md)                                                                           | Running Atlas from the published container images (slim + CUDA)  |
+| [examples/serve/](examples/serve/README.md)                                                                | Serve on a cloud GPU: SkyPilot one-command + single-box+tunnel   |
 | [docs/deployment-aws.md](docs/deployment-aws.md)                                                           | Reference topology for deploying in your own AWS account         |
 | [docs/roadmap.md](docs/roadmap.md)                                                                         | Phased milestones from single-node MVP to fleet                  |
 | [docs/m0-acceptance.md](docs/m0-acceptance.md)                                                             | Definition of done for M0's API surface                          |

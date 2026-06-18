@@ -10,7 +10,7 @@ Existing decisions this builds on: single binary with `server`/`worker`/`up` rol
 
 ## Decision
 
-1. **Primary artifact stays the single static Go binary** — `get.atlas.dev | sh`, GitHub Releases, a Homebrew tap. Unchanged.
+1. **Primary artifact stays the single static Go binary.** Unchanged. It installs from GitHub Releases (signed, via GoReleaser) and, from M0.5, the container images; the polished owned-channel installers — `get.atlas.dev | sh` and a Homebrew tap — are deferred to roadmap **M4 "Deliverability"**, since they need an owned domain and a separate tap repo and are worth standing up only when the project is ready for frictionless public install. The decision (binary-first, those channels) is unchanged; only the timing moved.
 2. **Publish Docker images to GHCR (pulled forward from M2).** One image; role chosen by subcommand (`atlas up` / `server` / `worker`). Two variants: a **slim** image that downloads its engine runtime like the binary, and a **CUDA "batteries-included"** image for the vLLM worker (fast cold-start, air-gapped-friendly). The vLLM Python venv lives _inside_ the container, keeping the host clean.
 3. **No first-party cluster orchestrator.** Atlas ships no Kubernetes operator/CRDs and no EKS/CloudFormation product surface. The fleet story is dial-out workers (ADR-0003) plus **reference IaC under `examples/`** (Terraform, ~100-line bar). A cluster control plane is the KubeAI/NIM lane and is explicitly out of scope for M0/M1.
 4. **The canonical cloud-GPU deploy recipe is a SkyPilot YAML**, alongside a boring "single GPU box + SSH tunnel/TLS" recipe that needs no extra tooling. Deploy docs lead with the universal (Docker / single-box) path; SkyPilot is the labelled "easy button."

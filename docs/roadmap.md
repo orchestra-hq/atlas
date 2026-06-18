@@ -20,13 +20,14 @@ Cut from M0: web console, multi-node, API key management, usage metering (log co
 
 ## M0.5 — Release & prove: "Installable, and proven on a real GPU"
 
-**Demo:** `brew install atlas` (or `curl get.atlas.dev | sh`, or `docker run … ghcr.io/orchestra-hq/atlas`), then `sky launch atlas.yaml` to bring up Atlas on a cheapest-available cloud GPU and point Claude Code at it; meanwhile a nightly job proves the full suite green on both engines. Closes out M0: a green GPU acceptance run is what flips M0 to _done_. Rationale + survey: [research/distribution-deployment-and-gpu-ci.md](research/distribution-deployment-and-gpu-ci.md); decisions: [ADR-0006](decisions/0006-packaging-and-deployment.md).
+**Demo:** `docker run … ghcr.io/orchestra-hq/atlas` on a laptop, or `sky launch atlas-serve.yaml` to bring up Atlas on a cheapest-available cloud GPU, then point Claude Code at it; meanwhile a nightly job proves the full suite green on both engines. Closes out M0: a green GPU acceptance run is what flips M0 to _done_. Rationale + survey: [research/distribution-deployment-and-gpu-ci.md](research/distribution-deployment-and-gpu-ci.md); decisions: [ADR-0006](decisions/0006-packaging-and-deployment.md). The polished public-install channels (one-line installer, Homebrew) are deliberately deferred to [M4](#m4--deliverability-the-frictionless-install).
 
 - **Docker images** to GHCR (pulled forward from M2): one image, role by subcommand; slim + CUDA "batteries-included" (vLLM) variants
 - **Nightly GPU acceptance** — SkyPilot recipe from a CPU runner spins up a spot GPU, runs `G1–G10` + the real Claude Code smoke (`CONF_CLAUDE_CODE_SMOKE=1`) on **llama.cpp and vLLM**, tears down (machulav/ephemeral-EC2 as fallback). This is the deferred capable/GPU tier from [open-questions.md](open-questions.md)
-- **Deploy recipes:** the SkyPilot one-command cloud-GPU recipe (canonical) + the boring "single GPU box + SSH tunnel/TLS from your laptop" path
-- **Release plumbing:** `get.atlas.dev | sh`, a Homebrew tap, signed GitHub Releases (mostly already via GoReleaser)
+- **Deploy recipes:** the SkyPilot one-command cloud-GPU serve recipe (canonical) + the boring "single GPU box + SSH tunnel from your laptop" path
 - **Usage-scenarios doc:** persona → path (laptop / single cloud GPU / dial-out fleet)
+
+Signed GitHub Releases already come from GoReleaser; the frictionless public-install layer (one-line installer + Homebrew tap) is split out to [M4](#m4--deliverability-the-frictionless-install) so M0.5 stays "installable enough to prove it on a GPU" without taking on owned-domain/tap-repo setup.
 
 SkyPilot is fenced to one CI workflow + one optional `examples/` recipe; the Atlas binary never depends on it (ADR-0006).
 
@@ -59,6 +60,15 @@ SkyPilot is fenced to one CI workflow + one optional `examples/` recipe; the Atl
 - Cloud-fallback passthrough (route overflow to a real provider key, clearly labeled)
 - HA control plane; audit log; SSO for console
 - Hosted control plane offering (the open-core conversation — separate decision)
+
+## M4 — Deliverability: "the frictionless install"
+
+**Demo:** a newcomer runs `brew install atlas` (or `curl get.atlas.dev | sh`) and is serving a model in one command. The deliberate last step: the polished, owned-channel public install — held until the project is worth installing that frictionlessly, and until the owner is ready to take on the domain + tap-repo upkeep these imply. Until then the binary is installed from GitHub Releases / the container image (M0.5, [ADR-0006](decisions/0006-packaging-and-deployment.md)).
+
+- **One-line installer** at an owned domain (`get.atlas.dev | sh`): detects OS/arch, fetches the pinned signed release, verifies checksums, drops `atlas` on `PATH`. (Needs a domain the owner controls.)
+- **Homebrew tap** (`orchestra-hq/homebrew-tap`, GoReleaser-published formula). (Needs a separate tap repo.)
+- Install/upgrade UX polish: `atlas --version` self-update hint, scriptable non-interactive install, checksum/signature verification documented.
+- Optional Linux packaging (`.deb`/`.rpm`, GoReleaser nfpm) if there's demand.
 
 ## Standing tracks (every milestone)
 

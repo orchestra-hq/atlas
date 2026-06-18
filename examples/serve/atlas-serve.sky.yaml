@@ -1,0 +1,61 @@
+# SkyPilot recipe to SERVE Atlas on a cloud GPU (M0.5, ADR-0006).
+#
+# The "easy button": one command brings up the cheapest available GPU on
+# whatever cloud you have enabled, runs `atlas up` serving a capable model, and
+# exposes the Anthropic-/OpenAI-compatible endpoint so you can point Claude Code
+# (or any SDK) at your own hardware.
+#
+# This is a convenience at the edge, not a dependency: Atlas itself is just the
+# `atlas up` line in `run:` — the single-box + SSH-tunnel recipe in this
+# directory's README does the same thing with no SkyPilot at all.
+#
+#   pip install 'skypilot[aws]'   # or [gcp], [azure], [kubernetes], …
+#   sky check
+#   sky launch -c atlas examples/serve/atlas-serve.sky.yaml \
+#       --env ATLAS_API_KEY="$(openssl rand -hex 16)" --down -y
+#   sky status --endpoint 8080 atlas   # -> http://<ip>:8080  (your endpoint)
+#
+# Then, from your laptop:
+#   ANTHROPIC_BASE_URL=http://<ip>:8080 ANTHROPIC_API_KEY=<your key> claude
+#
+# Tear down when done:  sky down atlas
+
+name: atlas-serve
+
+resources:
+  accelerators: { L4: 1, A10G: 1, A10: 1 } # ~24GB single GPU; cheapest wins
+  ports: 8080 # expose the gateway
+  disk_size: 128
+
+workdir: .
+
+envs:
+  # The model to serve and its parser flags (vLLM needs the tool/reasoning
+  # parsers for tool use + thinking). Override per launch with `sky launch --env`.
+  ATLAS_MODEL: Qwen/Qwen3-8B
+  ATLAS_ENGINE_ARGS: --tool-call-parser hermes --reasoning-parser qwen3
+  ATLAS_API_KEY: "" # set a real key: --env ATLAS_API_KEY="$(openssl rand -hex 16)"
+  GO_VERSION: 1.26.4
+
+setup: |
+  set -euo pipefail
+  if ! /usr/local/go/bin/go version 2>/dev/null | grep -q "go${GO_VERSION}"; then
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tgz
+    sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf /tmp/go.tgz
+  fi
+  export PATH="/usr/local/go/bin:$PATH"
+  go build -o "$HOME/atlas" ./cmd/atlas
+
+run: |
+  set -euo pipefail
+  nvidia-smi || { echo "no GPU visible on the host" >&2; exit 1; }
+  [ -n "$ATLAS_API_KEY" ] || { echo "set --env ATLAS_API_KEY=... so the endpoint is not open" >&2; exit 1; }
+  # shellcheck disable=SC2086
+  "$HOME/atlas" up \
+    --engine vllm \
+    --model "$ATLAS_MODEL" \
+    --alias "claude-sonnet-4-6=$ATLAS_MODEL" \
+    --alias "claude-opus-4-1=$ATLAS_MODEL" \
+    --addr 0.0.0.0:8080 \
+    --api-key "$ATLAS_API_KEY" \
+    $(for a in $ATLAS_ENGINE_ARGS; do printf -- '--engine-arg %s ' "$a"; done)
