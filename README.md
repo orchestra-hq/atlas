@@ -31,7 +31,8 @@ Teams building on LLMs increasingly want control over where the model runs and w
 | [docs/m0-acceptance.md](docs/m0-acceptance.md)                                                             | Definition of done for M0's API surface                          |
 | [docs/conformance-suite.md](docs/conformance-suite.md)                                                     | Executable spec of the compat promise: harness, test groups      |
 | [examples/acceptance/](examples/acceptance/README.md)                                                      | GPU acceptance run that flips M0 to done (M0.5) + AWS setup      |
-| [docs/m0-build-plan.md](docs/m0-build-plan.md)                                                             | Phased build order, repo layout, and build-time decisions        |
+| [docs/m0-build-plan.md](docs/m0-build-plan.md)                                                             | M0 phased build order, repo layout, and build-time decisions     |
+| [docs/m1-build-plan.md](docs/m1-build-plan.md)                                                             | M1 phased build order (fleet: worker channel, scheduler, auth)   |
 | [docs/positioning.md](docs/positioning.md)                                                                 | Marketing differentiators and the proof each one requires        |
 | [docs/decisions/](docs/decisions/)                                                                         | Architecture decision records (ADRs)                             |
 | [docs/open-questions.md](docs/open-questions.md)                                                           | Unresolved decisions that need an owner call                     |

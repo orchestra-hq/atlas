@@ -33,15 +33,16 @@ SkyPilot is fenced to one CI workflow + one optional `examples/` recipe; the Atl
 
 ## M1 — Fleet: "Join three machines, one endpoint"
 
-**Demo:** `atlas server` on a VPS; `atlas worker --join <token>` on a 4090 box and a Mac; deploy two models; one authenticated endpoint serves both.
+**Demo:** `atlas server` on a VPS; `atlas worker --join <url> --token <token>` on a 4090 box and a Mac; deploy two models; one authenticated endpoint serves both. Build order: [m1-build-plan.md](m1-build-plan.md).
 
-- Worker join (token), persistent outbound channel, heartbeats, worker drain/remove
+- `atlas server` (control plane only) + `atlas worker --join` (outbound WebSocket channel — ADR-0007)
+- Worker join (token), heartbeats, drain/remove; hardware inventory reported on join
 - Scheduler v1: VRAM-fit placement, manual deploy/scale/stop, auto-start + idle-stop
 - Request routing/proxying with streaming across the worker channel
-- API key management (create/revoke, per-key model allowlist)
-- Usage metering (tokens by key/model/worker) + `atlas` CLI views
-- TLS story for the server endpoint
-- Cloud-fleet behaviors: non-interactive join, graceful drain on SIGTERM, heartbeat-timeout removal ([deployment requirements](deployment-aws.md#product-requirements-this-topology-imposes))
+- API key management (create/revoke, per-key model allowlist); replaces M0 shared secret
+- Usage metering (tokens by key/model/worker) + `atlas usage` CLI
+- TLS for the server endpoint (ACME for public VPS, self-signed for private)
+- Cloud-fleet behaviors: non-interactive join (`ATLAS_SERVER_URL` + `ATLAS_JOIN_TOKEN`), graceful drain on SIGTERM, heartbeat-timeout removal ([deployment requirements](deployment-aws.md#product-requirements-this-topology-imposes))
 
 ## M2 — Platform: "Private LLM service your team actually operates"
 

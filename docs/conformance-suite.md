@@ -88,4 +88,26 @@ M0 ships when every group is green in every defined matrix cell on both engines.
 
 ## Out of scope for v0
 
-Multimodal pass-through (not M0 acceptance), `/v1/embeddings`, legacy `/v1/completions`, load/latency benchmarks (M1+), multi-node routing (M1).
+Multimodal pass-through (not M0 acceptance), `/v1/embeddings`, legacy `/v1/completions`, load/latency benchmarks (M1+). Multi-node routing is covered by G11 (M1, below).
+
+---
+
+## M1 test groups
+
+These extend the matrix and the pass policy when M1 ships. See [m1-build-plan.md](m1-build-plan.md) for the phase that introduces each group.
+
+### G11 — Multi-worker routing (M1 phase 4)
+
+Two workers registered, each running a different model. Requests for model A route to worker A; requests for model B route to worker B. G1–G8+G10 pass against both workers independently. A request for an undeployed model returns a well-formed 503.
+
+### G12 — Auth (M1 phase 5)
+
+Missing `x-api-key` → 401 Anthropic error envelope; invalid key → 401; valid key → request succeeds. Key with model allowlist: allowed model succeeds, disallowed model → 403. Key revocation takes effect immediately (no cache window).
+
+### G13 — Usage metering (M1 phase 6)
+
+After N requests across two keys and two models: `atlas usage` returns correct per-key and per-model totals; input + output token sums match the `usage` fields returned on individual responses; records survive process restart (durable in SQLite).
+
+### G14 — Fleet ops (M1 phase 7)
+
+`wss://` connection works end-to-end (server with TLS cert, worker connecting over `wss://`). Env-var join (`ATLAS_SERVER_URL` + `ATLAS_JOIN_TOKEN`) works without CLI flags. Worker drain: SIGTERM triggers drain, in-flight request completes, no new requests routed to draining worker. Heartbeat timeout: kill -9 on worker process; server marks it gone within 2× heartbeat interval.
