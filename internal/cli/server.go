@@ -52,9 +52,11 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 	}
 
 	// Empty gateway: no models yet — workers join and bring their own engines.
-	// Auth enforcement is added in phase 5 (API key management). An empty
-	// apiKey means all requests pass the auth check, which is harmless while
-	// there are no models to serve.
+	// Proper API-key auth replaces the M0 shared secret in phase 5. With an
+	// empty apiKey the gateway rejects every request (Gateway.authenticated
+	// compares against "" and no client can present an empty key), which is
+	// harmless in phase 1 because no models are routed until phase 2 — but the
+	// no-key auth stance must be decided deliberately when routing lands.
 	gw := server.NewGateway("", nil, nil)
 	hub := server.NewHub(opts.token)
 

@@ -1,6 +1,8 @@
 package worker
 
 import (
+	"bufio"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -60,16 +62,33 @@ func darwinRAM() int64 {
 }
 
 func linuxRAM() int64 {
-	// Read MemTotal from /proc/meminfo.
-	out, err := exec.Command("awk", "/MemTotal/{print $2}", "/proc/meminfo").Output()
+	// Parse MemTotal from /proc/meminfo directly rather than shelling out, so
+	// detection works in minimal containers (the M0.5 slim image) that may not
+	// ship awk. The line is "MemTotal:       16384000 kB".
+	f, err := os.Open("/proc/meminfo")
 	if err != nil {
 		return 0
 	}
-	kb, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
-	if err != nil {
-		return 0
+	defer func() { _ = f.Close() }()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		rest, ok := strings.CutPrefix(line, "MemTotal:")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(rest) // ["16384000", "kB"]
+		if len(fields) == 0 {
+			return 0
+		}
+		kb, err := strconv.ParseInt(fields[0], 10, 64)
+		if err != nil {
+			return 0
+		}
+		return kb * 1024
 	}
-	return kb * 1024
+	return 0
 }
 
 // detectGPUs returns a basic GPU inventory. Phase 1 returns name-only entries
