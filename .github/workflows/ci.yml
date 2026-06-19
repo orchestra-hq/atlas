@@ -330,10 +330,75 @@ jobs:
             echo "::error::in-flight request took ${elapsed}s to fail — should unblock within the heartbeat timeout (~30 s)"; exit 1
           fi
           echo "Fleet-ops scenarios passed."
+      # Phase-4a exit criterion (G11): connection-identified routing across two
+      # workers. Each worker serves a different model, so a request that reaches
+      # the wrong worker would 404 — proving the gateway routes by which worker
+      # holds the model, not a single name-keyed slot. Then a worker dropping must
+      # not take down a model another worker still serves (the route-identity
+      # review finding). The fleet-ops step left its worker killed, so this starts
+      # fresh single-model workers.
+      - name: G11 multi-worker routing
+        run: |
+          set -uo pipefail
+          API=http://127.0.0.1:9090
+          ask() { # $1=model -> echoes HTTP status of a small request
+            curl -sS -m 60 -o /dev/null -w '%{http_code}' \
+              -H "x-api-key: $ATLAS_API_KEY" -H 'content-type: application/json' \
+              "$API/v1/messages" \
+              -d "$(printf '{"model":"%s","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}' "$1")" || true
+          }
+
+          # Worker A serves only model A; worker B serves only model B.
+          ./atlas worker --join ws://127.0.0.1:9090/workers/connect --token "$ATLAS_JOIN_TOKEN" \
+            --model "$CONF_MODEL_NAME" > g11-a.log 2>&1 &
+          echo $! > wa.pid
+          ./atlas worker --join ws://127.0.0.1:9090/workers/connect --token "$ATLAS_JOIN_TOKEN" \
+            --model "$CONF_REASONING_NAME" > g11-b.log 2>&1 &
+          echo $! > wb.pid
+
+          # Both models must answer 200 — each can only be served by its own worker.
+          for _ in $(seq 1 150); do
+            [ "$(ask "$CONF_MODEL_NAME")" = "200" ] && [ "$(ask "$CONF_REASONING_NAME")" = "200" ] && break
+            sleep 2
+          done
+          A=$(ask "$CONF_MODEL_NAME"); B=$(ask "$CONF_REASONING_NAME")
+          echo "model A ($CONF_MODEL_NAME) → $A ; model B ($CONF_REASONING_NAME) → $B"
+          if [ "$A" != "200" ] || [ "$B" != "200" ]; then
+            echo "::error::both workers' models did not become routable (A=$A B=$B)"
+            echo "=== worker A ==="; cat g11-a.log; echo "=== worker B ==="; cat g11-b.log; exit 1
+          fi
+
+          echo "=== Worker B leaves: model A keeps serving, model B becomes unavailable ==="
+          kill -TERM "$(cat wb.pid)"
+          for _ in $(seq 1 20); do [ "$(ask "$CONF_REASONING_NAME")" = "200" ] && sleep 1 || break; done
+          A2=$(ask "$CONF_MODEL_NAME"); B2=$(ask "$CONF_REASONING_NAME")
+          echo "after B leaves: model A → $A2 ; model B → $B2"
+          if [ "$A2" != "200" ]; then
+            echo "::error::model A stopped serving when worker B left — routing was not worker-scoped (got $A2)"; exit 1
+          fi
+          if [ "$B2" = "200" ]; then
+            echo "::error::model B still answered 200 after its only worker left (got $B2)"; exit 1
+          fi
+
+          echo "=== Same-model overlap: a second worker for model A survives the first leaving ==="
+          ./atlas worker --join ws://127.0.0.1:9090/workers/connect --token "$ATLAS_JOIN_TOKEN" \
+            --model "$CONF_MODEL_NAME" > g11-a2.log 2>&1 &
+          echo $! > wa2.pid
+          # Let the second model-A worker join and register a second instance.
+          for _ in $(seq 1 150); do [ "$(ask "$CONF_MODEL_NAME")" = "200" ] && break; sleep 2; done
+          kill -TERM "$(cat wa.pid)" # drop the first model-A worker
+          sleep 5
+          A3=$(ask "$CONF_MODEL_NAME")
+          echo "after the first model-A worker leaves: model A → $A3"
+          if [ "$A3" != "200" ]; then
+            echo "::error::model A dropped when one of two workers serving it left (got $A3)"
+            echo "=== worker A2 ==="; cat g11-a2.log; exit 1
+          fi
+          echo "G11 multi-worker routing passed."
       - name: Stop Atlas
         if: always()
         run: |
-          kill "$(cat worker.pid)" 2>/dev/null || true
+          for p in worker.pid wa.pid wb.pid wa2.pid; do kill "$(cat $p 2>/dev/null)" 2>/dev/null || true; done
           kill "$(cat server.pid)" 2>/dev/null || true
       - uses: actions/upload-artifact@v7
         if: always()

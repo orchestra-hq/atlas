@@ -100,15 +100,15 @@ type capturingRegistry struct {
 	models map[string]server.Model
 }
 
-func (r *capturingRegistry) RegisterModel(m server.Model) {
+func (r *capturingRegistry) RegisterInstance(_ string, m server.Model) {
 	r.mu.Lock()
 	r.models[m.Name] = m
 	r.mu.Unlock()
 }
 
-func (r *capturingRegistry) UnregisterModel(name string) {
+func (r *capturingRegistry) UnregisterWorker(_ string) {
 	r.mu.Lock()
-	delete(r.models, name)
+	r.models = map[string]server.Model{}
 	r.mu.Unlock()
 }
 
