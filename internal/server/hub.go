@@ -341,7 +341,13 @@ func (h *Hub) addWorkerModel(workerID, model string) {
 			return
 		}
 	}
-	w.info.Models = append(w.info.Models, model)
+	// Copy-on-write: Workers()/HandleListWorkers take shallow copies of WorkerInfo
+	// (under RLock) whose Models field aliases this backing array, so publish a new
+	// slice rather than mutating in place — otherwise a concurrent reader races us.
+	next := make([]string, len(w.info.Models)+1)
+	copy(next, w.info.Models)
+	next[len(next)-1] = model
+	w.info.Models = next
 }
 
 func (h *Hub) removeWorkerModel(workerID, model string) {
@@ -353,7 +359,12 @@ func (h *Hub) removeWorkerModel(workerID, model string) {
 	}
 	for i, m := range w.info.Models {
 		if m == model {
-			w.info.Models = append(w.info.Models[:i], w.info.Models[i+1:]...)
+			// Copy-on-write (see addWorkerModel): an in-place delete would shift
+			// elements a concurrent reader's shallow copy is still iterating.
+			next := make([]string, 0, len(w.info.Models)-1)
+			next = append(next, w.info.Models[:i]...)
+			next = append(next, w.info.Models[i+1:]...)
+			w.info.Models = next
 			return
 		}
 	}
