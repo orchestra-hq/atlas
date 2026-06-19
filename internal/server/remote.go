@@ -41,10 +41,13 @@ type remoteWorker struct {
 
 // pendingReq is one in-flight request awaiting responses. ch delivers inference
 // frames in arrival order; abandoned is closed when the waiting goroutine
-// returns, so the read loop drops late frames instead of blocking on it.
+// returns, so the read loop drops late frames instead of blocking on it;
+// overflow is closed by route when ch fills (a consumer too slow to drain),
+// ending just that request rather than stalling the shared reader.
 type pendingReq struct {
 	ch        chan reqEvent
 	abandoned chan struct{}
+	overflow  chan struct{}
 }
 
 // reqEvent is one decoded worker→server inference frame routed to a pending
@@ -58,6 +61,17 @@ type reqEvent struct {
 	count  int               // MsgTokenCount
 	errp   wire.ErrorPayload // MsgError
 }
+
+// pendingBufferSize is how many inference frames a single request may buffer
+// before a non-draining consumer is treated as too slow and the request is
+// overflowed. Generous enough to absorb normal scheduling jitter between the
+// reader and a request's consumer goroutine.
+const pendingBufferSize = 64
+
+// errSlowConsumer ends a single request whose response buffer overflowed because
+// its consumer (typically a slow SSE client) stopped draining. Failing just this
+// request is how the shared connection reader stays unblocked for everyone else.
+var errSlowConsumer = errors.New("server: response buffer overflow (consumer too slow)")
 
 func newRemoteWorker(conn *websocket.Conn) *remoteWorker {
 	return &remoteWorker{
@@ -95,6 +109,12 @@ func (rw *remoteWorker) close() {
 // route delivers one worker→server inference frame to its pending request, or
 // drops it if the request is unknown (e.g. a late chunk after a stop sequence
 // cut the stream) or already abandoned.
+//
+// It runs inline on the hub's sole connection reader, so it must never block:
+// if the request's buffer is full because its consumer stopped draining (a slow
+// SSE client), it fails that one request via overflow instead of stalling the
+// reader and head-of-line-blocking every other multiplexed request and the
+// heartbeat handling on this connection.
 func (rw *remoteWorker) route(m wire.Message) {
 	ev, id, ok := decodeReqEvent(m)
 	if !ok {
@@ -110,7 +130,21 @@ func (rw *remoteWorker) route(m wire.Message) {
 	case p.ch <- ev:
 	case <-p.abandoned:
 	case <-rw.done:
+	default:
+		rw.overflow(id)
 	}
+}
+
+// overflow ends a request whose response buffer filled: its consumer is too slow
+// to keep up. Closing overflow wakes the waiting goroutine with errSlowConsumer,
+// and deleting the entry makes route drop any further frames for it.
+func (rw *remoteWorker) overflow(id string) {
+	rw.mu.Lock()
+	if p, ok := rw.pending[id]; ok {
+		close(p.overflow)
+		delete(rw.pending, id)
+	}
+	rw.mu.Unlock()
 }
 
 // sendAck enqueues a control-plane ack (the hub's heartbeat reply) through the
@@ -144,6 +178,9 @@ func (rw *remoteWorker) Execute(ctx context.Context, req core.Request) (core.Res
 			case wire.MsgError:
 				return core.Response{}, wireError(ev.errp)
 			}
+		case <-p.overflow:
+			rw.cancel(id)
+			return core.Response{}, errSlowConsumer
 		case <-ctx.Done():
 			rw.cancel(id)
 			return core.Response{}, ctx.Err()
@@ -181,6 +218,9 @@ func (rw *remoteWorker) ExecuteStream(ctx context.Context, req core.Request, sin
 			case wire.MsgError:
 				return wireError(ev.errp)
 			}
+		case <-p.overflow:
+			rw.cancel(id)
+			return errSlowConsumer
 		case <-ctx.Done():
 			rw.cancel(id)
 			return ctx.Err()
@@ -208,6 +248,9 @@ func (rw *remoteWorker) CountTokens(ctx context.Context, req core.Request) (int,
 			case wire.MsgError:
 				return 0, wireError(ev.errp)
 			}
+		case <-p.overflow:
+			rw.cancel(id)
+			return 0, errSlowConsumer
 		case <-ctx.Done():
 			rw.cancel(id)
 			return 0, ctx.Err()
@@ -220,7 +263,7 @@ func (rw *remoteWorker) CountTokens(ctx context.Context, req core.Request) (int,
 // begin allocates a request id and registers its pending entry.
 func (rw *remoteWorker) begin() (string, *pendingReq) {
 	id := "r" + strconv.FormatUint(rw.idSeq.Add(1), 10)
-	p := &pendingReq{ch: make(chan reqEvent, 64), abandoned: make(chan struct{})}
+	p := &pendingReq{ch: make(chan reqEvent, pendingBufferSize), abandoned: make(chan struct{}), overflow: make(chan struct{})}
 	rw.mu.Lock()
 	rw.pending[id] = p
 	rw.mu.Unlock()

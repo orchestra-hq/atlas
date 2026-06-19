@@ -99,31 +99,47 @@ func (s *Store) Get(name string) (Manifest, error) {
 }
 
 // Has reports whether a model is fully present: its manifest exists and the blob
-// it references is on disk. A manifest whose blob is missing (a half-cleaned
-// store) reads as absent so the caller re-pulls.
+// it references is on disk at its recorded size. A manifest whose blob is
+// missing (a half-cleaned store) or truncated (an interrupted out-of-band copy)
+// reads as absent so the caller re-pulls.
 func (s *Store) Has(name string) bool {
 	m, err := s.Get(name)
 	if err != nil {
 		return false
 	}
-	if _, err := os.Stat(s.blobPath(m.Digest)); err != nil {
-		return false
-	}
-	return true
+	return s.blobIntact(m.Digest, m.Size)
 }
 
 // Path returns the on-disk blob path for a stored model — what the worker hands
-// the engine (llama.cpp's -m). It errors if the model is not fully present.
+// the engine (llama.cpp's -m). It errors if the model is not fully present or
+// the blob's size no longer matches the manifest (a corrupt/truncated cache).
 func (s *Store) Path(name string) (string, error) {
 	m, err := s.Get(name)
 	if err != nil {
 		return "", err
 	}
 	p := s.blobPath(m.Digest)
-	if _, err := os.Stat(p); err != nil {
-		return "", fmt.Errorf("store: blob for %q missing: %w", name, err)
+	if !s.blobIntact(m.Digest, m.Size) {
+		return "", fmt.Errorf("store: blob for %q missing or corrupt (size mismatch); re-pull", name)
 	}
 	return p, nil
+}
+
+// blobIntact reports whether the digest's blob exists on disk and matches the
+// expected byte count. The blob filename is its sha256, so a full re-hash would
+// be authoritative but is too costly on the cold-boot path for multi-GB
+// weights; the size check is O(1) (the stat the caller needs anyway) and catches
+// the realistic failure — a truncated or partially-written file. wantSize <= 0
+// (older manifests) falls back to a presence check.
+func (s *Store) blobIntact(digest string, wantSize int64) bool {
+	info, err := os.Stat(s.blobPath(digest))
+	if err != nil {
+		return false
+	}
+	if wantSize > 0 && info.Size() != wantSize {
+		return false
+	}
+	return true
 }
 
 // PullSpec describes a single-file weight blob to fetch into the store.
@@ -147,9 +163,10 @@ func (s *Store) Pull(ctx context.Context, spec PullSpec) (Manifest, error) {
 	}
 	digest := "sha256:" + spec.SHA256
 	if existing, err := s.Get(spec.Name); err == nil && existing.Digest == digest {
-		if _, err := os.Stat(s.blobPath(digest)); err == nil {
+		if s.blobIntact(digest, existing.Size) {
 			return existing, nil // already pulled and verified
 		}
+		// Present but truncated/corrupt: fall through and re-download.
 	}
 
 	if err := os.MkdirAll(s.blobsDir(), 0o755); err != nil {

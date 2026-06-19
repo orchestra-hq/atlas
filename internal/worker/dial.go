@@ -113,6 +113,8 @@ func dialOnce(ctx context.Context, cfg DialConfig, hw wire.Hardware, log *slog.L
 		return false, fmt.Errorf("dial %s: %w", cfg.ServerURL, err)
 	}
 	defer func() { _ = conn.Close() }()
+	// Bound every inbound frame so a misbehaving server cannot OOM the worker.
+	conn.SetReadLimit(wire.MaxFrameBytes)
 
 	models := make(map[string]ServedModel, len(cfg.Models))
 	served := make([]wire.ServedModel, 0, len(cfg.Models))
@@ -191,27 +193,59 @@ func dialOnce(ctx context.Context, cfg DialConfig, hw wire.Hardware, log *slog.L
 	heartbeat := time.NewTicker(heartbeatInterval)
 	defer heartbeat.Stop()
 
+	// A dedicated writer goroutine is the connection's sole writer (gorilla
+	// allows one at a time). Decoupling writes from the read/dispatch loop means
+	// a slow or stalled socket write cannot delay processing an inbound frame —
+	// the loop keeps draining `incoming`, so a cancel is honored promptly instead
+	// of waiting out the write deadline.
+	writeErr := make(chan error, 1)
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		for {
+			select {
+			case <-connCtx.Done():
+				return
+			case m := <-sess.out:
+				if err := writeMsg(conn, m); err != nil {
+					select {
+					case writeErr <- fmt.Errorf("write %s: %w", m.Type, err):
+					default:
+					}
+					return
+				}
+			}
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
+			// Stop the writer and wait for it to exit before writing the close
+			// frame ourselves, so there is never a concurrent writer on conn.
+			connCancel()
+			<-writerDone
 			_ = conn.WriteMessage(websocket.CloseMessage,
 				websocket.FormatCloseMessage(websocket.CloseNormalClosure, "shutting down"))
 			return true, nil
 		case err := <-readErr:
 			return true, err
+		case err := <-writeErr:
+			return true, err
 		case data := <-incoming:
 			sess.dispatch(connCtx, data)
-		case m := <-sess.out:
-			if err := writeMsg(conn, m); err != nil {
-				return true, fmt.Errorf("write %s: %w", m.Type, err)
-			}
 		case <-heartbeat.C:
 			hbMsg, err := wire.Encode(wire.MsgHeartbeat, "", wire.HeartbeatPayload{WorkerID: ack.WorkerID})
 			if err != nil {
 				return true, err
 			}
-			if err := writeMsg(conn, hbMsg); err != nil {
-				return true, fmt.Errorf("send heartbeat: %w", err)
+			// Best-effort: if the writer is backed up (a stalled socket), skip
+			// this heartbeat rather than block the loop. The stuck write trips its
+			// deadline and surfaces via writeErr, tearing the connection down
+			// within the server's heartbeat-timeout window anyway.
+			select {
+			case sess.out <- hbMsg:
+			default:
 			}
 		}
 	}
@@ -317,14 +351,23 @@ func (s *session) handleCountTokens(ctx context.Context, p wire.CountTokensPaylo
 		})
 		return
 	}
-	n, err := model.Engine.CountTokens(ctx, p.Request)
+
+	// Register for cancellation like handleExecute, so a server-sent cancel (or a
+	// client disconnect) aborts the engine's tokenizer call instead of letting it
+	// run to completion against an already-abandoned request.
+	reqCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.register(p.RequestID, cancel)
+	defer s.unregister(p.RequestID)
+
+	n, err := model.Engine.CountTokens(reqCtx, p.Request)
 	if err != nil {
-		if ctx.Err() == nil {
+		if reqCtx.Err() == nil {
 			_ = s.enqueue(ctx, wire.MsgError, wire.ErrorPayload{RequestID: p.RequestID, Code: errorCode(err), Message: err.Error()})
 		}
 		return
 	}
-	_ = s.enqueue(ctx, wire.MsgTokenCount, wire.TokenCountPayload{RequestID: p.RequestID, Count: n})
+	_ = s.enqueue(reqCtx, wire.MsgTokenCount, wire.TokenCountPayload{RequestID: p.RequestID, Count: n})
 }
 
 // enqueue hands a frame to the main loop for writing, returning ctx.Err() if the
