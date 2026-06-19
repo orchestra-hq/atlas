@@ -19,10 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/orchestra-hq/atlas/catalog"
 	atlasruntime "github.com/orchestra-hq/atlas/internal/runtime"
 	"github.com/orchestra-hq/atlas/internal/server"
-	"github.com/orchestra-hq/atlas/internal/store"
 	"github.com/orchestra-hq/atlas/internal/worker"
 )
 
@@ -79,68 +77,21 @@ func runUp(ctx context.Context, cmd *cobra.Command, opts *upOptions) error {
 		return fmt.Errorf("create state dir: %w", err)
 	}
 
-	cat, err := catalog.Load()
-	if err != nil {
-		return err
-	}
-	st := store.New(filepath.Join(opts.stateDir, "store"))
-
-	// Fail fast on an engine/catalog mismatch before the (possibly slow) runtime
-	// provisioning below: a catalog model dictates its own engine.
-	for _, spec := range opts.models {
-		if entry, ok := cat.Lookup(spec); ok && worker.Engine(entry.Engine) != engine {
-			return fmt.Errorf("model %q is a %s catalog model; rerun with --engine %s", entry.Name, entry.Engine, entry.Engine)
-		}
-	}
-
-	// 1. Provision the pinned runtime for the selected engine on this platform.
-	prov := &atlasruntime.Provisioner{Dir: filepath.Join(opts.stateDir, "runtimes")}
-	binPath, err := provisionEngine(ctx, cmd, prov, engine)
-	if err != nil {
-		return err
-	}
-
-	// 2. Resolve and launch an engine per requested model and wait for each to
-	// load. Each --model value is a catalog name (pulled from cold into the
-	// store if needed), a local path, or an engine spec. Every model gets its
-	// own engine subprocess; the gateway routes by served name. Once a model is
-	// ready we read its context window from the engine (falling back to the
+	// Provision the runtime and launch an engine per requested model, each under
+	// its own subprocess; the gateway routes by served name. Once a model is
+	// ready its context window is read from the engine (falling back to the
 	// catalog hint), so the gateway can assert request fit and report it.
-	var models []server.Model
-	seen := map[string]bool{}
-	for _, spec := range opts.models {
-		rm, err := resolveModel(ctx, cmd, engine, st, cat, spec)
-		if err != nil {
-			return err
-		}
-		if seen[rm.served] {
-			return fmt.Errorf("duplicate model %q", rm.served)
-		}
-		seen[rm.served] = true
-		cmd.Printf("Loading model %q (this can take a while on first run)…\n", rm.served)
-		w, err := worker.Start(ctx, worker.Config{
-			Engine:    engine,
-			BinPath:   binPath,
-			ModelArgs: rm.modelArgs,
-			ExtraArgs: append(append([]string{}, opts.engineArgs...), rm.engineArgs...),
-			Model:     rm.served,
-			LogPath:   filepath.Join(opts.stateDir, string(engine)+"-"+rm.served+".log"),
-		})
-		if err != nil {
-			return err
-		}
-		defer func() { _ = w.Stop() }()
+	started, cleanup, err := startModels(ctx, cmd, engine, opts.engineArgs, opts.models, opts.stateDir)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 
-		ctxWindow, err := w.ContextWindow(ctx)
-		if err != nil {
-			if rm.ctxHint > 0 {
-				ctxWindow = rm.ctxHint
-				cmd.Printf("  note: using catalog context window %d for %q (engine query failed: %v)\n", ctxWindow, rm.served, err)
-			} else {
-				cmd.Printf("  warning: could not read context window for %q (%v); fit assertion disabled\n", rm.served, err)
-			}
-		}
-		models = append(models, server.Model{Name: rm.served, Exec: w, ContextWindow: ctxWindow})
+	models := make([]server.Model, 0, len(started))
+	seen := map[string]bool{}
+	for _, sm := range started {
+		models = append(models, server.Model{Name: sm.name, Exec: sm.worker, ContextWindow: sm.ctxWindow})
+		seen[sm.name] = true
 	}
 
 	aliases, err := parseAliases(opts.aliases, seen)

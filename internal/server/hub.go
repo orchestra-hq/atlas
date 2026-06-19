@@ -20,10 +20,19 @@ import (
 // windows before eviction (phase 3 formalises the eviction policy).
 const heartbeatTimeout = 30 * time.Second
 
+// ModelRegistry is the gateway's model table as the hub mutates it: a worker
+// registers a route per served model when it joins and removes those routes
+// when it drops, so the gateway serves remote models exactly as in-process ones.
+type ModelRegistry interface {
+	RegisterModel(Model)
+	UnregisterModel(name string)
+}
+
 // Hub manages persistent outbound-initiated WebSocket connections from remote
 // workers (ADR-0003, ADR-0007). It is safe for concurrent use.
 type Hub struct {
-	token string
+	token    string
+	registry ModelRegistry
 
 	mu      sync.RWMutex
 	workers map[string]*hubWorker
@@ -39,15 +48,19 @@ type WorkerInfo struct {
 	Name        string
 	Hardware    wire.Hardware
 	Version     string
+	Models      []string
 	ConnectedAt time.Time
 	LastSeen    time.Time
 }
 
-// NewHub creates a Hub that authenticates workers with the given join token.
-func NewHub(token string) *Hub {
+// NewHub creates a Hub that authenticates workers with the given join token and
+// registers each joining worker's served models in registry (the gateway). A
+// nil registry is allowed for tests that exercise only the join/heartbeat path.
+func NewHub(token string, registry ModelRegistry) *Hub {
 	return &Hub{
-		token:   token,
-		workers: make(map[string]*hubWorker),
+		token:    token,
+		registry: registry,
+		workers:  make(map[string]*hubWorker),
 	}
 }
 
@@ -94,6 +107,7 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 			Name:        join.Name,
 			Hardware:    join.Hardware,
 			Version:     join.Version,
+			Models:      servedNames(join.Models),
 			ConnectedAt: now,
 			LastSeen:    now,
 		},
@@ -109,6 +123,27 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.sendMsg(conn, wire.JoinAckPayload{Accepted: true, WorkerID: wid}); err != nil {
 		return
+	}
+
+	// The connection now carries inference as well as heartbeats. The remote
+	// worker owns the single write pump and the request multiplexing; this read
+	// loop is the sole reader, dispatching heartbeats and routing inference
+	// responses to it. Register one gateway route per served model so the
+	// gateway dispatches matching requests over this connection; drop them when
+	// the loop exits (the worker disconnected).
+	rw := newRemoteWorker(conn)
+	go rw.writePump()
+	defer rw.close()
+
+	if h.registry != nil {
+		for _, sm := range join.Models {
+			h.registry.RegisterModel(Model{Name: sm.Name, Exec: rw, ContextWindow: sm.ContextWindow})
+		}
+		defer func() {
+			for _, sm := range join.Models {
+				h.registry.UnregisterModel(sm.Name)
+			}
+		}()
 	}
 
 	for {
@@ -127,9 +162,25 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 				w.info.LastSeen = time.Now()
 			}
 			h.mu.Unlock()
-			_ = h.sendMsg(conn, wire.HeartbeatAckPayload{})
+			rw.sendAck(wire.MsgHeartbeatAck, wire.HeartbeatAckPayload{})
+			continue
 		}
+		// Inference response (chunk/done/response/token_count/error): hand to the
+		// remote worker to demux back to the waiting request goroutine.
+		rw.route(m)
 	}
+}
+
+// servedNames extracts the model names from a join's served-model list.
+func servedNames(models []wire.ServedModel) []string {
+	if len(models) == 0 {
+		return nil
+	}
+	names := make([]string, len(models))
+	for i, m := range models {
+		names[i] = m.Name
+	}
+	return names
 }
 
 // HandleListWorkers serves GET /admin/workers with the current worker inventory.
@@ -159,14 +210,14 @@ func (h *Hub) Workers() []WorkerInfo {
 	return out
 }
 
-// sendMsg infers the message type from the payload type and sends it.
+// sendMsg sends a control-plane payload directly on conn. It is used only for
+// the join handshake, before the remote worker's write pump takes over as the
+// connection's sole writer (heartbeat acks and inference frames go through that).
 func (h *Hub) sendMsg(conn *websocket.Conn, payload any) error {
 	var typ wire.MessageType
 	switch payload.(type) {
 	case wire.JoinAckPayload:
 		typ = wire.MsgJoinAck
-	case wire.HeartbeatAckPayload:
-		typ = wire.MsgHeartbeatAck
 	default:
 		return fmt.Errorf("hub: unknown outbound payload type %T", payload)
 	}

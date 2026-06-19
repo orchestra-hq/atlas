@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"unicode/utf8"
 )
@@ -40,6 +41,85 @@ type StreamSink interface {
 // stop generating and end the stream without error. The gateway returns it
 // from Text once a stop sequence has been matched.
 var ErrStopStreaming = errors.New("core: stop streaming")
+
+// EventKind discriminates a serialised StreamSink delta callback.
+type EventKind string
+
+// Stream event kinds, one per StreamSink delta method (Done is reported
+// separately by the worker channel, carrying the stop reason and usage).
+const (
+	EventThinking  EventKind = "thinking"
+	EventText      EventKind = "text"
+	EventToolStart EventKind = "tool_start"
+	EventToolDelta EventKind = "tool_delta"
+)
+
+// StreamEvent is the serialisable form of a single StreamSink delta callback.
+// It lets a remote worker forward an engine's streamed deltas across the worker
+// channel (ADR-0007) and the gateway replay them onto its own sink — the same
+// internal representation both ends already use in-process, so no translation
+// layer is introduced. Done is not a StreamEvent: the channel reports it as a
+// dedicated message carrying the stop reason and final usage.
+type StreamEvent struct {
+	Kind  EventKind `json:"kind"`
+	Text  string    `json:"text,omitempty"`  // EventThinking, EventText: the delta
+	Index int       `json:"index,omitempty"` // EventToolStart, EventToolDelta: call index
+	ID    string    `json:"id,omitempty"`    // EventToolStart: tool_use id
+	Name  string    `json:"name,omitempty"`  // EventToolStart: tool name
+	Args  string    `json:"args,omitempty"`  // EventToolDelta: JSON arguments fragment
+}
+
+// ApplyTo replays the event onto sink, returning whatever the sink returns —
+// including ErrStopStreaming, which the gateway's stop-sequence scanner raises
+// from Text so the caller can stop the remote generation.
+func (e StreamEvent) ApplyTo(sink StreamSink) error {
+	switch e.Kind {
+	case EventThinking:
+		return sink.Thinking(e.Text)
+	case EventText:
+		return sink.Text(e.Text)
+	case EventToolStart:
+		return sink.ToolCallStart(e.Index, e.ID, e.Name)
+	case EventToolDelta:
+		return sink.ToolCallDelta(e.Index, e.Args)
+	default:
+		return fmt.Errorf("core: unknown stream event kind %q", e.Kind)
+	}
+}
+
+// EventSink is a StreamSink that converts each delta callback into a StreamEvent
+// handed to Emit, and reports end of stream via OnDone. A remote worker uses it
+// to serialise an engine's stream onto the worker channel; an error from Emit or
+// OnDone aborts the engine stream (the engine treats it as a failed sink write).
+type EventSink struct {
+	Emit   func(StreamEvent) error
+	OnDone func(StopReason, Usage) error
+}
+
+// Thinking emits a thinking-delta event.
+func (s EventSink) Thinking(delta string) error {
+	return s.Emit(StreamEvent{Kind: EventThinking, Text: delta})
+}
+
+// Text emits a text-delta event.
+func (s EventSink) Text(delta string) error {
+	return s.Emit(StreamEvent{Kind: EventText, Text: delta})
+}
+
+// ToolCallStart emits a tool-call-start event.
+func (s EventSink) ToolCallStart(index int, id, name string) error {
+	return s.Emit(StreamEvent{Kind: EventToolStart, Index: index, ID: id, Name: name})
+}
+
+// ToolCallDelta emits a tool-call-arguments-delta event.
+func (s EventSink) ToolCallDelta(index int, argsFragment string) error {
+	return s.Emit(StreamEvent{Kind: EventToolDelta, Index: index, Args: argsFragment})
+}
+
+// Done reports end of stream with the stop reason and final usage.
+func (s EventSink) Done(reason StopReason, usage Usage) error {
+	return s.OnDone(reason, usage)
+}
 
 // StopSequenceScanner enforces Anthropic stop-sequence semantics over a stream
 // of text chunks, mirroring ApplyStopSequences for the non-streaming path so a
