@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/orchestra-hq/atlas/internal/api/anthropic"
@@ -59,6 +60,24 @@ type Model struct {
 	ContextWindow int
 }
 
+// route is one live instance of a model: the executor for the worker connection
+// serving it, tagged with that connection's worker id so the worker's teardown
+// removes only its own instances (connection-identified routing — M1 phase 4).
+// A model name may have several routes at once: replicas across workers, or a
+// reconnecting worker briefly overlapping its old connection. contextWindow is
+// the instance's window; replicas of a model are assumed homogeneous, so any
+// instance answers metadata.
+type route struct {
+	workerID      string
+	exec          Executor
+	contextWindow int
+}
+
+// localWorkerID tags the in-process models registered at construction (atlas up
+// single-node mode). They are never torn down by a worker disconnect, so the id
+// is a fixed sentinel rather than a per-connection value.
+const localWorkerID = "local"
+
 // Gateway is the client-facing control plane: auth, model resolution, and
 // dispatch to a worker. It serves the Anthropic surface: POST /v1/messages
 // (buffered and SSE), POST /v1/messages/count_tokens, and GET /v1/models[/{id}].
@@ -67,14 +86,16 @@ type Gateway struct {
 	createdAt string       // wire created_at stamped on model objects
 	logger    *slog.Logger // one structured line per API request (G10)
 
-	// mu guards the model table, which is static in single-node mode but
-	// changes as remote workers register and drop their models in fleet mode
-	// (M1 phase 2). resolve and the model handlers read it under RLock;
-	// RegisterModel/UnregisterModel mutate it under Lock.
+	// mu guards the route table, which is static in single-node mode but changes
+	// as remote workers register and drop their models in fleet mode. resolve and
+	// the model handlers read it under RLock; RegisterInstance/UnregisterWorker
+	// mutate it under Lock. rr is a separate atomic so replica selection needs no
+	// write lock.
 	mu      sync.RWMutex
-	models  map[string]Model  // canonical name -> model
-	aliases map[string]string // alias -> canonical name
-	order   []string          // canonical names, registration order (listing)
+	routes  map[string][]route // canonical name -> live instances (one per worker connection)
+	aliases map[string]string  // alias -> canonical name
+	order   []string           // canonical names, first-seen order (listing); present iff ≥1 route
+	rr      atomic.Uint64      // round-robin cursor for selecting among a model's replicas
 }
 
 // NewGateway builds a gateway that accepts apiKey, serves each model in models
@@ -83,23 +104,22 @@ type Gateway struct {
 // aliases (e.g. claude-sonnet-4-6 -> a local model) let SDK/tool defaults
 // resolve (docs/api-surface.md).
 func NewGateway(apiKey string, models []Model, aliases map[string]string) *Gateway {
-	byName := make(map[string]Model, len(models))
-	order := make([]string, 0, len(models))
-	for _, m := range models {
-		byName[m.Name] = m
-		order = append(order, m.Name)
-	}
 	if aliases == nil {
 		aliases = map[string]string{}
 	}
-	return &Gateway{
+	g := &Gateway{
 		apiKey:    apiKey,
-		models:    byName,
+		routes:    make(map[string][]route, len(models)),
 		aliases:   aliases,
-		order:     order,
+		order:     make([]string, 0, len(models)),
 		createdAt: time.Now().UTC().Format(time.RFC3339),
 		logger:    slog.Default(),
 	}
+	// Initial single-node models never disconnect, so they share a fixed worker id.
+	for _, m := range models {
+		g.RegisterInstance(localWorkerID, m)
+	}
+	return g
 }
 
 // SetLogger overrides the gateway's request logger (default slog.Default()).
@@ -116,41 +136,77 @@ func (g *Gateway) resolve(name string) (Model, bool) {
 	return g.resolveLocked(name)
 }
 
-// resolveLocked is resolve without locking, for callers already holding mu.
+// resolveLocked is resolve without locking, for callers already holding mu. When
+// a model has several live instances (replicas across workers) it round-robins
+// across them, so load spreads over the fleet; the returned Model carries the
+// chosen instance's executor.
 func (g *Gateway) resolveLocked(name string) (Model, bool) {
 	if canon, ok := g.aliases[name]; ok {
 		name = canon
 	}
-	m, ok := g.models[name]
-	return m, ok
+	rs := g.routes[name]
+	if len(rs) == 0 {
+		return Model{}, false
+	}
+	r := rs[0]
+	if len(rs) > 1 {
+		r = rs[g.rr.Add(1)%uint64(len(rs))]
+	}
+	return Model{Name: name, Exec: r.exec, ContextWindow: r.contextWindow}, true
 }
 
-// RegisterModel adds (or replaces) a served model route. The hub calls it when
-// a worker joins, pointing Exec at the connection's remote executor; the
-// gateway then serves the model exactly as an in-process one. Re-registering an
-// existing name updates its route in place (e.g. a worker reconnecting).
-func (g *Gateway) RegisterModel(m Model) {
+// RegisterInstance adds one live instance of a model, owned by the given worker
+// connection. The hub calls it per served model when a worker joins, pointing
+// Exec at that connection's remote executor; the gateway then serves the model
+// exactly as an in-process one. A model name may hold several instances at once
+// — replicas across workers, or a reconnecting worker briefly overlapping its
+// old connection — and a request resolves to the name as long as any instance
+// is live. Routes are connection-identified so one worker's teardown
+// (UnregisterWorker) removes only its own instances, never a route a different
+// live connection installed (M1 phase 4).
+func (g *Gateway) RegisterInstance(workerID string, m Model) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if _, exists := g.models[m.Name]; !exists {
+	if len(g.routes[m.Name]) == 0 {
 		g.order = append(g.order, m.Name)
 	}
-	g.models[m.Name] = m
+	g.routes[m.Name] = append(g.routes[m.Name], route{
+		workerID:      workerID,
+		exec:          m.Exec,
+		contextWindow: m.ContextWindow,
+	})
 }
 
-// UnregisterModel removes a served model route, called when the worker serving
-// it disconnects. Unknown names are ignored.
-func (g *Gateway) UnregisterModel(name string) {
+// UnregisterWorker removes every instance owned by a worker connection, called
+// when that worker drains or disconnects. A model whose last instance is removed
+// stops resolving and drops out of the listing; a model still served by another
+// connection keeps its remaining instances. Unknown worker ids are a no-op.
+func (g *Gateway) UnregisterWorker(workerID string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if _, ok := g.models[name]; !ok {
-		return
+	for name, rs := range g.routes {
+		kept := make([]route, 0, len(rs))
+		for _, r := range rs {
+			if r.workerID != workerID {
+				kept = append(kept, r)
+			}
+		}
+		switch {
+		case len(kept) == 0:
+			delete(g.routes, name)
+			g.removeFromOrder(name)
+		case len(kept) != len(rs):
+			g.routes[name] = kept
+		}
 	}
-	delete(g.models, name)
+}
+
+// removeFromOrder drops name from the listing order. The caller holds mu.
+func (g *Gateway) removeFromOrder(name string) {
 	for i, n := range g.order {
 		if n == name {
 			g.order = append(g.order[:i], g.order[i+1:]...)
-			break
+			return
 		}
 	}
 }
@@ -180,7 +236,7 @@ func (g *Gateway) Handler() http.Handler {
 // 503 otherwise (G10, criterion 8).
 func (g *Gateway) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 	g.mu.RLock()
-	n := len(g.models)
+	n := len(g.routes)
 	g.mu.RUnlock()
 	if n == 0 {
 		anthropic.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "no models servable"})

@@ -24,12 +24,15 @@ import (
 // const) so tests can shrink it; production code never reassigns it.
 var heartbeatTimeout = 30 * time.Second
 
-// ModelRegistry is the gateway's model table as the hub mutates it: a worker
-// registers a route per served model when it joins and removes those routes
-// when it drops, so the gateway serves remote models exactly as in-process ones.
+// ModelRegistry is the gateway's route table as the hub mutates it: a worker
+// registers an instance per served model when it joins, tagged with its worker
+// id, and the hub removes all of that worker's instances when it drops — so the
+// gateway serves remote models exactly as in-process ones, and a model stays
+// routable as long as any worker still serves it (connection-identified routing,
+// M1 phase 4).
 type ModelRegistry interface {
-	RegisterModel(Model)
-	UnregisterModel(name string)
+	RegisterInstance(workerID string, m Model)
+	UnregisterWorker(workerID string)
 }
 
 // Hub manages persistent outbound-initiated WebSocket connections from remote
@@ -43,12 +46,11 @@ type Hub struct {
 }
 
 type hubWorker struct {
-	info   WorkerInfo
-	rw     *remoteWorker      // the connection's write pump + request demux
-	served []wire.ServedModel // models to unregister when this worker leaves
+	info WorkerInfo
+	rw   *remoteWorker // the connection's write pump + request demux
 
 	// unregOnce makes route teardown idempotent: drain and the final disconnect
-	// both unregister this worker's models, and whichever runs first wins.
+	// both unregister this worker's instances, and whichever runs first wins.
 	unregOnce sync.Once
 }
 
@@ -127,8 +129,7 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 	wid := newHubWorkerID()
 	now := time.Now()
 	hw := &hubWorker{
-		rw:     rw,
-		served: join.Models,
+		rw: rw,
 		info: WorkerInfo{
 			ID:          wid,
 			Name:        join.Name,
@@ -152,14 +153,17 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Register one gateway route per served model so the gateway dispatches
-	// matching requests over this connection; drop them when the worker leaves —
-	// whether it drains, disconnects, or times out (whichever comes first, via
-	// unregOnce).
+	// Register one gateway instance per served model, tagged with this
+	// connection's worker id, so the gateway dispatches matching requests over
+	// this connection; drop them when the worker leaves — whether it drains,
+	// disconnects, or times out (whichever comes first, via unregOnce). Because
+	// instances carry the worker id, this teardown removes only this connection's
+	// routes, so a reconnecting worker or a second worker serving the same model
+	// never loses a live route.
 	for _, sm := range join.Models {
-		h.registerModel(Model{Name: sm.Name, Exec: rw, ContextWindow: sm.ContextWindow})
+		h.registerInstance(wid, Model{Name: sm.Name, Exec: rw, ContextWindow: sm.ContextWindow})
 	}
-	defer h.unregisterModels(hw)
+	defer h.unregisterWorker(hw)
 
 	for {
 		conn.SetReadDeadline(time.Now().Add(heartbeatTimeout)) //nolint:errcheck
@@ -200,24 +204,23 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// registerModel adds a served-model route to the gateway, if a registry is set.
-func (h *Hub) registerModel(m Model) {
+// registerInstance adds one served-model instance to the gateway, tagged with
+// the worker connection's id, if a registry is set.
+func (h *Hub) registerInstance(workerID string, m Model) {
 	if h.registry != nil {
-		h.registry.RegisterModel(m)
+		h.registry.RegisterInstance(workerID, m)
 	}
 }
 
-// unregisterModels removes a worker's routes from the gateway exactly once, so
-// new requests stop resolving to it. Phase 4 re-keys routes by connection
-// identity; until then this is name-keyed, so a worker reconnecting under the
-// same model name relies on registerModel running after this (re-add wins).
-func (h *Hub) unregisterModels(hw *hubWorker) {
+// unregisterWorker removes all of a worker connection's instances from the
+// gateway exactly once, so new requests stop resolving to it. Because routes are
+// connection-identified, this drops only this worker's instances — a model still
+// served by another connection (a reconnect overlap or a same-model replica)
+// keeps its route.
+func (h *Hub) unregisterWorker(hw *hubWorker) {
 	hw.unregOnce.Do(func() {
-		if h.registry == nil {
-			return
-		}
-		for _, sm := range hw.served {
-			h.registry.UnregisterModel(sm.Name)
+		if h.registry != nil {
+			h.registry.UnregisterWorker(hw.info.ID)
 		}
 	})
 }
@@ -230,7 +233,7 @@ func (h *Hub) beginDraining(hw *hubWorker) {
 	h.mu.Lock()
 	hw.info.Draining = true
 	h.mu.Unlock()
-	h.unregisterModels(hw)
+	h.unregisterWorker(hw)
 }
 
 // servedNames extracts the model names from a join's served-model list.

@@ -17,23 +17,34 @@ import (
 	"github.com/orchestra-hq/atlas/internal/wire"
 )
 
-// drainRegistry is a minimal ModelRegistry for the hub's drain/timeout tests.
+// drainRegistry is a minimal ModelRegistry for the hub's drain/timeout tests. It
+// tracks the owning worker id per model name so UnregisterWorker drops only that
+// worker's instances, matching the gateway's connection-identified routing.
 type drainRegistry struct {
 	mu     sync.Mutex
-	models map[string]Model
+	models map[string]Model  // name -> model
+	owner  map[string]string // name -> worker id
 }
 
-func newDrainRegistry() *drainRegistry { return &drainRegistry{models: map[string]Model{}} }
+func newDrainRegistry() *drainRegistry {
+	return &drainRegistry{models: map[string]Model{}, owner: map[string]string{}}
+}
 
-func (r *drainRegistry) RegisterModel(m Model) {
+func (r *drainRegistry) RegisterInstance(workerID string, m Model) {
 	r.mu.Lock()
 	r.models[m.Name] = m
+	r.owner[m.Name] = workerID
 	r.mu.Unlock()
 }
 
-func (r *drainRegistry) UnregisterModel(name string) {
+func (r *drainRegistry) UnregisterWorker(workerID string) {
 	r.mu.Lock()
-	delete(r.models, name)
+	for name, owner := range r.owner {
+		if owner == workerID {
+			delete(r.models, name)
+			delete(r.owner, name)
+		}
+	}
 	r.mu.Unlock()
 }
 
@@ -61,16 +72,16 @@ func waitForCond(t *testing.T, cond func() bool, what string) {
 // one model, and returns the live connection plus the assigned worker id. The
 // caller controls every subsequent frame, so it can model a worker that goes
 // silent (no heartbeat, no response) — the crashed-but-connected case.
-func joinRawWorker(t *testing.T, hubURL, token, model string) (*websocket.Conn, string) {
+func joinRawWorker(t *testing.T, hubURL string) (*websocket.Conn, string) {
 	t.Helper()
 	conn, _, err := websocket.DefaultDialer.Dial(hubURL, nil)
 	if err != nil {
 		t.Fatalf("dial hub: %v", err)
 	}
 	join, _ := wire.Encode(wire.MsgJoin, "", wire.JoinPayload{
-		Token:   token,
+		Token:   "tok", // matches NewHub("tok", …) in these tests
 		Version: "test",
-		Models:  []wire.ServedModel{{Name: model, ContextWindow: 4096}},
+		Models:  []wire.ServedModel{{Name: "m", ContextWindow: 4096}}, // tests serve a single model "m"
 	})
 	data, _ := json.Marshal(join)
 	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
@@ -118,7 +129,7 @@ func TestHub_timeoutUnblocksInflight(t *testing.T) {
 	defer ts.Close()
 	url := "ws" + strings.TrimPrefix(ts.URL, "http")
 
-	conn, _ := joinRawWorker(t, url, "tok", "m") // never heartbeats or responds
+	conn, _ := joinRawWorker(t, url) // never heartbeats or responds
 	defer func() { _ = conn.Close() }()
 
 	var m Model
@@ -164,7 +175,7 @@ func TestHub_drainStopsRouting(t *testing.T) {
 	defer ts.Close()
 	url := "ws" + strings.TrimPrefix(ts.URL, "http")
 
-	conn, _ := joinRawWorker(t, url, "tok", "m")
+	conn, _ := joinRawWorker(t, url)
 	defer func() { _ = conn.Close() }()
 	waitForCond(t, func() bool { _, ok := reg.get(); return ok }, "model registered")
 
@@ -198,7 +209,7 @@ func TestHub_removeWorkerSendsDrain(t *testing.T) {
 	defer ts.Close()
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/workers/connect"
 
-	conn, wid := joinRawWorker(t, wsURL, "tok", "m")
+	conn, wid := joinRawWorker(t, wsURL)
 	defer func() { _ = conn.Close() }()
 	waitForCond(t, func() bool { _, ok := reg.get(); return ok }, "model registered")
 
@@ -234,5 +245,45 @@ func TestHub_removeWorkerSendsDrain(t *testing.T) {
 	}
 	if env.Type != wire.MsgDrain {
 		t.Errorf("worker received %q, want drain", env.Type)
+	}
+}
+
+// TestHub_sameModelTwoConnectionsKeepsRoute is the G11 route-identity guarantee
+// at the hub level, over real connections: two workers join serving the same
+// model name, each under a fresh per-connection worker id. When one connection
+// drops, the hub's teardown removes only that connection's instance, so the
+// model stays routable via the other — the case a name-keyed registry dropped.
+func TestHub_sameModelTwoConnectionsKeepsRoute(t *testing.T) {
+	gw := NewGateway(testKey, nil, nil)
+	hub := NewHub("tok", gw)
+	ts := httptest.NewServer(http.HandlerFunc(hub.HandleConnect))
+	defer ts.Close()
+	url := "ws" + strings.TrimPrefix(ts.URL, "http")
+
+	routes := func() int {
+		gw.mu.RLock()
+		defer gw.mu.RUnlock()
+		return len(gw.routes["m"])
+	}
+
+	conn1, _ := joinRawWorker(t, url)
+	defer func() { _ = conn1.Close() }()
+	conn2, _ := joinRawWorker(t, url)
+	defer func() { _ = conn2.Close() }()
+
+	waitForCond(t, func() bool { return routes() == 2 }, "both instances registered")
+
+	// One connection drops; its teardown must remove only its own instance.
+	_ = conn1.Close()
+	waitForCond(t, func() bool { return routes() == 1 }, "dropped worker's instance removed")
+	if _, ok := gw.resolve("m"); !ok {
+		t.Fatal("model stopped resolving after one of two workers dropped")
+	}
+
+	// The remaining connection drops; now the model is gone.
+	_ = conn2.Close()
+	waitForCond(t, func() bool { return routes() == 0 }, "last instance removed")
+	if _, ok := gw.resolve("m"); ok {
+		t.Error("model still resolving after both workers dropped")
 	}
 }
