@@ -57,6 +57,10 @@ func (c *fakeCommander) loadTargets(model string) []string {
 	return out
 }
 
+// model is smallModel in every current caller; the param mirrors loadTargets and
+// keeps the helper general for tests that unload other models.
+//
+//nolint:unparam // intentionally general; see comment above
 func (c *fakeCommander) unloadTargets(model string) []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()

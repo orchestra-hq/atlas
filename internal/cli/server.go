@@ -19,11 +19,13 @@ import (
 )
 
 type serverOptions struct {
-	addr     string
-	token    string
-	apiKey   string
-	aliases  []string
-	stateDir string
+	addr             string
+	token            string
+	apiKey           string
+	aliases          []string
+	stateDir         string
+	autostartTimeout time.Duration
+	idleTimeout      time.Duration
 }
 
 func newServerCmd() *cobra.Command {
@@ -45,6 +47,10 @@ func newServerCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&opts.aliases, "alias", nil,
 		"model alias as name=target, e.g. claude-sonnet-4-6=qwen2.5-1.5b-instruct; resolves once a worker registers the target (docs/api-surface.md); repeat for several")
 	cmd.Flags().StringVar(&opts.stateDir, "state-dir", defaultStateDir(), "directory for state (logs, future SQLite DB)")
+	cmd.Flags().DurationVar(&opts.autostartTimeout, "autostart-timeout", 5*time.Minute,
+		"how long a request waits for a model to auto-start on first use (0 disables auto-start)")
+	cmd.Flags().DurationVar(&opts.idleTimeout, "idle-timeout", 15*time.Minute,
+		"unload an auto-started model after this long with no requests (0 disables idle-stop)")
 	return cmd
 }
 
@@ -105,7 +111,13 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 	// deployments as workers join and leave (M1 phase 4b). The hub notifies it of
 	// worker/model events and sends its load/unload commands.
 	sched := server.NewScheduler(hub, cat, logger)
+	sched.SetLifecycle(opts.autostartTimeout, opts.idleTimeout)
 	hub.SetScheduler(sched)
+	// Auto-start (a request for an un-deployed catalog model deploys it on the
+	// fleet and waits) and idle-stop (an idle auto-started model is unloaded) —
+	// M1 phase 4b-2. The reaper runs until the server's context is cancelled.
+	gw.SetAutostarter(sched)
+	go sched.Run(ctx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /workers/connect", hub.HandleConnect)

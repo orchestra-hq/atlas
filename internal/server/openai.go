@@ -41,7 +41,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	model, ok := g.resolve(coreReq.Model)
+	model, ok := g.resolveOrStart(r.Context(), coreReq.Model)
 	if !ok {
 		writeOpenAIModelNotFound(w, coreReq.Model)
 		return
