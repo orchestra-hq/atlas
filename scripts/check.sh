@@ -23,6 +23,16 @@ if [ -n "$md_files" ]; then
   printf '%s\n' "$md_files" | tr '\n' '\0' | xargs -0 npx --yes markdownlint-cli2 --fix
 fi
 
+echo "==> Lint GitHub workflows (actionlint)"
+# Validates the workflow schema, job/expression references, and shellchecks the
+# bash inside run: steps — far more than a bare YAML parse. Optional tool, so
+# skip with a hint rather than failing if it isn't installed.
+if command -v actionlint >/dev/null 2>&1; then
+  actionlint
+else
+  echo "    actionlint not installed; skipping (brew install actionlint)"
+fi
+
 echo "==> go vet"
 go vet ./...
 

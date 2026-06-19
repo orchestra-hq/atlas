@@ -370,7 +370,7 @@ jobs:
 
           echo "=== Worker B leaves: model A keeps serving, model B becomes unavailable ==="
           kill -TERM "$(cat wb.pid)"
-          for _ in $(seq 1 20); do [ "$(ask "$CONF_REASONING_NAME")" = "200" ] && sleep 1 || break; done
+          for _ in $(seq 1 20); do if [ "$(ask "$CONF_REASONING_NAME")" = "200" ]; then sleep 1; else break; fi; done
           A2=$(ask "$CONF_MODEL_NAME"); B2=$(ask "$CONF_REASONING_NAME")
           echo "after B leaves: model A → $A2 ; model B → $B2"
           if [ "$A2" != "200" ]; then
@@ -433,7 +433,7 @@ jobs:
           if ! ./atlas stop "$CONF_REASONING_NAME" --server "$API"; then
             echo "::error::atlas stop failed"; exit 1
           fi
-          for _ in $(seq 1 20); do [ "$(ask "$CONF_REASONING_NAME")" = "200" ] && sleep 1 || break; done
+          for _ in $(seq 1 20); do if [ "$(ask "$CONF_REASONING_NAME")" = "200" ]; then sleep 1; else break; fi; done
           GONE=$(ask "$CONF_REASONING_NAME")
           echo "after stop → $GONE"
           if [ "$GONE" = "200" ]; then

@@ -7,6 +7,9 @@
 /atlas
 coverage.out
 
+# Scratch space for local, uncommitted notes (e.g. PR body files for ship.sh)
+/.scratch/
+
 # Local e2e: downloaded model weights and engine state
 /models/
 /.atlas-state/
