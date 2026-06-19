@@ -357,3 +357,26 @@ func TestChatCompletionContextWindowRejected(t *testing.T) {
 		t.Errorf("status = %d, type = %v", resp.StatusCode, errType(body))
 	}
 }
+
+// TestChatCompletionDispatchesCanonicalForAlias verifies the OpenAI surface
+// dispatches to the worker under the canonical served name, not the client's
+// alias — a remote worker routes by req.Model and would reject the alias.
+func TestChatCompletionDispatchesCanonicalForAlias(t *testing.T) {
+	exec := &echoExecutor{reply: "hi"}
+	srv := registryServer([]Model{{Name: testModel, Exec: exec}}, map[string]string{"gpt-4o": testModel})
+	defer srv.Close()
+
+	resp, body := chatPost(t, srv, testKey,
+		`{"model":"gpt-4o","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %v", resp.StatusCode, body)
+	}
+	// The executor (a remote worker) must see the canonical name.
+	if exec.gotReq.Model != testModel {
+		t.Errorf("executor saw model %q, want canonical %q", exec.gotReq.Model, testModel)
+	}
+	// The response still echoes the alias the client addressed.
+	if body["model"] != "gpt-4o" {
+		t.Errorf("response model = %v, want the requested alias gpt-4o", body["model"])
+	}
+}

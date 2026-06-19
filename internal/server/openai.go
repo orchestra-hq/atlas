@@ -56,9 +56,14 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	stops := coreReq.StopSequences
 	coreReq.StopSequences = nil
 
+	// The client may have addressed an alias; dispatch under the canonical served
+	// name (a remote worker routes by req.Model) but echo the requested name back.
+	requested := coreReq.Model
+	coreReq.Model = model.Name
+
 	if req.Stream {
 		includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
-		g.streamChatCompletion(w, r, model.Exec, coreReq, stops, includeUsage)
+		g.streamChatCompletion(w, r, model.Exec, coreReq, requested, stops, includeUsage)
 		return
 	}
 
@@ -69,8 +74,8 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	resp, _ = core.ApplyStopSequences(resp, stops)
-	recordUsage(r.Context(), coreReq.Model, resp.Usage.InputTokens, resp.Usage.OutputTokens)
-	openai.WriteJSON(w, http.StatusOK, openai.FromCore(newCompletionID(), time.Now().Unix(), coreReq.Model, resp))
+	recordUsage(r.Context(), requested, resp.Usage.InputTokens, resp.Usage.OutputTokens)
+	openai.WriteJSON(w, http.StatusOK, openai.FromCore(newCompletionID(), time.Now().Unix(), requested, resp))
 }
 
 // streamChatCompletion serves a streaming POST /v1/chat/completions. It opens
@@ -79,8 +84,11 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 // arrives so behavior matches the non-streaming path. Once the headers are
 // written the status is committed: a mid-stream engine failure becomes an error
 // event, not an HTTP error.
-func (g *Gateway) streamChatCompletion(w http.ResponseWriter, r *http.Request, exec Executor, req core.Request, stops []string, includeUsage bool) {
-	sw, err := openai.NewStreamWriter(w, newCompletionID(), time.Now().Unix(), req.Model)
+// req is the request to dispatch (its Model is the canonical served name);
+// echoModel is the name the client addressed (possibly an alias), echoed back on
+// the stream and in usage.
+func (g *Gateway) streamChatCompletion(w http.ResponseWriter, r *http.Request, exec Executor, req core.Request, echoModel string, stops []string, includeUsage bool) {
+	sw, err := openai.NewStreamWriter(w, newCompletionID(), time.Now().Unix(), echoModel)
 	if err != nil {
 		openai.WriteError(w, &openai.Error{Status: http.StatusInternalServerError, Type: openai.ErrAPI, Msg: "streaming unsupported"})
 		return
@@ -101,7 +109,7 @@ func (g *Gateway) streamChatCompletion(w http.ResponseWriter, r *http.Request, e
 		return
 	}
 
-	recordUsage(r.Context(), req.Model, sink.usage.InputTokens, sink.usage.OutputTokens)
+	recordUsage(r.Context(), echoModel, sink.usage.InputTokens, sink.usage.OutputTokens)
 	_ = sw.Finish(sink.reason, sink.usage, includeUsage)
 }
 

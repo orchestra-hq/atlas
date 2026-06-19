@@ -158,6 +158,36 @@ func TestReapIdle_keepsTouchedDeployment(t *testing.T) {
 	}
 }
 
+// TestScale_takesOwnershipFromAutostart confirms that scaling an auto-started
+// deployment makes it operator-owned, so the idle reaper no longer unloads it.
+func TestScale_takesOwnershipFromAutostart(t *testing.T) {
+	cmd := newFakeCommander()
+	s := newTestScheduler(t, cmd)
+	s.SetLifecycle(2*time.Second, time.Minute)
+	// One worker keeps placement deterministic: the load lands here and ModelReady
+	// targets the worker that got it. The point is ownership, not replica spread.
+	s.WorkerJoined(WorkerSnapshot{ID: "a", Engine: "llamacpp", Hardware: ramWorker(16)})
+
+	// Auto-start one replica (auto == true, idle-reapable).
+	done := make(chan bool, 1)
+	go func() { done <- s.EnsureModel(context.Background(), smallModel) }()
+	waitForCond(t, func() bool { return len(cmd.loadTargets(smallModel)) == 1 }, "auto-start load")
+	s.ModelReady("a", smallModel, 0)
+	<-done
+
+	// An operator scale takes ownership; the reaper must then leave it alone.
+	if err := s.Scale(smallModel, 2); err != nil {
+		t.Fatalf("scale: %v", err)
+	}
+	s.mu.Lock()
+	s.deployments[smallModel].lastUsed = time.Now().Add(-time.Hour)
+	s.mu.Unlock()
+	s.reapIdle()
+	if got := cmd.unloadTargets(smallModel); len(got) != 0 {
+		t.Fatalf("idle-stop unloaded a scaled deployment %v; want none (scale took ownership)", got)
+	}
+}
+
 // TestRun_disabledReturnsImmediately confirms Run is a no-op when idle-stop is
 // off, so it does not leak a goroutine.
 func TestRun_disabledReturnsImmediately(t *testing.T) {

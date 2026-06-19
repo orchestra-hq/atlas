@@ -288,6 +288,7 @@ func (s *Scheduler) Scale(model string, replicas int) error {
 	d, exists := s.deployments[model]
 	if exists {
 		d.replicas = replicas
+		d.auto = false // an explicit scale takes ownership: no longer idle-reapable
 	}
 	s.mu.Unlock()
 	if !exists {
