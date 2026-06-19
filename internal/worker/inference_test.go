@@ -249,6 +249,46 @@ func TestRemoteExecute_cancelPropagates(t *testing.T) {
 	}
 }
 
+// TestRemoteCountTokens_cancelPropagates confirms cancelling a count_tokens
+// request aborts the engine's tokenizer call on the worker — handleCountTokens
+// must register for cancellation like handleExecute, not run the engine on the
+// raw connection context.
+func TestRemoteCountTokens_cancelPropagates(t *testing.T) {
+	engineSawCancel := make(chan struct{})
+	eng := &fakeEngine{count: func(ctx context.Context, _ core.Request) (int, error) {
+		<-ctx.Done() // block until the gateway cancels
+		close(engineSawCancel)
+		return 0, ctx.Err()
+	}}
+	m, teardown := dialedModel(t, eng)
+	defer teardown()
+
+	tc := m.Exec.(server.TokenCounter)
+	ctx, cancel := context.WithCancel(context.Background())
+	countDone := make(chan error, 1)
+	go func() {
+		_, err := tc.CountTokens(ctx, textReq())
+		countDone <- err
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-engineSawCancel:
+	case <-time.After(2 * time.Second):
+		t.Fatal("engine tokenizer call did not observe cancellation")
+	}
+	select {
+	case err := <-countDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("CountTokens returned %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("CountTokens did not return after cancel")
+	}
+}
+
 // TestRemoteExecute_concurrent fires many requests over the one connection at
 // once, asserting each response is demuxed back to its own caller by request id.
 func TestRemoteExecute_concurrent(t *testing.T) {

@@ -78,6 +78,9 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = conn.Close() }()
 
+	// Bound every frame before the first read — the join frame is read pre-auth,
+	// so an unbounded read here is an unauthenticated OOM vector.
+	conn.SetReadLimit(wire.MaxFrameBytes)
 	conn.SetReadDeadline(time.Now().Add(heartbeatTimeout)) //nolint:errcheck
 
 	_, data, err := conn.ReadMessage()

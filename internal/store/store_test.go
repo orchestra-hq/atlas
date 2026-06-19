@@ -141,6 +141,46 @@ func TestHasFalseWhenBlobMissing(t *testing.T) {
 	}
 }
 
+// A cached blob that no longer matches its recorded size (a truncated or
+// partially-written file from an interrupted out-of-band copy) must read as
+// absent so the caller re-pulls, rather than being handed to the engine as
+// valid weights.
+func TestTruncatedBlobReadsAbsentAndRepulls(t *testing.T) {
+	body := []byte("the full set of weights")
+	srv, hits := blobServer(t, body)
+	s := New(t.TempDir())
+	spec := PullSpec{Name: "m", Engine: "llamacpp", URL: srv.URL + "/blob", SHA256: sha256hex(body)}
+	if _, err := s.Pull(context.Background(), spec); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+	if *hits != 1 {
+		t.Fatalf("server hit %d times after first pull, want 1", *hits)
+	}
+
+	// Truncate the cached blob behind the store's back.
+	if err := os.Truncate(s.blobPath("sha256:"+spec.SHA256), int64(len(body)-3)); err != nil {
+		t.Fatalf("truncate blob: %v", err)
+	}
+
+	if s.Has("m") {
+		t.Error("Has = true with a truncated blob")
+	}
+	if _, err := s.Path("m"); err == nil {
+		t.Error("Path = nil error with a truncated blob")
+	}
+
+	// Pull must not short-circuit on the corrupt blob; it re-downloads.
+	if _, err := s.Pull(context.Background(), spec); err != nil {
+		t.Fatalf("re-Pull: %v", err)
+	}
+	if *hits != 2 {
+		t.Errorf("server hit %d times, want 2 (corrupt blob should re-download)", *hits)
+	}
+	if !s.Has("m") {
+		t.Error("Has = false after re-pull repaired the blob")
+	}
+}
+
 func TestProgressReported(t *testing.T) {
 	body := []byte("0123456789")
 	srv, _ := blobServer(t, body)

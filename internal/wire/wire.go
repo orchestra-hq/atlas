@@ -14,6 +14,15 @@ import (
 	"github.com/orchestra-hq/atlas/internal/core"
 )
 
+// MaxFrameBytes bounds a single WebSocket frame on both ends of the channel, so
+// neither a malicious/buggy worker nor a compromised server can OOM its peer by
+// sending one arbitrarily large frame (gorilla buffers a whole frame in memory
+// before it is unmarshaled). It must comfortably exceed the gateway's request
+// body cap (32 MiB) since an execute frame carries the full core.Request plus
+// JSON envelope overhead; a frame larger than this fails the read and closes the
+// connection.
+const MaxFrameBytes = 64 << 20 // 64 MiB
+
 // MessageType identifies the purpose of a WebSocket frame.
 type MessageType string
 

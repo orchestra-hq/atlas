@@ -25,6 +25,30 @@ type Client struct {
 	http    *http.Client
 }
 
+// maxResponseBytes caps a buffered engine response so a misconfigured or
+// compromised engine cannot OOM the worker by returning a huge or unbounded
+// body. Generous — a full completion is far smaller — and the streaming path is
+// separately bounded per line (scanner.Buffer below).
+const maxResponseBytes = 64 << 20 // 64 MiB
+
+// maxErrorBytes caps how much of a non-200 body we buffer before truncating it
+// into an error message; only the first 512 bytes are ever shown.
+const maxErrorBytes = 64 << 10 // 64 KiB
+
+// readCapped reads up to maxResponseBytes from r, returning ErrEngineUnavailable
+// if the body exceeds that — so a runaway engine fails the request loudly
+// instead of exhausting memory. label names the read for the error message.
+func readCapped(name, label string, r io.Reader) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(r, maxResponseBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("%s: read %s: %w: %w", name, label, core.ErrEngineUnavailable, err)
+	}
+	if int64(len(raw)) > maxResponseBytes {
+		return nil, fmt.Errorf("%s: %s exceeds %d bytes: %w", name, label, maxResponseBytes, core.ErrEngineUnavailable)
+	}
+	return raw, nil
+}
+
 // NewClient builds a client for engine name targeting baseURL (e.g.
 // http://127.0.0.1:8000). model is the name echoed in the OpenAI payload; the
 // engine serves whatever weights it was launched with regardless.
@@ -58,9 +82,9 @@ func (c *Client) Execute(ctx context.Context, req core.Request) (core.Response, 
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := readCapped(c.name, "response", resp.Body)
 	if err != nil {
-		return core.Response{}, fmt.Errorf("%s: read response: %w: %w", c.name, core.ErrEngineUnavailable, err)
+		return core.Response{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		return core.Response{}, fmt.Errorf("%s: engine returned %d: %s: %w", c.name, resp.StatusCode, truncate(raw, 512), core.ErrEngineUnavailable)
@@ -100,7 +124,7 @@ func (c *Client) ExecuteStream(ctx context.Context, req core.Request, sink core.
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(resp.Body)
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBytes))
 		return fmt.Errorf("%s: engine returned %d: %s: %w", c.name, resp.StatusCode, truncate(raw, 512), core.ErrEngineUnavailable)
 	}
 
@@ -230,9 +254,9 @@ func (c *Client) doJSON(httpReq *http.Request, path string, out any) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := readCapped(c.name, path+" response", resp.Body)
 	if err != nil {
-		return fmt.Errorf("%s: read %s response: %w: %w", c.name, path, core.ErrEngineUnavailable, err)
+		return err
 	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("%s: %s returned %d: %s: %w", c.name, path, resp.StatusCode, truncate(raw, 512), core.ErrEngineUnavailable)
