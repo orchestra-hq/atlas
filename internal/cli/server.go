@@ -98,6 +98,7 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /workers/connect", hub.HandleConnect)
 	mux.HandleFunc("GET /admin/workers", hub.HandleListWorkers)
+	mux.HandleFunc("POST /admin/workers/{id}/drain", hub.HandleRemoveWorker)
 	// Gateway routes (/v1/*, /healthz, /readyz) handled by the gateway's mux
 	// as a catch-all; hub routes registered above take precedence.
 	mux.Handle("/", gw.Handler())

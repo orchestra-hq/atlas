@@ -55,8 +55,30 @@ func newWorkerCmd() *cobra.Command {
 }
 
 func runWorker(ctx context.Context, cmd *cobra.Command, opts *workerOptions) error {
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Two-stage shutdown: the first signal drains gracefully (in-flight requests
+	// finish, then the worker disconnects); a second signal forces an immediate
+	// stop by cancelling ctx.
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	drainCh := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-sigCh:
+			cmd.Println("\nDraining; press Ctrl-C again to force quit.")
+			close(drainCh)
+		}
+		select {
+		case <-ctx.Done():
+		case <-sigCh:
+			cancel()
+		}
+	}()
 
 	serverURL := opts.join
 	if serverURL == "" {
@@ -114,6 +136,7 @@ func runWorker(ctx context.Context, cmd *cobra.Command, opts *workerOptions) err
 		Token:     token,
 		Name:      name,
 		Models:    served,
+		Drain:     drainCh,
 		Logger:    log,
 	}); err != nil && ctx.Err() == nil {
 		return err

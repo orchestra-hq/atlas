@@ -15,10 +15,14 @@ import (
 	"github.com/orchestra-hq/atlas/internal/wire"
 )
 
-// heartbeatTimeout is how long the hub waits for any message before treating
-// the worker as gone. Workers send heartbeats every 10 s; this gives 3 missed
-// windows before eviction (phase 3 formalises the eviction policy).
-const heartbeatTimeout = 30 * time.Second
+// heartbeatTimeout is how long the hub waits for any message before treating the
+// worker as gone and tearing the connection down. Workers send heartbeats every
+// 10 s, so this is N=3 missed windows. The teardown is also the backstop for a
+// worker that crashed with its TCP connection lingering: it unblocks that
+// connection's in-flight requests with ErrEngineUnavailable within this window
+// instead of leaving them to hang until the client's own deadline. A var (not a
+// const) so tests can shrink it; production code never reassigns it.
+var heartbeatTimeout = 30 * time.Second
 
 // ModelRegistry is the gateway's model table as the hub mutates it: a worker
 // registers a route per served model when it joins and removes those routes
@@ -39,7 +43,13 @@ type Hub struct {
 }
 
 type hubWorker struct {
-	info WorkerInfo
+	info   WorkerInfo
+	rw     *remoteWorker      // the connection's write pump + request demux
+	served []wire.ServedModel // models to unregister when this worker leaves
+
+	// unregOnce makes route teardown idempotent: drain and the final disconnect
+	// both unregister this worker's models, and whichever runs first wins.
+	unregOnce sync.Once
 }
 
 // WorkerInfo is the gateway-facing snapshot of a connected worker.
@@ -51,6 +61,10 @@ type WorkerInfo struct {
 	Models      []string
 	ConnectedAt time.Time
 	LastSeen    time.Time
+	// Draining is true once the worker has begun graceful shutdown (it sent a
+	// drain, or the server is evicting it): no new requests route to it, but its
+	// in-flight requests are still completing.
+	Draining bool
 }
 
 // NewHub creates a Hub that authenticates workers with the given join token and
@@ -102,9 +116,19 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The connection now carries inference as well as heartbeats. The remote
+	// worker owns the single write pump and the request multiplexing; this read
+	// loop is the sole reader, dispatching heartbeats and routing inference
+	// responses to it.
+	rw := newRemoteWorker(conn)
+	go rw.writePump()
+	defer rw.close()
+
 	wid := newHubWorkerID()
 	now := time.Now()
 	hw := &hubWorker{
+		rw:     rw,
+		served: join.Models,
 		info: WorkerInfo{
 			ID:          wid,
 			Name:        join.Name,
@@ -128,50 +152,85 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The connection now carries inference as well as heartbeats. The remote
-	// worker owns the single write pump and the request multiplexing; this read
-	// loop is the sole reader, dispatching heartbeats and routing inference
-	// responses to it. Register one gateway route per served model so the
-	// gateway dispatches matching requests over this connection; drop them when
-	// the loop exits (the worker disconnected).
-	rw := newRemoteWorker(conn)
-	go rw.writePump()
-	defer rw.close()
-
-	if h.registry != nil {
-		for _, sm := range join.Models {
-			h.registry.RegisterModel(Model{Name: sm.Name, Exec: rw, ContextWindow: sm.ContextWindow})
-		}
-		defer func() {
-			for _, sm := range join.Models {
-				h.registry.UnregisterModel(sm.Name)
-			}
-		}()
+	// Register one gateway route per served model so the gateway dispatches
+	// matching requests over this connection; drop them when the worker leaves —
+	// whether it drains, disconnects, or times out (whichever comes first, via
+	// unregOnce).
+	for _, sm := range join.Models {
+		h.registerModel(Model{Name: sm.Name, Exec: rw, ContextWindow: sm.ContextWindow})
 	}
+	defer h.unregisterModels(hw)
 
 	for {
 		conn.SetReadDeadline(time.Now().Add(heartbeatTimeout)) //nolint:errcheck
 		_, data, err := conn.ReadMessage()
 		if err != nil {
-			return // timeout or disconnect; deferred cleanup removes the worker
+			// Timeout or disconnect. Deferred cleanup removes the worker and
+			// rw.close() unblocks every request still multiplexed on this
+			// connection with ErrEngineUnavailable, so a silently dead worker
+			// (crashed but TCP lingering) frees its in-flight requests within the
+			// heartbeat-timeout window rather than hanging until the client gives up.
+			return
 		}
 		var m wire.Message
 		if err := json.Unmarshal(data, &m); err != nil {
 			continue
 		}
-		if m.Type == wire.MsgHeartbeat {
+		switch m.Type {
+		case wire.MsgHeartbeat:
 			h.mu.Lock()
 			if w, ok := h.workers[wid]; ok {
 				w.info.LastSeen = time.Now()
 			}
 			h.mu.Unlock()
-			rw.sendAck(wire.MsgHeartbeatAck, wire.HeartbeatAckPayload{})
-			continue
+			rw.sendControl(wire.MsgHeartbeatAck, wire.HeartbeatAckPayload{})
+		case wire.MsgDrain:
+			// The worker is leaving: stop routing new requests to it now, but keep
+			// the connection open so its in-flight requests can finish. The worker
+			// sends drain_ack once they drain, then disconnects.
+			h.beginDraining(hw)
+		case wire.MsgDrainAck:
+			// The worker has finished draining and is disconnecting; let cleanup run.
+			return
+		default:
+			// Inference response (chunk/done/response/token_count/error): hand to the
+			// remote worker to demux back to the waiting request goroutine.
+			rw.route(m)
 		}
-		// Inference response (chunk/done/response/token_count/error): hand to the
-		// remote worker to demux back to the waiting request goroutine.
-		rw.route(m)
 	}
+}
+
+// registerModel adds a served-model route to the gateway, if a registry is set.
+func (h *Hub) registerModel(m Model) {
+	if h.registry != nil {
+		h.registry.RegisterModel(m)
+	}
+}
+
+// unregisterModels removes a worker's routes from the gateway exactly once, so
+// new requests stop resolving to it. Phase 4 re-keys routes by connection
+// identity; until then this is name-keyed, so a worker reconnecting under the
+// same model name relies on registerModel running after this (re-add wins).
+func (h *Hub) unregisterModels(hw *hubWorker) {
+	hw.unregOnce.Do(func() {
+		if h.registry == nil {
+			return
+		}
+		for _, sm := range hw.served {
+			h.registry.UnregisterModel(sm.Name)
+		}
+	})
+}
+
+// beginDraining marks a worker as draining and removes its routes so no new
+// requests are sent to it; its in-flight requests continue over the still-open
+// connection. Idempotent — drain may arrive once from the worker and again from
+// an operator remove.
+func (h *Hub) beginDraining(hw *hubWorker) {
+	h.mu.Lock()
+	hw.info.Draining = true
+	h.mu.Unlock()
+	h.unregisterModels(hw)
 }
 
 // servedNames extracts the model names from a join's served-model list.
@@ -200,6 +259,33 @@ func (h *Hub) HandleListWorkers(w http.ResponseWriter, _ *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(response{Workers: infos})
+}
+
+// HandleRemoveWorker serves POST /admin/workers/{id}/drain: it begins
+// server-initiated graceful shutdown of the worker. 202 if the worker is
+// connected, 404 otherwise.
+func (h *Hub) HandleRemoveWorker(w http.ResponseWriter, r *http.Request) {
+	if h.DrainWorker(r.PathValue("id")) {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	http.Error(w, "worker not found", http.StatusNotFound)
+}
+
+// DrainWorker begins server-initiated graceful shutdown of a worker: it stops
+// routing new requests to it and sends a drain so the worker finishes its
+// in-flight requests, sends drain_ack, and disconnects. Returns false if no
+// worker with that id is connected.
+func (h *Hub) DrainWorker(id string) bool {
+	h.mu.RLock()
+	hw, ok := h.workers[id]
+	h.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	h.beginDraining(hw)
+	hw.rw.sendControl(wire.MsgDrain, wire.DrainPayload{})
+	return true
 }
 
 // Workers returns a point-in-time snapshot of all connected workers.

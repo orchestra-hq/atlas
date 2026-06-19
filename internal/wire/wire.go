@@ -1,11 +1,10 @@
 // Package wire defines the WebSocket message types shared between the server
 // hub and the worker client (ADR-0007). All messages are JSON text frames with
 // the envelope {type, id?, payload?}. It carries two kinds of traffic: the
-// control plane (join, heartbeat) and inference (execute/count_tokens/cancel
+// control plane (join, heartbeat, drain) and inference (execute/count_tokens/cancel
 // server→worker; response/chunk/done/token_count/error worker→server). The
 // inference payloads carry internal/core types — the same representation the
-// in-process channel uses — so no translation layer is introduced. Drain lands
-// in M1 phase 3.
+// in-process channel uses — so no translation layer is introduced.
 package wire
 
 import (
@@ -26,13 +25,21 @@ const MaxFrameBytes = 64 << 20 // 64 MiB
 // MessageType identifies the purpose of a WebSocket frame.
 type MessageType string
 
-// Worker↔server message types. Control-plane (join, heartbeat) plus the M1
-// phase-2 inference set; drain is added in M1 phase 3.
+// Worker↔server message types: the control plane (join, heartbeat, drain) plus
+// the inference set.
 const (
 	MsgJoin         MessageType = "join"
 	MsgJoinAck      MessageType = "join_ack"
 	MsgHeartbeat    MessageType = "heartbeat"
 	MsgHeartbeatAck MessageType = "heartbeat_ack"
+
+	// Graceful shutdown. drain is bidirectional: a worker sends it on SIGTERM to
+	// announce it is leaving, and the server sends it to evict a worker (atlas
+	// workers remove). Either way the server stops routing new work to the worker;
+	// the worker finishes its in-flight requests, then sends drain_ack and
+	// disconnects (drain_ack is always worker → server, terminal).
+	MsgDrain    MessageType = "drain"
+	MsgDrainAck MessageType = "drain_ack"
 
 	// Inference, server → worker.
 	MsgExecute     MessageType = "execute"
@@ -112,6 +119,15 @@ type HeartbeatPayload struct {
 
 // HeartbeatAckPayload is the server's response to a heartbeat.
 type HeartbeatAckPayload struct{}
+
+// DrainPayload announces the start of graceful shutdown (phase 3). It carries no
+// fields: the connection identifies the worker on both ends. Sent worker → server
+// on SIGTERM, or server → worker to evict a worker.
+type DrainPayload struct{}
+
+// DrainAckPayload confirms a drained worker has finished its in-flight requests
+// and is about to disconnect (worker → server, terminal).
+type DrainAckPayload struct{}
 
 // ExecutePayload runs one inference request on the worker (server → worker).
 // Stream selects the worker's streaming path (chunk/done) over the buffered one

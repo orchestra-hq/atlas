@@ -22,6 +22,10 @@ var (
 	heartbeatInterval = 10 * time.Second
 	reconnectInitial  = 1 * time.Second
 	reconnectMax      = 60 * time.Second
+	// drainTimeout bounds how long a draining worker waits for its in-flight
+	// requests to finish before forcing the connection closed, so a stuck request
+	// cannot block shutdown indefinitely.
+	drainTimeout = 30 * time.Second
 )
 
 // Inferencer is the worker-local inference target an execute message is
@@ -53,6 +57,12 @@ type DialConfig struct {
 	// inference to them over the channel. Empty is valid (a worker that only
 	// reports its inventory, e.g. the phase-1 heartbeat path).
 	Models []ServedModel
+	// Drain, when closed, begins graceful shutdown of the active connection: the
+	// worker announces a drain to the server, stops accepting new requests, lets
+	// its in-flight requests finish, then disconnects. Dial returns nil once the
+	// connection has drained. Nil disables it (the connection only ends on ctx
+	// cancellation or a drop).
+	Drain <-chan struct{}
 	// Logger receives status events; defaults to slog.Default() if nil.
 	Logger *slog.Logger
 }
@@ -74,10 +84,21 @@ func Dial(ctx context.Context, cfg DialConfig) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		// A drain requested while reconnecting (no live connection to drain) is
+		// just a stop: nothing in flight, so exit without reconnecting.
+		if closed(cfg.Drain) {
+			return nil
+		}
 
-		joined, err := dialOnce(ctx, cfg, hw, log)
+		joined, drained, err := dialOnce(ctx, cfg, hw, log)
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		// A completed drain ends the worker — do not reconnect. This covers both a
+		// SIGTERM (cfg.Drain) and a server-initiated remove (a drain frame), so an
+		// evicted worker stays gone rather than rejoining as a fresh worker.
+		if drained {
+			return nil
 		}
 		// A connection that successfully joined and then dropped is not a
 		// failure to reach the server — reset the backoff so a healthy worker
@@ -91,6 +112,8 @@ func Dial(ctx context.Context, cfg DialConfig) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
+			case <-cfg.Drain:
+				return nil
 			case <-time.After(backoff):
 			}
 			if backoff < reconnectMax {
@@ -103,14 +126,29 @@ func Dial(ctx context.Context, cfg DialConfig) error {
 	}
 }
 
+// closed reports whether ch has been closed. A nil channel is never closed.
+func closed(ch <-chan struct{}) bool {
+	if ch == nil {
+		return false
+	}
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}
+
 // dialOnce makes one connection attempt and runs it until it drops or ctx is
-// cancelled. The returned joined reports whether the join handshake completed
-// (so the caller can reset reconnect backoff for a connection that was healthy
-// before dropping, vs. one that never reached the server).
-func dialOnce(ctx context.Context, cfg DialConfig, hw wire.Hardware, log *slog.Logger) (joined bool, err error) {
+// cancelled. joined reports whether the join handshake completed (so the caller
+// can reset reconnect backoff for a connection that was healthy before dropping,
+// vs. one that never reached the server). drained reports whether the connection
+// ended because the worker drained — either a SIGTERM or a server-initiated
+// remove — so the caller stops rather than reconnecting.
+func dialOnce(ctx context.Context, cfg DialConfig, hw wire.Hardware, log *slog.Logger) (joined, drained bool, err error) {
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, cfg.ServerURL, nil)
 	if err != nil {
-		return false, fmt.Errorf("dial %s: %w", cfg.ServerURL, err)
+		return false, false, fmt.Errorf("dial %s: %w", cfg.ServerURL, err)
 	}
 	defer func() { _ = conn.Close() }()
 	// Bound every inbound frame so a misbehaving server cannot OOM the worker.
@@ -131,26 +169,26 @@ func dialOnce(ctx context.Context, cfg DialConfig, hw wire.Hardware, log *slog.L
 		Models:   served,
 	})
 	if err != nil {
-		return false, fmt.Errorf("encode join: %w", err)
+		return false, false, fmt.Errorf("encode join: %w", err)
 	}
 	if err := writeMsg(conn, joinMsg); err != nil {
-		return false, fmt.Errorf("send join: %w", err)
+		return false, false, fmt.Errorf("send join: %w", err)
 	}
 
 	_, ackData, err := conn.ReadMessage()
 	if err != nil {
-		return false, fmt.Errorf("read join_ack: %w", err)
+		return false, false, fmt.Errorf("read join_ack: %w", err)
 	}
 	var ackEnv wire.Message
 	if err := json.Unmarshal(ackData, &ackEnv); err != nil || ackEnv.Type != wire.MsgJoinAck {
-		return false, fmt.Errorf("expected join_ack, got %q", ackEnv.Type)
+		return false, false, fmt.Errorf("expected join_ack, got %q", ackEnv.Type)
 	}
 	var ack wire.JoinAckPayload
 	if err := json.Unmarshal(ackEnv.Payload, &ack); err != nil {
-		return false, fmt.Errorf("parse join_ack: %w", err)
+		return false, false, fmt.Errorf("parse join_ack: %w", err)
 	}
 	if !ack.Accepted {
-		return false, fmt.Errorf("join rejected by server: %s", ack.Reason)
+		return false, false, fmt.Errorf("join rejected by server: %s", ack.Reason)
 	}
 
 	log.Info("joined server", "worker_id", ack.WorkerID, "server", cfg.ServerURL, "models", len(served))
@@ -162,12 +200,14 @@ func dialOnce(ctx context.Context, cfg DialConfig, hw wire.Hardware, log *slog.L
 	defer connCancel()
 
 	sess := &session{
-		conn:     conn,
-		workerID: ack.WorkerID,
-		models:   models,
-		log:      log,
-		out:      make(chan wire.Message, 32),
-		inflight: make(map[string]context.CancelFunc),
+		conn:        conn,
+		workerID:    ack.WorkerID,
+		models:      models,
+		log:         log,
+		out:         make(chan wire.Message, 32),
+		serverDrain: make(chan struct{}),
+		drained:     make(chan struct{}),
+		inflight:    make(map[string]context.CancelFunc),
 	}
 
 	// One reader goroutine; the main loop below is the sole writer, so every
@@ -218,26 +258,76 @@ func dialOnce(ctx context.Context, cfg DialConfig, hw wire.Hardware, log *slog.L
 		}
 	}()
 
+	// closeConn stops the writer and waits for it to exit before the main
+	// goroutine writes the close frame, so there is never a concurrent writer.
+	closeConn := func() {
+		connCancel()
+		<-writerDone
+		_ = conn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "shutting down"))
+	}
+
+	// Drain triggers: drainTrigger is the external SIGTERM signal, serverDrainCh
+	// fires when the server evicts us. Both are nil-ed once draining starts so
+	// they cannot re-fire (a closed channel is always ready).
+	drainTrigger := cfg.Drain
+	serverDrainCh := sess.serverDrain
+	var drainDeadline <-chan time.Time
+
+	beginDrain := func(announce bool) {
+		drainTrigger, serverDrainCh = nil, nil
+		if announce {
+			// Tell the server to stop routing to us. Best-effort and non-blocking:
+			// the server also detects a leaving worker via the heartbeat timeout,
+			// so a backed-up writer must not wedge the drain.
+			if msg, err := wire.Encode(wire.MsgDrain, "", wire.DrainPayload{}); err == nil {
+				select {
+				case sess.out <- msg:
+				default:
+				}
+			}
+		}
+		sess.startDraining()
+		drainDeadline = time.After(drainTimeout)
+		log.Info("worker draining", "timeout", drainTimeout)
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
-			// Stop the writer and wait for it to exit before writing the close
-			// frame ourselves, so there is never a concurrent writer on conn.
+			// Hard shutdown (parent cancel, or a second signal): drop immediately.
+			closeConn()
+			return true, false, nil
+		case <-drainTrigger:
+			beginDrain(true)
+		case <-serverDrainCh:
+			beginDrain(false)
+		case <-sess.drained:
+			// In-flight requests finished: confirm the drain, then disconnect. The
+			// writer is stopped first so the main goroutine can write drain_ack and
+			// the close frame as the sole writer.
 			connCancel()
 			<-writerDone
+			if ackMsg, err := wire.Encode(wire.MsgDrainAck, "", wire.DrainAckPayload{}); err == nil {
+				_ = writeMsg(conn, ackMsg)
+			}
 			_ = conn.WriteMessage(websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, "shutting down"))
-			return true, nil
+				websocket.FormatCloseMessage(websocket.CloseNormalClosure, "drained"))
+			return true, true, nil
+		case <-drainDeadline:
+			log.Warn("drain timeout exceeded; forcing disconnect", "timeout", drainTimeout)
+			closeConn()
+			return true, true, nil
 		case err := <-readErr:
-			return true, err
+			return true, false, err
 		case err := <-writeErr:
-			return true, err
+			return true, false, err
 		case data := <-incoming:
 			sess.dispatch(connCtx, data)
 		case <-heartbeat.C:
 			hbMsg, err := wire.Encode(wire.MsgHeartbeat, "", wire.HeartbeatPayload{WorkerID: ack.WorkerID})
 			if err != nil {
-				return true, err
+				return true, false, err
 			}
 			// Best-effort: if the writer is backed up (a stalled socket), skip
 			// this heartbeat rather than block the loop. The stuck write trips its
@@ -263,8 +353,33 @@ type session struct {
 	// sole writer of conn.
 	out chan wire.Message
 
+	// serverDrain is closed once (serverDrainOnce) when the server sends a drain
+	// frame, so the main loop begins draining; drained is closed once draining is
+	// active and the last in-flight request finishes.
+	serverDrain     chan struct{}
+	serverDrainOnce sync.Once
+	drained         chan struct{}
+	drainedOnce     sync.Once
+
 	mu       sync.Mutex
+	draining bool // set under mu; once true, new requests are refused
 	inflight map[string]context.CancelFunc
+}
+
+// startDraining marks the session draining so new requests are refused. If no
+// requests are in flight it signals drained immediately.
+func (s *session) startDraining() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.draining = true
+	if len(s.inflight) == 0 {
+		s.drainedOnce.Do(func() { close(s.drained) })
+	}
+}
+
+// signalServerDrain wakes the main loop to begin draining on a server-sent drain.
+func (s *session) signalServerDrain() {
+	s.serverDrainOnce.Do(func() { close(s.serverDrain) })
 }
 
 // dispatch demuxes one inbound frame: control acks are ignored, execute and
@@ -277,15 +392,28 @@ func (s *session) dispatch(ctx context.Context, data []byte) {
 	switch m.Type {
 	case wire.MsgHeartbeatAck:
 		// Liveness only; nothing to do.
+	case wire.MsgDrain:
+		// The server is evicting this worker (atlas workers remove). Begin the
+		// same drain the main loop runs for a SIGTERM.
+		s.signalServerDrain()
 	case wire.MsgExecute:
 		var p wire.ExecutePayload
 		if err := json.Unmarshal(m.Payload, &p); err != nil {
+			return
+		}
+		// Refuse new work once draining: the server has already stopped routing,
+		// but a request may have crossed in transit. A retryable error lets the
+		// gateway send it elsewhere rather than have it abort when we disconnect.
+		if s.refuseIfDraining(ctx, p.RequestID) {
 			return
 		}
 		go s.handleExecute(ctx, p)
 	case wire.MsgCountTokens:
 		var p wire.CountTokensPayload
 		if err := json.Unmarshal(m.Payload, &p); err != nil {
+			return
+		}
+		if s.refuseIfDraining(ctx, p.RequestID) {
 			return
 		}
 		go s.handleCountTokens(ctx, p)
@@ -296,6 +424,21 @@ func (s *session) dispatch(ctx context.Context, data []byte) {
 		}
 		s.cancelInflight(p.RequestID)
 	}
+}
+
+// refuseIfDraining rejects a new request with a retryable error when the session
+// is draining, returning true if it did so (the caller must not spawn a handler).
+func (s *session) refuseIfDraining(ctx context.Context, requestID string) bool {
+	s.mu.Lock()
+	draining := s.draining
+	s.mu.Unlock()
+	if !draining {
+		return false
+	}
+	_ = s.enqueue(ctx, wire.MsgError, wire.ErrorPayload{
+		RequestID: requestID, Code: wire.CodeEngineUnavailable, Message: "worker draining",
+	})
+	return true
 }
 
 // handleExecute runs one inference request against the engine for the requested
@@ -394,6 +537,10 @@ func (s *session) register(id string, cancel context.CancelFunc) {
 func (s *session) unregister(id string) {
 	s.mu.Lock()
 	delete(s.inflight, id)
+	// The last in-flight request finishing during a drain completes it.
+	if s.draining && len(s.inflight) == 0 {
+		s.drainedOnce.Do(func() { close(s.drained) })
+	}
 	s.mu.Unlock()
 }
 
