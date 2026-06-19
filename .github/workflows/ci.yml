@@ -171,6 +171,104 @@ jobs:
           name: conformance-matrix
           path: conformance/results/matrix.json
 
+  conformance-fleet:
+    name: Conformance (two-process)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    env:
+      # Same conformance-tier models as the single-node job, but served by a
+      # separate `atlas worker` process that joins `atlas server` over the
+      # WebSocket channel — the M1 phase-2 proof that the full M0 surface holds
+      # when inference transits the worker channel rather than an in-process one.
+      CONF_MODEL_NAME: qwen2.5-1.5b-instruct
+      CONF_REASONING_NAME: qwen3-0.6b
+      ATLAS_STATE_DIR: ${{ github.workspace }}/.atlas-state
+      ATLAS_API_KEY: conformance-ci-key
+      ATLAS_JOIN_TOKEN: conformance-join-token
+      # The gateway runs inside `atlas server`, so its request log (G10 token
+      # counts) is the server process's log.
+      ATLAS_LOG_FILE: ${{ github.workspace }}/atlas-server.log
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: astral-sh/setup-uv@v8.2.0 # no floating major tag — pin exact
+        with:
+          enable-cache: true
+          cache-dependency-glob: conformance/uv.lock
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: conformance/ts/package-lock.json
+      - run: npm ci --no-fund --no-audit
+        working-directory: conformance/ts
+      - name: Build atlas
+        run: go build -o atlas ./cmd/atlas
+      # Shares the single-node job's content-addressed store and pinned runtime
+      # caches (same keys); only the worker process needs them here.
+      - name: Cache model store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ATLAS_STATE_DIR }}/store
+          key: conf-store-${{ hashFiles('catalog/starter.yaml') }}
+      - name: Pull catalog models
+        run: ./atlas pull "$CONF_MODEL_NAME" "$CONF_REASONING_NAME"
+      - name: Cache llama.cpp runtime
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ATLAS_STATE_DIR }}/runtimes
+          key: llamacpp-runtime-${{ runner.os }}-${{ runner.arch }}-b9611
+      - name: Start Atlas server + worker
+        run: |
+          # Control plane: gateway + hub, no local engine. Tier aliases resolve
+          # once the worker registers their targets.
+          ./atlas server \
+            --addr 127.0.0.1:9090 \
+            --token "$ATLAS_JOIN_TOKEN" --api-key "$ATLAS_API_KEY" \
+            --alias "claude-sonnet-4-6=${CONF_MODEL_NAME}" \
+            --alias "claude-haiku-4-5=${CONF_MODEL_NAME}" \
+            --alias "claude-opus-4-1=${CONF_REASONING_NAME}" > "$ATLAS_LOG_FILE" 2>&1 &
+          echo $! > server.pid
+          # Worker: provisions the engine, loads both models, dials the hub.
+          ./atlas worker \
+            --join ws://127.0.0.1:9090/workers/connect --token "$ATLAS_JOIN_TOKEN" \
+            --model "$CONF_MODEL_NAME" --model "$CONF_REASONING_NAME" > atlas-worker.log 2>&1 &
+          echo $! > worker.pid
+          # The server's /readyz flips to 200 only once the worker has joined and
+          # registered its models — exactly the two-process readiness signal.
+          for _ in $(seq 1 150); do
+            curl -sf -o /dev/null http://127.0.0.1:9090/readyz && break
+            sleep 2
+          done
+          if ! curl -sf -o /dev/null http://127.0.0.1:9090/readyz; then
+            echo "::error::two-process Atlas did not become ready"
+            echo "=== server ==="; cat "$ATLAS_LOG_FILE"
+            echo "=== worker ==="; cat atlas-worker.log
+            exit 1
+          fi
+      # Gate: G1-G8 + G10 green against the two-process deployment — the full M0
+      # surface with every request proxied and streamed over the worker channel.
+      # G9 (agent harness) is not part of the phase-2 exit criterion.
+      - name: Run harness
+        run: |
+          uv run --locked python run.py \
+            --base-url http://127.0.0.1:9090 \
+            --engine llamacpp --model "$CONF_MODEL_NAME" \
+            --reasoning-model "$CONF_REASONING_NAME" \
+            --require G1,G2,G3,G4,G5,G6,G7,G8,G10
+        working-directory: conformance
+      - name: Stop Atlas
+        if: always()
+        run: |
+          kill "$(cat worker.pid)" 2>/dev/null || true
+          kill "$(cat server.pid)" 2>/dev/null || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: conformance-fleet-matrix
+          path: conformance/results/matrix.json
+
   docs:
     name: Docs lint
     runs-on: blacksmith-2vcpu-ubuntu-2404

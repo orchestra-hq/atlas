@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/orchestra-hq/atlas/internal/api/anthropic"
@@ -63,11 +64,17 @@ type Model struct {
 // (buffered and SSE), POST /v1/messages/count_tokens, and GET /v1/models[/{id}].
 type Gateway struct {
 	apiKey    string
-	models    map[string]Model  // canonical name -> model
-	aliases   map[string]string // alias -> canonical name
-	order     []string          // canonical names, registration order (listing)
-	createdAt string            // wire created_at stamped on model objects
-	logger    *slog.Logger      // one structured line per API request (G10)
+	createdAt string       // wire created_at stamped on model objects
+	logger    *slog.Logger // one structured line per API request (G10)
+
+	// mu guards the model table, which is static in single-node mode but
+	// changes as remote workers register and drop their models in fleet mode
+	// (M1 phase 2). resolve and the model handlers read it under RLock;
+	// RegisterModel/UnregisterModel mutate it under Lock.
+	mu      sync.RWMutex
+	models  map[string]Model  // canonical name -> model
+	aliases map[string]string // alias -> canonical name
+	order   []string          // canonical names, registration order (listing)
 }
 
 // NewGateway builds a gateway that accepts apiKey, serves each model in models
@@ -104,11 +111,48 @@ func (g *Gateway) SetLogger(l *slog.Logger) {
 
 // resolve maps a requested model name (alias or canonical) to its Model.
 func (g *Gateway) resolve(name string) (Model, bool) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.resolveLocked(name)
+}
+
+// resolveLocked is resolve without locking, for callers already holding mu.
+func (g *Gateway) resolveLocked(name string) (Model, bool) {
 	if canon, ok := g.aliases[name]; ok {
 		name = canon
 	}
 	m, ok := g.models[name]
 	return m, ok
+}
+
+// RegisterModel adds (or replaces) a served model route. The hub calls it when
+// a worker joins, pointing Exec at the connection's remote executor; the
+// gateway then serves the model exactly as an in-process one. Re-registering an
+// existing name updates its route in place (e.g. a worker reconnecting).
+func (g *Gateway) RegisterModel(m Model) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if _, exists := g.models[m.Name]; !exists {
+		g.order = append(g.order, m.Name)
+	}
+	g.models[m.Name] = m
+}
+
+// UnregisterModel removes a served model route, called when the worker serving
+// it disconnects. Unknown names are ignored.
+func (g *Gateway) UnregisterModel(name string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if _, ok := g.models[name]; !ok {
+		return
+	}
+	delete(g.models, name)
+	for i, n := range g.order {
+		if n == name {
+			g.order = append(g.order[:i], g.order[i+1:]...)
+			break
+		}
+	}
 }
 
 // Handler returns the gateway's HTTP routes.
@@ -135,7 +179,10 @@ func (g *Gateway) Handler() http.Handler {
 // handleReadyz reports readiness: 200 once at least one model is servable,
 // 503 otherwise (G10, criterion 8).
 func (g *Gateway) handleReadyz(w http.ResponseWriter, _ *http.Request) {
-	if len(g.models) == 0 {
+	g.mu.RLock()
+	n := len(g.models)
+	g.mu.RUnlock()
+	if n == 0 {
 		anthropic.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "no models servable"})
 		return
 	}
@@ -189,12 +236,18 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 	stops := coreReq.StopSequences
 	coreReq.StopSequences = nil
 
+	// The client may have addressed an alias; dispatch under the canonical served
+	// name (a remote worker routes by req.Model) but echo the requested name back.
+	requested := coreReq.Model
+	dispatch := coreReq
+	dispatch.Model = model.Name
+
 	if req.Stream {
-		g.streamMessages(w, r, model.Exec, coreReq, stops)
+		g.streamMessages(w, r, model.Exec, dispatch, requested, stops)
 		return
 	}
 
-	resp, err := model.Exec.Execute(r.Context(), coreReq)
+	resp, err := model.Exec.Execute(r.Context(), dispatch)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -206,8 +259,8 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 		stopSeq = &seq
 	}
 
-	recordUsage(r.Context(), coreReq.Model, resp.Usage.InputTokens, resp.Usage.OutputTokens)
-	anthropic.WriteJSON(w, http.StatusOK, anthropic.FromCore(newMessageID(), coreReq.Model, resp, stopSeq))
+	recordUsage(r.Context(), requested, resp.Usage.InputTokens, resp.Usage.OutputTokens)
+	anthropic.WriteJSON(w, http.StatusOK, anthropic.FromCore(newMessageID(), requested, resp, stopSeq))
 }
 
 // assertContextFits rejects a request whose prompt plus max_tokens cannot fit
@@ -228,6 +281,9 @@ func (g *Gateway) assertContextFits(ctx context.Context, model Model, req core.R
 	if !ok {
 		return nil
 	}
+	// Route to the executor under the canonical served name: a remote worker
+	// dispatches by req.Model, and the client may have addressed an alias.
+	req.Model = model.Name
 	n, err := tc.CountTokens(ctx, req)
 	if err != nil {
 		return nil // best-effort; see doc comment
@@ -277,7 +333,11 @@ func (g *Gateway) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 		anthropic.WriteError(w, &anthropic.Error{Status: http.StatusInternalServerError, Type: anthropic.ErrAPI, Msg: "count_tokens unsupported for this model"})
 		return
 	}
-	n, err := tc.CountTokens(r.Context(), coreReq)
+	// Count under the canonical served name (a remote worker routes by req.Model)
+	// even when the client addressed an alias.
+	countReq := coreReq
+	countReq.Model = model.Name
+	n, err := tc.CountTokens(r.Context(), countReq)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -295,9 +355,10 @@ func (g *Gateway) handleListModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	g.mu.RLock()
 	infos := make([]anthropic.ModelInfo, 0, len(g.order)+len(g.aliases))
 	for _, name := range g.order {
-		infos = append(infos, g.modelInfo(name))
+		infos = append(infos, g.modelInfoLocked(name))
 	}
 	aliasNames := make([]string, 0, len(g.aliases))
 	for a := range g.aliases {
@@ -305,8 +366,9 @@ func (g *Gateway) handleListModels(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(aliasNames)
 	for _, a := range aliasNames {
-		infos = append(infos, g.modelInfo(a))
+		infos = append(infos, g.modelInfoLocked(a))
 	}
+	g.mu.RUnlock()
 
 	anthropic.WriteJSON(w, http.StatusOK, anthropic.NewModelList(infos))
 }
@@ -331,7 +393,14 @@ func (g *Gateway) handleGetModel(w http.ResponseWriter, r *http.Request) {
 // resolves to, and context_window is that model's window. The caller must have
 // confirmed id resolves.
 func (g *Gateway) modelInfo(id string) anthropic.ModelInfo {
-	model, _ := g.resolve(id)
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.modelInfoLocked(id)
+}
+
+// modelInfoLocked is modelInfo without locking, for callers already holding mu.
+func (g *Gateway) modelInfoLocked(id string) anthropic.ModelInfo {
+	model, _ := g.resolveLocked(id)
 	return anthropic.NewModelInfo(id, model.Name, g.createdAt, model.ContextWindow)
 }
 
@@ -340,10 +409,13 @@ func (g *Gateway) modelInfo(id string) anthropic.ModelInfo {
 // buffered Execute replayed as one stream), and applies stop sequences as text
 // arrives so behavior matches the non-streaming path.
 //
-// Once the SSE headers are written the status is committed: a mid-stream engine
-// failure becomes an error event, not an HTTP error.
-func (g *Gateway) streamMessages(w http.ResponseWriter, r *http.Request, exec Executor, req core.Request, stops []string) {
-	sw, err := anthropic.NewStreamWriter(w, newMessageID(), req.Model)
+// req is the request to dispatch (its Model is the canonical served name);
+// echoModel is the name the client addressed (possibly an alias), echoed back
+// on the stream's message. Once the SSE headers are written the status is
+// committed: a mid-stream engine failure becomes an error event, not an HTTP
+// error.
+func (g *Gateway) streamMessages(w http.ResponseWriter, r *http.Request, exec Executor, req core.Request, echoModel string, stops []string) {
+	sw, err := anthropic.NewStreamWriter(w, newMessageID(), echoModel)
 	if err != nil {
 		anthropic.WriteError(w, &anthropic.Error{Status: http.StatusInternalServerError, Type: anthropic.ErrAPI, Msg: "streaming unsupported"})
 		return
@@ -364,7 +436,7 @@ func (g *Gateway) streamMessages(w http.ResponseWriter, r *http.Request, exec Ex
 		return
 	}
 
-	recordUsage(r.Context(), req.Model, sink.usage.InputTokens, sink.usage.OutputTokens)
+	recordUsage(r.Context(), echoModel, sink.usage.InputTokens, sink.usage.OutputTokens)
 	_ = sw.Finish(sink.reason, sink.stopSeq, sink.usage)
 }
 

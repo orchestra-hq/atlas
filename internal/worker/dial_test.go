@@ -23,7 +23,7 @@ const dialTestToken = "dial-test-token"
 // hub end-to-end: it joins, appears in the hub's inventory, and Dial returns
 // cleanly when its context is cancelled.
 func TestDial_joins_real_hub(t *testing.T) {
-	hub := server.NewHub(dialTestToken)
+	hub := server.NewHub(dialTestToken, nil)
 	ts := httptest.NewServer(http.HandlerFunc(hub.HandleConnect))
 	defer ts.Close()
 
@@ -107,7 +107,7 @@ func TestDial_rejected_bad_token_keeps_retrying(t *testing.T) {
 	reconnectInitial, reconnectMax = 20*time.Millisecond, 50*time.Millisecond
 	t.Cleanup(func() { reconnectInitial, reconnectMax = origInitial, origMax })
 
-	hub := server.NewHub("correct-token")
+	hub := server.NewHub("correct-token", nil)
 	var connCount atomic.Int64
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		connCount.Add(1)

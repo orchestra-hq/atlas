@@ -77,7 +77,7 @@ func joinHub(t *testing.T, conn *websocket.Conn, name string) wire.JoinAckPayloa
 }
 
 func TestHub_join_accepted(t *testing.T) {
-	hub := server.NewHub(testToken)
+	hub := server.NewHub(testToken, nil)
 	conn := dialHub(t, hub)
 
 	ack := joinHub(t, conn, "test-worker")
@@ -103,7 +103,7 @@ func TestHub_join_accepted(t *testing.T) {
 }
 
 func TestHub_join_rejected_bad_token(t *testing.T) {
-	hub := server.NewHub(testToken)
+	hub := server.NewHub(testToken, nil)
 	conn := dialHub(t, hub)
 
 	sendMsg(t, conn, wire.MsgJoin, wire.JoinPayload{Token: "wrong-token", Version: "test"})
@@ -123,7 +123,7 @@ func TestHub_join_rejected_bad_token(t *testing.T) {
 }
 
 func TestHub_heartbeat_updates_last_seen(t *testing.T) {
-	hub := server.NewHub(testToken)
+	hub := server.NewHub(testToken, nil)
 	conn := dialHub(t, hub)
 
 	ack := joinHub(t, conn, "")
@@ -146,7 +146,7 @@ func TestHub_heartbeat_updates_last_seen(t *testing.T) {
 }
 
 func TestHub_disconnect_removes_worker(t *testing.T) {
-	hub := server.NewHub(testToken)
+	hub := server.NewHub(testToken, nil)
 	conn := dialHub(t, hub)
 
 	joinHub(t, conn, "")
@@ -170,7 +170,7 @@ func TestHub_disconnect_removes_worker(t *testing.T) {
 }
 
 func TestHub_multiple_workers(t *testing.T) {
-	hub := server.NewHub(testToken)
+	hub := server.NewHub(testToken, nil)
 
 	conn1 := dialHub(t, hub)
 	conn2 := dialHub(t, hub)

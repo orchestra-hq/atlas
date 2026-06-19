@@ -5,6 +5,76 @@ import (
 	"testing"
 )
 
+// recordingSink captures the StreamSink calls it receives, so a StreamEvent's
+// ApplyTo mapping can be asserted against the method it should invoke.
+type recordingSink struct {
+	calls []string
+}
+
+func (r *recordingSink) Thinking(d string) error {
+	r.calls = append(r.calls, "thinking:"+d)
+	return nil
+}
+func (r *recordingSink) Text(d string) error { r.calls = append(r.calls, "text:"+d); return nil }
+func (r *recordingSink) ToolCallStart(_ int, id, name string) error {
+	r.calls = append(r.calls, "start:"+id+":"+name)
+	return nil
+}
+
+func (r *recordingSink) ToolCallDelta(_ int, f string) error {
+	r.calls = append(r.calls, "delta:"+f)
+	return nil
+}
+func (r *recordingSink) Done(StopReason, Usage) error { r.calls = append(r.calls, "done"); return nil }
+
+// TestStreamEvent_emit_apply_roundtrip drives an EventSink (the worker side)
+// and replays the captured events through ApplyTo (the gateway side), asserting
+// the deltas land on the matching sink methods in order — the core of the
+// worker-channel stream path.
+func TestStreamEvent_emit_apply_roundtrip(t *testing.T) {
+	var events []StreamEvent
+	emit := EventSink{
+		Emit:   func(e StreamEvent) error { events = append(events, e); return nil },
+		OnDone: func(StopReason, Usage) error { return nil },
+	}
+	// Drive the emitting sink as an engine adapter would.
+	_ = emit.Thinking("reason")
+	_ = emit.Text("hello ")
+	_ = emit.ToolCallStart(0, "tu_1", "get_weather")
+	_ = emit.ToolCallDelta(0, `{"city":`)
+	_ = emit.ToolCallDelta(0, `"NYC"}`)
+
+	rec := &recordingSink{}
+	for _, e := range events {
+		if err := e.ApplyTo(rec); err != nil {
+			t.Fatalf("ApplyTo(%+v): %v", e, err)
+		}
+	}
+
+	want := []string{"thinking:reason", "text:hello ", "start:tu_1:get_weather", "delta:{\"city\":", "delta:\"NYC\"}"}
+	if strings.Join(rec.calls, "|") != strings.Join(want, "|") {
+		t.Errorf("sink calls = %v, want %v", rec.calls, want)
+	}
+}
+
+// TestStreamEvent_applyto_propagates_sink_error confirms ApplyTo returns the
+// sink's error unchanged, so ErrStopStreaming reaches the remote-stream caller.
+func TestStreamEvent_applyto_propagates_sink_error(t *testing.T) {
+	sink := stopOnTextSink{}
+	err := StreamEvent{Kind: EventText, Text: "x"}.ApplyTo(sink)
+	if err != ErrStopStreaming {
+		t.Errorf("ApplyTo error = %v, want ErrStopStreaming", err)
+	}
+}
+
+type stopOnTextSink struct{}
+
+func (stopOnTextSink) Thinking(string) error                   { return nil }
+func (stopOnTextSink) Text(string) error                       { return ErrStopStreaming }
+func (stopOnTextSink) ToolCallStart(int, string, string) error { return nil }
+func (stopOnTextSink) ToolCallDelta(int, string) error         { return nil }
+func (stopOnTextSink) Done(StopReason, Usage) error            { return nil }
+
 // drive feeds chunks through a scanner and returns the concatenated emitted
 // text, whether a stop sequence matched, and the matched sequence. It mirrors
 // how the gateway drives the scanner: Push per chunk, Flush at clean end.
