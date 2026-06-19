@@ -222,9 +222,13 @@ jobs:
       - name: Start Atlas server + worker
         run: |
           # Control plane: gateway + hub, no local engine. Tier aliases resolve
-          # once the worker registers their targets.
+          # once the worker registers their targets. Auto-start is disabled here so
+          # the deterministic gate steps (G11, Remote deploy) can assert a model
+          # becomes unservable when its worker leaves / is stopped — otherwise a
+          # request would silently auto-redeploy it onto a surviving worker. The
+          # auto-start scenario runs its own server below.
           ./atlas server \
-            --addr 127.0.0.1:9090 \
+            --addr 127.0.0.1:9090 --autostart-timeout 0 \
             --token "$ATLAS_JOIN_TOKEN" --api-key "$ATLAS_API_KEY" \
             --alias "claude-sonnet-4-6=${CONF_MODEL_NAME}" \
             --alias "claude-haiku-4-5=${CONF_MODEL_NAME}" \
@@ -440,15 +444,27 @@ jobs:
             echo "::error::model still served after atlas stop (got $GONE)"; exit 1
           fi
           echo "Remote deploy scenario passed."
-      # Phase-4b-2: auto-start on first request. The deployment is stopped but the
-      # bare worker is still connected, serving nothing. A client request for a
-      # catalog model the server does not yet serve must auto-deploy it onto the
-      # worker and answer once it loads — no `atlas deploy` needed. (Idle-stop is
-      # covered by unit tests; a 15-min default makes it impractical end to end.)
+      # Phase-4b-2: auto-start on first request. A dedicated control plane with
+      # auto-start enabled (the shared server above runs with --autostart-timeout 0
+      # to keep G11/Remote-deploy deterministic). A bare worker joins serving
+      # nothing; a client request for a catalog model the server does not yet serve
+      # must auto-deploy it onto the worker and answer once it loads — no
+      # `atlas deploy`. (Idle-stop is covered by unit tests; a real idle wait is
+      # impractical end to end.)
       - name: Auto-start on first request
         run: |
           set -uo pipefail
-          API=http://127.0.0.1:9090
+          API=http://127.0.0.1:9091
+          ./atlas server --addr 127.0.0.1:9091 --autostart-timeout 120s \
+            --token "$ATLAS_JOIN_TOKEN" --api-key "$ATLAS_API_KEY" > as-server.log 2>&1 &
+          echo $! > as-server.pid
+          sleep 2
+          # Bare worker (no --model): provisions the engine, serves nothing yet.
+          ./atlas worker --join ws://127.0.0.1:9091/workers/connect --token "$ATLAS_JOIN_TOKEN" \
+            > as-worker.log 2>&1 &
+          echo $! > as-worker.pid
+          sleep 3 # let it join
+
           ask() { # $1=model -> echoes HTTP status of a small request
             curl -sS -m 60 -o /dev/null -w '%{http_code}' \
               -H "x-api-key: $ATLAS_API_KEY" -H 'content-type: application/json' \
@@ -464,7 +480,7 @@ jobs:
           CODE=$(ask "$CONF_REASONING_NAME")
           echo "auto-started model → $CODE"
           if [ "$CODE" != "200" ]; then
-            echo "::error::model did not auto-start on first request (got $CODE)"; cat deploy-worker.log; exit 1
+            echo "::error::model did not auto-start on first request (got $CODE)"; cat as-worker.log; exit 1
           fi
           # It now shows up as a scheduler-owned deployment.
           echo "deployments: $(curl -sS "$API/admin/deployments")"
@@ -472,8 +488,8 @@ jobs:
       - name: Stop Atlas
         if: always()
         run: |
-          for p in worker.pid wa.pid wb.pid wa2.pid wd.pid; do kill "$(cat $p 2>/dev/null)" 2>/dev/null || true; done
-          kill "$(cat server.pid)" 2>/dev/null || true
+          for p in worker.pid wa.pid wb.pid wa2.pid wd.pid as-worker.pid; do kill "$(cat $p 2>/dev/null)" 2>/dev/null || true; done
+          for p in server.pid as-server.pid; do kill "$(cat $p 2>/dev/null)" 2>/dev/null || true; done
       - uses: actions/upload-artifact@v7
         if: always()
         with:
