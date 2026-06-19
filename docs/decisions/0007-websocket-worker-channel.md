@@ -6,7 +6,7 @@
 
 M0's worker channel is in-process: `atlas up` registers the worker over a Go channel; the gateway calls `worker.Execute` directly. M1 splits server and worker onto separate machines, so that channel needs a real wire protocol.
 
-The worker channel carries two kinds of traffic: control messages (join, heartbeat, drain) and inference traffic (streamed request + response). Both must flow over worker-initiated connections, because workers must never require inbound connectivity (ADR-0003).
+The worker channel carries two kinds of traffic: control messages (join, heartbeat, drain, load/unload placement) and inference traffic (streamed request + response). Both must flow over worker-initiated connections, because workers must never require inbound connectivity (ADR-0003).
 
 Two protocols were evaluated:
 
@@ -27,28 +27,35 @@ Use WebSocket (`ws://` for dev/internal, `wss://` for production). The server ex
 
 **Message protocol** — JSON text frames, envelope `{"type":"…","id":"…","payload":{…}}`:
 
-| Type            | Direction       | Payload                                                              |
-| --------------- | --------------- | -------------------------------------------------------------------- |
-| `join`          | worker → server | `token`, `hardware` (GPUs, VRAM, RAM, platform), `version`, `models` |
-| `join_ack`      | server → worker | `accepted`, `worker_id`, `reason`                                    |
-| `heartbeat`     | worker → server | `worker_id`                                                          |
-| `heartbeat_ack` | server → worker | —                                                                    |
-| `execute`       | server → worker | `request_id`, `stream`, serialised `core.Request`                    |
-| `count_tokens`  | server → worker | `request_id`, serialised `core.Request`                              |
-| `cancel`        | server → worker | `request_id`                                                         |
-| `response`      | worker → server | `request_id`, serialised `core.Response` (non-streaming reply)       |
-| `chunk`         | worker → server | `request_id`, serialised `core.StreamEvent`                          |
-| `done`          | worker → server | `request_id`, `stop_reason`, `usage`                                 |
-| `token_count`   | worker → server | `request_id`, `count`                                                |
-| `error`         | worker → server | `request_id`, `code`, `message`                                      |
-| `drain`         | worker ↔ server | —                                                                    |
-| `drain_ack`     | worker → server | —                                                                    |
+| Type             | Direction       | Payload                                                              |
+| ---------------- | --------------- | -------------------------------------------------------------------- |
+| `join`           | worker → server | `token`, `hardware` (GPUs, VRAM, RAM, platform), `version`, `models` |
+| `join_ack`       | server → worker | `accepted`, `worker_id`, `reason`                                    |
+| `heartbeat`      | worker → server | `worker_id`                                                          |
+| `heartbeat_ack`  | server → worker | —                                                                    |
+| `execute`        | server → worker | `request_id`, `stream`, serialised `core.Request`                    |
+| `count_tokens`   | server → worker | `request_id`, serialised `core.Request`                              |
+| `cancel`         | server → worker | `request_id`                                                         |
+| `response`       | worker → server | `request_id`, serialised `core.Response` (non-streaming reply)       |
+| `chunk`          | worker → server | `request_id`, serialised `core.StreamEvent`                          |
+| `done`           | worker → server | `request_id`, `stop_reason`, `usage`                                 |
+| `token_count`    | worker → server | `request_id`, `count`                                                |
+| `error`          | worker → server | `request_id`, `code`, `message`                                      |
+| `drain`          | worker ↔ server | —                                                                    |
+| `drain_ack`      | worker → server | —                                                                    |
+| `load`           | server → worker | `model`, `engine`                                                    |
+| `unload`         | server → worker | `model`                                                              |
+| `model_ready`    | worker → server | `model`, `context_window`                                            |
+| `model_unloaded` | worker → server | `model`                                                              |
+| `load_failed`    | worker → server | `model`, `reason`                                                    |
 
 The inference messages carry `internal/core` types — the same representation the gateway uses with the in-process channel — so no new translation layer is needed. Engine adapters stay on the worker side, unchanged.
 
 The gateway's worker view is three methods (`Execute`, `ExecuteStream`, `CountTokens`), so the protocol mirrors them rather than collapsing to a single streamed path: `execute` with `stream:false` is answered by `response`, `execute` with `stream:true` by a `chunk*` then `done` sequence, and `count_tokens` by `token_count`. This preserves in-process fidelity — a remote worker drives the same adapter method the in-process worker would. A worker advertises the models it serves in `join.models` (name + context window); the gateway registers a route per model on join and removes it on disconnect. `cancel` stops an in-flight request when the client disconnects or a stop sequence matches mid-stream, so the worker does not keep generating into a stream no one is reading. `done`/`response`/`token_count` were elaborated from the original `execute`/`chunk`/`done`/`error` sketch when M1 phase 2 was built (count_tokens and the buffered reply had no message in the first cut).
 
 `drain` is bidirectional (M1 phase 3): a worker sends it on `SIGTERM` to announce it is leaving, and the server sends it to evict a worker (`atlas workers remove`). Either way the server stops routing new requests to that worker while its in-flight requests finish; the worker then sends `drain_ack` (always worker → server, terminal) and disconnects. A worker that crashes without draining is caught by the heartbeat timeout instead: when the server tears that connection down it unblocks every request still multiplexed on it with a retryable error, rather than leaving them to hang until the client's own deadline.
+
+`load`/`unload` carry scheduler-driven placement (M1 phase 4b): the server tells a worker to launch or stop a model on demand, and the worker answers `model_ready` (with the engine's real context window, so the gateway registers the route exactly as a join-time served model), `model_unloaded`, or `load_failed`. The worker resolves the model spec, fetches weights, and boots the engine through the same path `atlas worker --model` uses; models a connection loads this way are torn down when it ends, so the scheduler re-places them on reconnect. The connection identifies the worker on both ends, so these frames carry only the model name (and engine, which the scheduler set when it chose a matching-engine worker).
 
 ## Consequences
 

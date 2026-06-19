@@ -1,8 +1,9 @@
 // Package wire defines the WebSocket message types shared between the server
 // hub and the worker client (ADR-0007). All messages are JSON text frames with
 // the envelope {type, id?, payload?}. It carries two kinds of traffic: the
-// control plane (join, heartbeat, drain) and inference (execute/count_tokens/cancel
-// server→worker; response/chunk/done/token_count/error worker→server). The
+// control plane (join, heartbeat, drain, load/unload placement) and inference
+// (execute/count_tokens/cancel server→worker; response/chunk/done/token_count/error
+// worker→server). The
 // inference payloads carry internal/core types — the same representation the
 // in-process channel uses — so no translation layer is introduced.
 package wire
@@ -40,6 +41,19 @@ const (
 	// disconnects (drain_ack is always worker → server, terminal).
 	MsgDrain    MessageType = "drain"
 	MsgDrainAck MessageType = "drain_ack"
+
+	// Placement, server → worker: the scheduler tells a worker to launch or stop
+	// a model instance on demand (M1 phase 4b). The worker answers with the
+	// model_ready / model_unloaded / load_failed frames below.
+	MsgLoad   MessageType = "load"
+	MsgUnload MessageType = "unload"
+
+	// Placement, worker → server: the result of a load/unload. model_ready carries
+	// the engine's real context window so the gateway can register the route and
+	// assert context fit, exactly as a join-time served model.
+	MsgModelReady    MessageType = "model_ready"
+	MsgModelUnloaded MessageType = "model_unloaded"
+	MsgLoadFailed    MessageType = "load_failed"
 
 	// Inference, server → worker.
 	MsgExecute     MessageType = "execute"
@@ -90,6 +104,9 @@ type JoinPayload struct {
 	Hardware Hardware `json:"hardware"`
 	Version  string   `json:"version"`
 	Name     string   `json:"name,omitempty"`
+	// Engine is the inference engine this worker runs (llamacpp or vllm). The
+	// scheduler places only matching-engine models on it (M1 phase 4b).
+	Engine string `json:"engine,omitempty"`
 	// Models are the model instances this worker already serves and will accept
 	// execute messages for. In M1 phase 2 the worker self-declares them (atlas
 	// worker --model); the phase-4 scheduler drives placement instead.
@@ -128,6 +145,42 @@ type DrainPayload struct{}
 // DrainAckPayload confirms a drained worker has finished its in-flight requests
 // and is about to disconnect (worker → server, terminal).
 type DrainAckPayload struct{}
+
+// LoadPayload tells a worker to launch a model instance on demand (server →
+// worker, M1 phase 4b). Model is the catalog name (or loadable spec) the worker
+// resolves and serves under; Engine is the engine the scheduler placed it on,
+// which must match the worker's configured engine. The worker answers with a
+// model_ready or load_failed frame.
+type LoadPayload struct {
+	Model  string `json:"model"`
+	Engine string `json:"engine"`
+}
+
+// UnloadPayload tells a worker to stop a model instance it loaded (server →
+// worker); answered with model_unloaded.
+type UnloadPayload struct {
+	Model string `json:"model"`
+}
+
+// ModelReadyPayload reports that a model finished loading and is now servable
+// (worker → server). ContextWindow is the engine's real window (0 = unknown), so
+// the gateway registers the route exactly as a join-time served model.
+type ModelReadyPayload struct {
+	Model         string `json:"model"`
+	ContextWindow int    `json:"context_window,omitempty"`
+}
+
+// ModelUnloadedPayload reports that a model has been stopped (worker → server).
+type ModelUnloadedPayload struct {
+	Model string `json:"model"`
+}
+
+// LoadFailedPayload reports that a load did not complete (worker → server).
+// Reason is for operator logs, not the client.
+type LoadFailedPayload struct {
+	Model  string `json:"model"`
+	Reason string `json:"reason"`
+}
 
 // ExecutePayload runs one inference request on the worker (server → worker).
 // Stream selects the worker's streaming path (chunk/done) over the buffered one

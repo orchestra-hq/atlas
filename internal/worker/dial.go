@@ -45,6 +45,17 @@ type ServedModel struct {
 	Engine        Inferencer
 }
 
+// Loader launches a model instance on demand when the scheduler sends a load
+// command (M1 phase 4b). It is implemented by the CLI, which owns engine
+// provisioning, catalog resolution, and the model store; the worker holds one
+// and calls it on load. engine names the engine the scheduler placed the model
+// on — it must match the worker's configured engine. Load blocks until the
+// engine is serving and returns the served model plus a stop func that tears the
+// subprocess down (the worker calls it on unload or disconnect).
+type Loader interface {
+	Load(ctx context.Context, model, engine string) (ServedModel, func(), error)
+}
+
 // DialConfig configures a worker's outbound WebSocket connection (ADR-0007).
 type DialConfig struct {
 	// ServerURL is the ws:// or wss:// URL of the server's /workers/connect endpoint.
@@ -63,6 +74,14 @@ type DialConfig struct {
 	// connection has drained. Nil disables it (the connection only ends on ctx
 	// cancellation or a drop).
 	Drain <-chan struct{}
+	// Engine names the inference engine this worker runs (llamacpp/vllm); the
+	// scheduler places only matching-engine models on it (M1 phase 4b).
+	Engine string
+	// Loader launches models on demand for scheduler-driven placement (M1 phase
+	// 4b). Nil disables remote loading: the worker serves only its pre-declared
+	// Models. Models a Loader launches are stopped when the connection ends, so a
+	// reconnecting worker re-loads under the scheduler's reconcile.
+	Loader Loader
 	// Logger receives status events; defaults to slog.Default() if nil.
 	Logger *slog.Logger
 }
@@ -166,6 +185,7 @@ func dialOnce(ctx context.Context, cfg DialConfig, hw wire.Hardware, log *slog.L
 		Hardware: hw,
 		Version:  version.String(),
 		Name:     cfg.Name,
+		Engine:   cfg.Engine,
 		Models:   served,
 	})
 	if err != nil {
@@ -203,12 +223,18 @@ func dialOnce(ctx context.Context, cfg DialConfig, hw wire.Hardware, log *slog.L
 		conn:        conn,
 		workerID:    ack.WorkerID,
 		models:      models,
+		loader:      cfg.Loader,
+		loaded:      make(map[string]func()),
 		log:         log,
 		out:         make(chan wire.Message, 32),
 		serverDrain: make(chan struct{}),
 		drained:     make(chan struct{}),
 		inflight:    make(map[string]context.CancelFunc),
 	}
+	// Models this connection loads on demand are torn down when it ends, so an
+	// evicted or dropped worker leaves no orphan engines; the scheduler re-places
+	// them on reconnect.
+	defer sess.stopAllLoaded()
 
 	// One reader goroutine; the main loop below is the sole writer, so every
 	// frame (heartbeat, chunk, done, …) serialises through it without a
@@ -346,8 +372,9 @@ func dialOnce(ctx context.Context, cfg DialConfig, hw wire.Hardware, log *slog.L
 type session struct {
 	conn     *websocket.Conn
 	workerID string
-	models   map[string]ServedModel
 	log      *slog.Logger
+
+	loader Loader
 
 	// out carries frames produced by handler goroutines to the main loop, the
 	// sole writer of conn.
@@ -364,6 +391,8 @@ type session struct {
 	mu       sync.Mutex
 	draining bool // set under mu; once true, new requests are refused
 	inflight map[string]context.CancelFunc
+	models   map[string]ServedModel // served models, mutated by load/unload
+	loaded   map[string]func()      // stop funcs for models this connection loaded
 }
 
 // startDraining marks the session draining so new requests are refused. If no
@@ -423,7 +452,119 @@ func (s *session) dispatch(ctx context.Context, data []byte) {
 			return
 		}
 		s.cancelInflight(p.RequestID)
+	case wire.MsgLoad:
+		var p wire.LoadPayload
+		if err := json.Unmarshal(m.Payload, &p); err != nil {
+			return
+		}
+		// Loading boots an engine subprocess (slow), so run it off the dispatch
+		// loop, which must stay free to process inference and heartbeats.
+		go s.handleLoad(ctx, p)
+	case wire.MsgUnload:
+		var p wire.UnloadPayload
+		if err := json.Unmarshal(m.Payload, &p); err != nil {
+			return
+		}
+		go s.handleUnload(ctx, p)
 	}
+}
+
+// handleLoad launches the requested model via the worker's Loader and registers
+// it in the served set, then reports model_ready; on failure it reports
+// load_failed. A load while draining, with no Loader, or for an already-served
+// model is handled without starting a duplicate engine.
+func (s *session) handleLoad(ctx context.Context, p wire.LoadPayload) {
+	s.mu.Lock()
+	draining := s.draining
+	existing, already := s.models[p.Model]
+	s.mu.Unlock()
+
+	switch {
+	case s.loader == nil:
+		_ = s.enqueue(ctx, wire.MsgLoadFailed, wire.LoadFailedPayload{Model: p.Model, Reason: "worker has no loader"})
+		return
+	case draining:
+		_ = s.enqueue(ctx, wire.MsgLoadFailed, wire.LoadFailedPayload{Model: p.Model, Reason: "worker draining"})
+		return
+	case already:
+		// Idempotent: already serving this model — re-confirm it is ready.
+		_ = s.enqueue(ctx, wire.MsgModelReady, wire.ModelReadyPayload{Model: p.Model, ContextWindow: existing.ContextWindow})
+		return
+	}
+
+	served, stop, err := s.loader.Load(ctx, p.Model, p.Engine)
+	if err != nil {
+		_ = s.enqueue(ctx, wire.MsgLoadFailed, wire.LoadFailedPayload{Model: p.Model, Reason: err.Error()})
+		return
+	}
+
+	// Re-check under lock: the connection may have begun draining, or a
+	// concurrent load may have won, while the engine booted.
+	s.mu.Lock()
+	if s.draining {
+		s.mu.Unlock()
+		stop()
+		_ = s.enqueue(ctx, wire.MsgLoadFailed, wire.LoadFailedPayload{Model: p.Model, Reason: "worker draining"})
+		return
+	}
+	if _, dup := s.models[served.Name]; dup {
+		s.mu.Unlock()
+		stop() // keep the instance already serving this name
+	} else {
+		s.models[served.Name] = served
+		s.loaded[served.Name] = stop
+		s.mu.Unlock()
+	}
+	s.log.Info("loaded model", "model", served.Name, "context_window", served.ContextWindow)
+	_ = s.enqueue(ctx, wire.MsgModelReady, wire.ModelReadyPayload{Model: served.Name, ContextWindow: served.ContextWindow})
+}
+
+// handleUnload stops a model this connection loaded and reports model_unloaded.
+// Models the worker did not load itself (pre-declared --model) are left running;
+// the scheduler only unloads what it placed.
+func (s *session) handleUnload(ctx context.Context, p wire.UnloadPayload) {
+	s.mu.Lock()
+	stop, ok := s.loaded[p.Model]
+	if ok {
+		delete(s.loaded, p.Model)
+		delete(s.models, p.Model)
+	}
+	s.mu.Unlock()
+	if !ok {
+		return // not ours to stop
+	}
+	if stop != nil {
+		stop()
+	}
+	s.log.Info("unloaded model", "model", p.Model)
+	_ = s.enqueue(ctx, wire.MsgModelUnloaded, wire.ModelUnloadedPayload(p))
+}
+
+// stopAllLoaded tears down every model this connection loaded on demand, called
+// when the connection ends so no orphan engines outlive it.
+func (s *session) stopAllLoaded() {
+	s.mu.Lock()
+	stops := make([]func(), 0, len(s.loaded))
+	for name, stop := range s.loaded {
+		stops = append(stops, stop)
+		delete(s.loaded, name)
+		delete(s.models, name)
+	}
+	s.mu.Unlock()
+	for _, stop := range stops {
+		if stop != nil {
+			stop()
+		}
+	}
+}
+
+// lookupModel returns the served model for name under lock (the served set is
+// mutated by load/unload).
+func (s *session) lookupModel(name string) (ServedModel, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, ok := s.models[name]
+	return m, ok
 }
 
 // refuseIfDraining rejects a new request with a retryable error when the session
@@ -446,7 +587,7 @@ func (s *session) refuseIfDraining(ctx context.Context, requestID string) bool {
 // message or a dropped connection) ends the request silently; any other engine
 // failure is reported as an error frame.
 func (s *session) handleExecute(ctx context.Context, p wire.ExecutePayload) {
-	model, ok := s.models[p.Request.Model]
+	model, ok := s.lookupModel(p.Request.Model)
 	if !ok {
 		_ = s.enqueue(ctx, wire.MsgError, wire.ErrorPayload{
 			RequestID: p.RequestID, Code: wire.CodeInternal,
@@ -486,7 +627,7 @@ func (s *session) handleExecute(ctx context.Context, p wire.ExecutePayload) {
 // handleCountTokens answers a count_tokens request with the engine tokenizer's
 // count, or an error frame on failure.
 func (s *session) handleCountTokens(ctx context.Context, p wire.CountTokensPayload) {
-	model, ok := s.models[p.Request.Model]
+	model, ok := s.lookupModel(p.Request.Model)
 	if !ok {
 		_ = s.enqueue(ctx, wire.MsgError, wire.ErrorPayload{
 			RequestID: p.RequestID, Code: wire.CodeInternal,

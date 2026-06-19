@@ -111,10 +111,15 @@ func runWorker(ctx context.Context, cmd *cobra.Command, opts *workerOptions) err
 		return fmt.Errorf("create state dir: %w", err)
 	}
 
-	// Launch a local engine per --model; the gateway reaches them over the
-	// channel. A worker with no models still joins and heartbeats (it reports
-	// only its inventory) — useful before the scheduler can place models on it.
-	started, cleanup, err := startModels(ctx, cmd, engine, opts.engineArgs, opts.models, opts.stateDir)
+	// Provision the engine once, then launch a local engine per --model; the
+	// gateway reaches them over the channel. A worker with no models still joins
+	// and heartbeats — the scheduler then places models on it over the channel
+	// (M1 phase 4b), loading them through the same runtime via fleetLoader.
+	rt, err := newEngineRuntime(ctx, cmd, engine, opts.engineArgs, opts.stateDir)
+	if err != nil {
+		return err
+	}
+	started, cleanup, err := startModelsOn(ctx, rt, opts.models)
 	if err != nil {
 		return err
 	}
@@ -137,6 +142,8 @@ func runWorker(ctx context.Context, cmd *cobra.Command, opts *workerOptions) err
 		Name:      name,
 		Models:    served,
 		Drain:     drainCh,
+		Engine:    string(engine),
+		Loader:    &fleetLoader{rt: rt},
 		Logger:    log,
 	}); err != nil && ctx.Err() == nil {
 		return err

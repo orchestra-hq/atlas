@@ -177,6 +177,38 @@ func (g *Gateway) RegisterInstance(workerID string, m Model) {
 	})
 }
 
+// UnregisterInstance removes one worker's instance of a single model, called
+// when the scheduler unloads that model from that worker (M1 phase 4b) — unlike
+// UnregisterWorker, the worker's other models stay served. A model whose last
+// instance is removed stops resolving and drops out of the listing. Unknown
+// (worker, model) pairs are a no-op.
+func (g *Gateway) UnregisterInstance(workerID, name string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if canon, ok := g.aliases[name]; ok {
+		name = canon
+	}
+	rs, ok := g.routes[name]
+	if !ok {
+		return
+	}
+	kept := make([]route, 0, len(rs))
+	for _, r := range rs {
+		if r.workerID != workerID {
+			kept = append(kept, r)
+		}
+	}
+	if len(kept) == len(rs) {
+		return
+	}
+	if len(kept) == 0 {
+		delete(g.routes, name)
+		g.removeFromOrder(name)
+		return
+	}
+	g.routes[name] = kept
+}
+
 // UnregisterWorker removes every instance owned by a worker connection, called
 // when that worker drains or disconnects. A model whose last instance is removed
 // stops resolving and drops out of the listing; a model still served by another

@@ -37,6 +37,15 @@ func (r *drainRegistry) RegisterInstance(workerID string, m Model) {
 	r.mu.Unlock()
 }
 
+func (r *drainRegistry) UnregisterInstance(workerID, name string) {
+	r.mu.Lock()
+	if r.owner[name] == workerID {
+		delete(r.models, name)
+		delete(r.owner, name)
+	}
+	r.mu.Unlock()
+}
+
 func (r *drainRegistry) UnregisterWorker(workerID string) {
 	r.mu.Lock()
 	for name, owner := range r.owner {

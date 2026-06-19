@@ -32,7 +32,20 @@ var heartbeatTimeout = 30 * time.Second
 // M1 phase 4).
 type ModelRegistry interface {
 	RegisterInstance(workerID string, m Model)
+	UnregisterInstance(workerID, name string)
 	UnregisterWorker(workerID string)
+}
+
+// SchedulerEvents is the placement scheduler as the hub notifies it: worker
+// lifecycle and the result of load/unload commands (M1 phase 4b). The hub holds
+// one (or nil, in single-node mode and tests that exercise only routing).
+// *Scheduler implements it.
+type SchedulerEvents interface {
+	WorkerJoined(WorkerSnapshot)
+	WorkerLeft(workerID string)
+	ModelReady(workerID, model string, ctxWindow int)
+	ModelUnloaded(workerID, model string)
+	LoadFailed(workerID, model, reason string)
 }
 
 // Hub manages persistent outbound-initiated WebSocket connections from remote
@@ -40,10 +53,17 @@ type ModelRegistry interface {
 type Hub struct {
 	token    string
 	registry ModelRegistry
+	sched    SchedulerEvents
 
 	mu      sync.RWMutex
 	workers map[string]*hubWorker
 }
+
+// SetScheduler attaches the placement scheduler the hub notifies of worker and
+// model-load events (M1 phase 4b). Call once at startup before workers connect;
+// nil leaves placement disabled. It also lets the scheduler send load/unload via
+// the hub's Commander methods.
+func (h *Hub) SetScheduler(s SchedulerEvents) { h.sched = s }
 
 type hubWorker struct {
 	info WorkerInfo
@@ -60,6 +80,7 @@ type WorkerInfo struct {
 	Name        string
 	Hardware    wire.Hardware
 	Version     string
+	Engine      string
 	Models      []string
 	ConnectedAt time.Time
 	LastSeen    time.Time
@@ -123,10 +144,18 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 	// loop is the sole reader, dispatching heartbeats and routing inference
 	// responses to it.
 	rw := newRemoteWorker(conn)
-	go rw.writePump()
 	defer rw.close()
 
 	wid := newHubWorkerID()
+
+	// Send the join_ack as the connection's sole writer before the write pump
+	// starts — otherwise the pump and this direct write could race the conn the
+	// moment any frame (a scheduler load) is enqueued right after join.
+	if err := h.sendMsg(conn, wire.JoinAckPayload{Accepted: true, WorkerID: wid}); err != nil {
+		return
+	}
+	go rw.writePump()
+
 	now := time.Now()
 	hw := &hubWorker{
 		rw: rw,
@@ -135,6 +164,7 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 			Name:        join.Name,
 			Hardware:    join.Hardware,
 			Version:     join.Version,
+			Engine:      join.Engine,
 			Models:      servedNames(join.Models),
 			ConnectedAt: now,
 			LastSeen:    now,
@@ -149,10 +179,6 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 		h.mu.Unlock()
 	}()
 
-	if err := h.sendMsg(conn, wire.JoinAckPayload{Accepted: true, WorkerID: wid}); err != nil {
-		return
-	}
-
 	// Register one gateway instance per served model, tagged with this
 	// connection's worker id, so the gateway dispatches matching requests over
 	// this connection; drop them when the worker leaves — whether it drains,
@@ -164,6 +190,18 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 		h.registerInstance(wid, Model{Name: sm.Name, Exec: rw, ContextWindow: sm.ContextWindow})
 	}
 	defer h.unregisterWorker(hw)
+
+	// Tell the scheduler about this worker so it can place deployments on it, and
+	// forget it when the connection ends so its replicas are re-placed elsewhere.
+	if h.sched != nil {
+		h.sched.WorkerJoined(WorkerSnapshot{
+			ID:        wid,
+			Engine:    join.Engine,
+			Hardware:  join.Hardware,
+			Preloaded: servedNames(join.Models),
+		})
+		defer h.sched.WorkerLeft(wid)
+	}
 
 	for {
 		conn.SetReadDeadline(time.Now().Add(heartbeatTimeout)) //nolint:errcheck
@@ -196,6 +234,36 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 		case wire.MsgDrainAck:
 			// The worker has finished draining and is disconnecting; let cleanup run.
 			return
+		case wire.MsgModelReady:
+			// A scheduler-placed model finished loading: register its route so the
+			// gateway dispatches to it, and tell the scheduler it is ready.
+			var p wire.ModelReadyPayload
+			if json.Unmarshal(m.Payload, &p) != nil {
+				continue
+			}
+			h.registerInstance(wid, Model{Name: p.Model, Exec: rw, ContextWindow: p.ContextWindow})
+			h.addWorkerModel(wid, p.Model)
+			if h.sched != nil {
+				h.sched.ModelReady(wid, p.Model, p.ContextWindow)
+			}
+		case wire.MsgModelUnloaded:
+			var p wire.ModelUnloadedPayload
+			if json.Unmarshal(m.Payload, &p) != nil {
+				continue
+			}
+			h.unregisterInstance(wid, p.Model)
+			h.removeWorkerModel(wid, p.Model)
+			if h.sched != nil {
+				h.sched.ModelUnloaded(wid, p.Model)
+			}
+		case wire.MsgLoadFailed:
+			var p wire.LoadFailedPayload
+			if json.Unmarshal(m.Payload, &p) != nil {
+				continue
+			}
+			if h.sched != nil {
+				h.sched.LoadFailed(wid, p.Model, p.Reason)
+			}
 		default:
 			// Inference response (chunk/done/response/token_count/error): hand to the
 			// remote worker to demux back to the waiting request goroutine.
@@ -212,6 +280,14 @@ func (h *Hub) registerInstance(workerID string, m Model) {
 	}
 }
 
+// unregisterInstance removes one model's route from a worker, when the worker
+// reports it unloaded (M1 phase 4b). The worker's other models stay routed.
+func (h *Hub) unregisterInstance(workerID, name string) {
+	if h.registry != nil {
+		h.registry.UnregisterInstance(workerID, name)
+	}
+}
+
 // unregisterWorker removes all of a worker connection's instances from the
 // gateway exactly once, so new requests stop resolving to it. Because routes are
 // connection-identified, this drops only this worker's instances — a model still
@@ -223,6 +299,64 @@ func (h *Hub) unregisterWorker(hw *hubWorker) {
 			h.registry.UnregisterWorker(hw.info.ID)
 		}
 	})
+}
+
+// LoadModel asks a worker to launch a model on demand (Commander, M1 phase 4b).
+// Returns false if no such worker is connected.
+func (h *Hub) LoadModel(workerID, model, engine string) bool {
+	h.mu.RLock()
+	hw, ok := h.workers[workerID]
+	h.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	hw.rw.sendControl(wire.MsgLoad, wire.LoadPayload{Model: model, Engine: engine})
+	return true
+}
+
+// UnloadModel asks a worker to stop a model it loaded (Commander, M1 phase 4b).
+// Returns false if no such worker is connected.
+func (h *Hub) UnloadModel(workerID, model string) bool {
+	h.mu.RLock()
+	hw, ok := h.workers[workerID]
+	h.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	hw.rw.sendControl(wire.MsgUnload, wire.UnloadPayload{Model: model})
+	return true
+}
+
+// addWorkerModel records a dynamically loaded model on a worker's info, for the
+// `atlas workers list` view. removeWorkerModel is its inverse on unload.
+func (h *Hub) addWorkerModel(workerID, model string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	w, ok := h.workers[workerID]
+	if !ok {
+		return
+	}
+	for _, m := range w.info.Models {
+		if m == model {
+			return
+		}
+	}
+	w.info.Models = append(w.info.Models, model)
+}
+
+func (h *Hub) removeWorkerModel(workerID, model string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	w, ok := h.workers[workerID]
+	if !ok {
+		return
+	}
+	for i, m := range w.info.Models {
+		if m == model {
+			w.info.Models = append(w.info.Models[:i], w.info.Models[i+1:]...)
+			return
+		}
+	}
 }
 
 // beginDraining marks a worker as draining and removes its routes so no new
