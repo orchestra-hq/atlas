@@ -52,6 +52,17 @@ type TokenCounter interface {
 	CountTokens(ctx context.Context, req core.Request) (int, error)
 }
 
+// Autostarter brings a model online on demand and tracks its activity (M1 phase
+// 4b-2). The gateway calls EnsureModel when a request names a catalog model with
+// no live route — it deploys one replica and blocks until an instance is ready —
+// and Touch on every request that routes, so an actively used auto-started model
+// is not idle-stopped. The scheduler implements it; nil disables auto-start
+// (single-node mode and tests), leaving an unrouted model a plain 404.
+type Autostarter interface {
+	EnsureModel(ctx context.Context, model string) bool
+	Touch(model string)
+}
+
 // Model is one model the gateway serves: a canonical Name, the Executor that
 // runs it, and its ContextWindow in tokens (0 = unknown, assertion skipped).
 type Model struct {
@@ -85,6 +96,7 @@ type Gateway struct {
 	apiKey    string
 	createdAt string       // wire created_at stamped on model objects
 	logger    *slog.Logger // one structured line per API request (G10)
+	autostart Autostarter  // deploys+waits on a request for an unrouted model (nil = off)
 
 	// mu guards the route table, which is static in single-node mode but changes
 	// as remote workers register and drop their models in fleet mode. resolve and
@@ -127,6 +139,44 @@ func (g *Gateway) SetLogger(l *slog.Logger) {
 	if l != nil {
 		g.logger = l
 	}
+}
+
+// SetAutostarter attaches the auto-start hook (the scheduler). Call once at
+// startup; nil (the default) leaves auto-start off, so an unrouted model is a
+// plain 404 — the single-node behavior.
+func (g *Gateway) SetAutostarter(a Autostarter) { g.autostart = a }
+
+// canonical maps an alias to its target model name (identity if not an alias),
+// so auto-start deploys the served model a client's alias points at.
+func (g *Gateway) canonical(name string) string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	if c, ok := g.aliases[name]; ok {
+		return c
+	}
+	return name
+}
+
+// resolveOrStart resolves a model, auto-starting it if it has no live route and
+// auto-start is enabled (M1 phase 4b-2). On a hit it records activity (Touch) so
+// a steadily used auto-started model stays up; on a miss it asks the autostarter
+// to deploy and waits, then resolves again. A model that still does not resolve
+// (auto-start off, unknown model, or the wait timed out) returns false, and the
+// caller writes the not-found error.
+func (g *Gateway) resolveOrStart(ctx context.Context, name string) (Model, bool) {
+	if m, ok := g.resolve(name); ok {
+		if g.autostart != nil {
+			g.autostart.Touch(g.canonical(name))
+		}
+		return m, true
+	}
+	if g.autostart == nil {
+		return Model{}, false
+	}
+	if !g.autostart.EnsureModel(ctx, g.canonical(name)) {
+		return Model{}, false
+	}
+	return g.resolve(name)
 }
 
 // resolve maps a requested model name (alias or canonical) to its Model.
@@ -305,7 +355,7 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	model, ok := g.resolve(coreReq.Model)
+	model, ok := g.resolveOrStart(r.Context(), coreReq.Model)
 	if !ok {
 		writeModelNotFound(w, coreReq.Model)
 		return

@@ -440,6 +440,35 @@ jobs:
             echo "::error::model still served after atlas stop (got $GONE)"; exit 1
           fi
           echo "Remote deploy scenario passed."
+      # Phase-4b-2: auto-start on first request. The deployment is stopped but the
+      # bare worker is still connected, serving nothing. A client request for a
+      # catalog model the server does not yet serve must auto-deploy it onto the
+      # worker and answer once it loads — no `atlas deploy` needed. (Idle-stop is
+      # covered by unit tests; a 15-min default makes it impractical end to end.)
+      - name: Auto-start on first request
+        run: |
+          set -uo pipefail
+          API=http://127.0.0.1:9090
+          ask() { # $1=model -> echoes HTTP status of a small request
+            curl -sS -m 60 -o /dev/null -w '%{http_code}' \
+              -H "x-api-key: $ATLAS_API_KEY" -H 'content-type: application/json' \
+              "$API/v1/messages" \
+              -d "$(printf '{"model":"%s","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}' "$1")" || true
+          }
+
+          echo "=== request $CONF_REASONING_NAME with no deployment (auto-start) ==="
+          # No `atlas deploy`: the request itself must bring the model online. The
+          # first call kicks off the load; poll until it is ready (cold load can
+          # outlast one request's 60s timeout, but the load continues server-side).
+          for _ in $(seq 1 150); do [ "$(ask "$CONF_REASONING_NAME")" = "200" ] && break; sleep 2; done
+          CODE=$(ask "$CONF_REASONING_NAME")
+          echo "auto-started model → $CODE"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::model did not auto-start on first request (got $CODE)"; cat deploy-worker.log; exit 1
+          fi
+          # It now shows up as a scheduler-owned deployment.
+          echo "deployments: $(curl -sS "$API/admin/deployments")"
+          echo "Auto-start scenario passed."
       - name: Stop Atlas
         if: always()
         run: |

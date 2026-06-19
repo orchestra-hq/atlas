@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/orchestra-hq/atlas/catalog"
 	"github.com/orchestra-hq/atlas/internal/wire"
@@ -22,6 +24,17 @@ const kvOverheadFraction = 0.2
 // filters them onto GPU workers. (The worker package's worker.EngineVLLM holds
 // the same string; duplicated here to keep the server independent of it.)
 const engineVLLM = "vllm"
+
+// Auto-start/idle-stop defaults (M1 phase 4b-2). A first request for an
+// un-deployed catalog model deploys one replica and blocks up to
+// defaultAutostartTimeout for it to come online; an auto-started deployment with
+// no traffic for defaultIdleTimeout is unloaded again. Both mirror M0's
+// single-node cold-boot/idle behavior, generalized to the fleet, and are tunable
+// via SetLifecycle (the server's --autostart-timeout / --idle-timeout flags).
+const (
+	defaultAutostartTimeout = 5 * time.Minute
+	defaultIdleTimeout      = 15 * time.Minute
+)
 
 // Commander sends placement commands to a worker connection. The hub implements
 // it; the scheduler calls it to load and unload models. Each returns false if
@@ -52,9 +65,26 @@ type Scheduler struct {
 	cat *catalog.Catalog
 	log *slog.Logger
 
+	// Lifecycle tuning (M1 phase 4b-2), set once at startup. autostartTimeout <= 0
+	// disables auto-start (EnsureModel refuses); idleTimeout <= 0 disables
+	// idle-stop (Run becomes a no-op). reapInterval is how often Run sweeps.
+	autostartTimeout time.Duration
+	idleTimeout      time.Duration
+	reapInterval     time.Duration
+
 	mu          sync.Mutex
 	workers     map[string]*schedWorker
-	deployments map[string]int // model -> desired replicas
+	deployments map[string]*deployment // model -> desired state
+}
+
+// deployment is the scheduler's desired state for one model. auto marks a
+// deployment created by auto-start (idle-reapable) rather than an explicit
+// `atlas deploy` (operator-owned, never idle-stopped); lastUsed is the last time
+// a request resolved to it, the clock idle-stop measures against.
+type deployment struct {
+	replicas int
+	auto     bool
+	lastUsed time.Time
 }
 
 // schedWorker is the scheduler's accounting for one connected worker.
@@ -76,13 +106,33 @@ func NewScheduler(cmd Commander, cat *catalog.Catalog, log *slog.Logger) *Schedu
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Scheduler{
+	s := &Scheduler{
 		cmd:         cmd,
 		cat:         cat,
 		log:         log,
 		workers:     make(map[string]*schedWorker),
-		deployments: make(map[string]int),
+		deployments: make(map[string]*deployment),
 	}
+	s.SetLifecycle(defaultAutostartTimeout, defaultIdleTimeout)
+	return s
+}
+
+// SetLifecycle tunes auto-start and idle-stop (M1 phase 4b-2). A non-positive
+// autostartTimeout disables auto-start; a non-positive idleTimeout disables
+// idle-stop. The idle sweep interval is derived from idleTimeout (a quarter of
+// it, clamped to a sane range) so tests can drive reaping with a tiny timeout.
+// Call before Run / before workers connect.
+func (s *Scheduler) SetLifecycle(autostartTimeout, idleTimeout time.Duration) {
+	s.autostartTimeout = autostartTimeout
+	s.idleTimeout = idleTimeout
+	reap := idleTimeout / 4
+	switch {
+	case reap < 10*time.Millisecond:
+		reap = 10 * time.Millisecond
+	case reap > time.Minute:
+		reap = time.Minute
+	}
+	s.reapInterval = reap
 }
 
 // estimate is a model's padded VRAM/RAM need in bytes, 0 if its size is unknown
@@ -215,7 +265,12 @@ func (s *Scheduler) Deploy(model string, replicas int, worker string) error {
 		replicas = 1
 	}
 	s.mu.Lock()
-	s.deployments[model] = replicas
+	if d, ok := s.deployments[model]; ok {
+		d.replicas = replicas
+		d.auto = false // an explicit deploy takes ownership: no longer idle-reapable
+	} else {
+		s.deployments[model] = &deployment{replicas: replicas, lastUsed: time.Now()}
+	}
 	s.mu.Unlock()
 	if worker != "" {
 		s.placeOn(worker, model, entry.Engine)
@@ -230,9 +285,9 @@ func (s *Scheduler) Scale(model string, replicas int) error {
 		replicas = 0
 	}
 	s.mu.Lock()
-	_, exists := s.deployments[model]
+	d, exists := s.deployments[model]
 	if exists {
-		s.deployments[model] = replicas
+		d.replicas = replicas
 	}
 	s.mu.Unlock()
 	if !exists {
@@ -257,6 +312,135 @@ func (s *Scheduler) Stop(model string) error {
 	return nil
 }
 
+// EnsureModel brings a model online for an incoming request and blocks until an
+// instance is ready (M1 phase 4b-2, auto-start). If the model is not deployed it
+// deploys one auto-started replica; if it is already deployed it just waits.
+// Returns true once an instance is loaded, false if the model is unknown to the
+// catalog, auto-start is disabled, nowhere in the fleet can host it, or the wait
+// exceeds the configured timeout (or ctx is cancelled). It records activity so a
+// model that is auto-started by a request is not immediately idle-stopped.
+func (s *Scheduler) EnsureModel(ctx context.Context, model string) bool {
+	if s.autostartTimeout <= 0 {
+		return false // auto-start disabled
+	}
+	entry, ok := s.cat.Lookup(model)
+	if !ok {
+		return false // not a catalog model; nothing to deploy
+	}
+
+	s.mu.Lock()
+	d, deployed := s.deployments[model]
+	if deployed {
+		d.lastUsed = time.Now()
+	} else {
+		s.deployments[model] = &deployment{replicas: 1, auto: true, lastUsed: time.Now()}
+	}
+	s.mu.Unlock()
+	if !deployed {
+		s.log.Info("auto-start: deploying model on first request", "model", model)
+		s.reconcile(model)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, s.autostartTimeout)
+	defer cancel()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		ready, pending, placeable := s.placementState(model, entry.Engine)
+		switch {
+		case ready:
+			return true
+		case !pending && !placeable:
+			// Nothing is loading and no worker can take it: fail fast rather than
+			// block the request for the full timeout on an unsatisfiable placement.
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
+}
+
+// placementState reports, for one model, whether some worker has it loaded
+// (ready), has a load in flight (pending), and whether any further worker could
+// still accept it (placeable) — the fit check reconcile uses. EnsureModel polls
+// it: ready ends the wait, while !pending && !placeable means giving up.
+func (s *Scheduler) placementState(model, engine string) (ready, pending, placeable bool) {
+	est := s.estimate(model)
+	requiresGPU := engine == engineVLLM
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, w := range s.workers {
+		if w.loaded[model] {
+			ready = true
+		}
+		if w.pending[model] {
+			pending = true
+		}
+		if w.serves(model) || w.failed[model] || w.engine != engine {
+			continue
+		}
+		if requiresGPU && !w.hasGPU {
+			continue
+		}
+		if est == 0 || w.capacity-s.used(w) >= est {
+			placeable = true
+		}
+	}
+	return ready, pending, placeable
+}
+
+// Touch records that a request resolved to a model, resetting its idle clock so
+// an actively used auto-started deployment is not reaped (M1 phase 4b-2). The
+// gateway calls it on every request that routes; it is a no-op for models with
+// no deployment.
+func (s *Scheduler) Touch(model string) {
+	s.mu.Lock()
+	if d, ok := s.deployments[model]; ok {
+		d.lastUsed = time.Now()
+	}
+	s.mu.Unlock()
+}
+
+// Run sweeps for idle auto-started deployments and unloads them, until ctx is
+// cancelled (M1 phase 4b-2, idle-stop). It is a no-op when idle-stop is disabled
+// (idleTimeout <= 0). Start it once in a goroutine at server startup.
+func (s *Scheduler) Run(ctx context.Context) {
+	if s.idleTimeout <= 0 {
+		return
+	}
+	ticker := time.NewTicker(s.reapInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.reapIdle()
+		}
+	}
+}
+
+// reapIdle stops every auto-started deployment whose last request is older than
+// the idle timeout. Operator deployments (auto == false) are never reaped.
+func (s *Scheduler) reapIdle() {
+	now := time.Now()
+	s.mu.Lock()
+	var stale []string
+	for model, d := range s.deployments {
+		if d.auto && now.Sub(d.lastUsed) > s.idleTimeout {
+			stale = append(stale, model)
+		}
+	}
+	s.mu.Unlock()
+	for _, model := range stale {
+		s.log.Info("idle-stop: unloading idle auto-started model", "model", model, "idle_timeout", s.idleTimeout)
+		_ = s.Stop(model)
+	}
+}
+
 // reconcile drives one model toward its desired replica count: it loads on best-
 // fit workers when short and unloads when over. Commands are sent without the
 // lock held so a hub callback can't deadlock against it.
@@ -269,7 +453,10 @@ func (s *Scheduler) reconcile(model string) {
 	requiresGPU := entry.Engine == engineVLLM
 
 	s.mu.Lock()
-	desired := s.deployments[model]
+	desired := 0
+	if d := s.deployments[model]; d != nil {
+		desired = d.replicas
+	}
 	var current int
 	for _, w := range s.workers {
 		if w.serves(model) {
@@ -402,7 +589,7 @@ func (s *Scheduler) Deployments() []DeploymentInfo {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]DeploymentInfo, 0, len(s.deployments))
-	for model, replicas := range s.deployments {
+	for model, d := range s.deployments {
 		var ready, pending int
 		for _, w := range s.workers {
 			if w.loaded[model] {
@@ -411,7 +598,7 @@ func (s *Scheduler) Deployments() []DeploymentInfo {
 				pending++
 			}
 		}
-		out = append(out, DeploymentInfo{Model: model, Replicas: replicas, Ready: ready, Pending: pending})
+		out = append(out, DeploymentInfo{Model: model, Replicas: d.replicas, Ready: ready, Pending: pending})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Model < out[j].Model })
 	return out
