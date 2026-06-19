@@ -106,6 +106,12 @@ func (r *capturingRegistry) RegisterInstance(_ string, m server.Model) {
 	r.mu.Unlock()
 }
 
+func (r *capturingRegistry) UnregisterInstance(_, name string) {
+	r.mu.Lock()
+	delete(r.models, name)
+	r.mu.Unlock()
+}
+
 func (r *capturingRegistry) UnregisterWorker(_ string) {
 	r.mu.Lock()
 	r.models = map[string]server.Model{}

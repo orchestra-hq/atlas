@@ -159,6 +159,38 @@ func TestSameModelTwoWorkersKeepsRoute(t *testing.T) {
 	}
 }
 
+// TestUnregisterInstanceRemovesOneWorkersModel covers the per-instance unregister
+// the scheduler uses on unload (M1 phase 4b): removing one worker's instance of a
+// model leaves that worker's other models and other workers' copies untouched.
+func TestUnregisterInstanceRemovesOneWorkersModel(t *testing.T) {
+	g := NewGateway(testKey, nil, nil)
+
+	g.RegisterInstance("w1", Model{Name: "a", Exec: &echoExecutor{reply: "x"}, ContextWindow: 4096})
+	g.RegisterInstance("w1", Model{Name: "b", Exec: &echoExecutor{reply: "x"}, ContextWindow: 4096})
+	g.RegisterInstance("w2", Model{Name: "a", Exec: &echoExecutor{reply: "x"}, ContextWindow: 4096})
+
+	// Unload model "a" from w1 only: w2 still serves "a", and w1 still serves "b".
+	g.UnregisterInstance("w1", "a")
+	if _, ok := g.resolve("a"); !ok {
+		t.Error("model a stopped resolving, but w2 still serves it")
+	}
+	if _, ok := g.resolve("b"); !ok {
+		t.Error("model b should be unaffected by unloading a from w1")
+	}
+
+	// Removing the last copy of "a" (from w2) drops it entirely.
+	g.UnregisterInstance("w2", "a")
+	if _, ok := g.resolve("a"); ok {
+		t.Error("model a should be gone after its last instance was removed")
+	}
+
+	g.UnregisterInstance("w1", "never") // unknown model, must not panic
+	g.UnregisterInstance("nobody", "b") // unknown worker, must not panic
+	if _, ok := g.resolve("b"); !ok {
+		t.Error("model b should survive no-op unregisters")
+	}
+}
+
 // TestAliasDispatchesUnderCanonicalName guards the alias-routing contract a
 // remote worker depends on: a request addressed to an alias is dispatched to the
 // executor under the canonical served name (the worker routes by req.Model),

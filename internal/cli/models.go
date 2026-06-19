@@ -21,81 +21,136 @@ type startedModel struct {
 	ctxWindow int
 }
 
-// startModels provisions the engine runtime and launches one engine subprocess
-// per --model value, blocking until each has loaded. It returns the started
-// models and a cleanup that stops every subprocess (call it on success too, when
-// shutting down). On error it stops whatever it already started.
-//
-// It is shared by `atlas up` (single-node, gateway in-process) and `atlas
-// worker` (fleet, gateway reached over the channel): both turn the same
-// --model/--engine inputs into local engines and differ only in how the gateway
-// reaches them.
-func startModels(ctx context.Context, cmd *cobra.Command, engine worker.Engine, engineArgs, models []string, stateDir string) ([]startedModel, func(), error) {
+// engineRuntime is a provisioned engine binary plus the catalog and store
+// needed to resolve and launch models on it. It is built once per worker and
+// reused for every model the worker starts — statically from --model and, in
+// fleet mode, on demand when the scheduler sends a load (M1 phase 4b).
+type engineRuntime struct {
+	cmd        *cobra.Command
+	engine     worker.Engine
+	engineArgs []string
+	stateDir   string
+	binPath    string
+	cat        *catalog.Catalog
+	st         *store.Store
+}
+
+// newEngineRuntime loads the catalog, opens the model store, and provisions the
+// engine binary (downloading it on first run) — the slow, once-per-worker setup
+// every model launch then reuses.
+func newEngineRuntime(ctx context.Context, cmd *cobra.Command, engine worker.Engine, engineArgs []string, stateDir string) (*engineRuntime, error) {
 	cat, err := catalog.Load()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	st := store.New(filepath.Join(stateDir, "store"))
-
-	// Fail fast on an engine/catalog mismatch before the (possibly slow) runtime
-	// provisioning below: a catalog model dictates its own engine.
-	for _, spec := range models {
-		if entry, ok := cat.Lookup(spec); ok && worker.Engine(entry.Engine) != engine {
-			return nil, nil, fmt.Errorf("model %q is a %s catalog model; rerun with --engine %s", entry.Name, entry.Engine, entry.Engine)
-		}
-	}
-
 	prov := &atlasruntime.Provisioner{Dir: filepath.Join(stateDir, "runtimes")}
 	binPath, err := provisionEngine(ctx, cmd, prov, engine)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
+	return &engineRuntime{
+		cmd:        cmd,
+		engine:     engine,
+		engineArgs: engineArgs,
+		stateDir:   stateDir,
+		binPath:    binPath,
+		cat:        cat,
+		st:         store.New(filepath.Join(stateDir, "store")),
+	}, nil
+}
 
+// start launches one model on the runtime, blocking until the engine reports
+// healthy. It resolves the spec (catalog name, Hugging Face ref, or local path),
+// fetches weights via the store as needed, and reads the engine's context window.
+func (r *engineRuntime) start(ctx context.Context, spec string) (startedModel, error) {
+	// A catalog model dictates its own engine; fail fast on a mismatch.
+	if entry, ok := r.cat.Lookup(spec); ok && worker.Engine(entry.Engine) != r.engine {
+		return startedModel{}, fmt.Errorf("model %q is a %s catalog model; rerun with --engine %s", entry.Name, entry.Engine, entry.Engine)
+	}
+	rm, err := resolveModel(ctx, r.cmd, r.engine, r.st, r.cat, spec)
+	if err != nil {
+		return startedModel{}, err
+	}
+	r.cmd.Printf("Loading model %q (this can take a while on first run)…\n", rm.served)
+	w, err := worker.Start(ctx, worker.Config{
+		Engine:    r.engine,
+		BinPath:   r.binPath,
+		ModelArgs: rm.modelArgs,
+		ExtraArgs: append(append([]string{}, r.engineArgs...), rm.engineArgs...),
+		Model:     rm.served,
+		LogPath:   filepath.Join(r.stateDir, string(r.engine)+"-"+rm.served+".log"),
+	})
+	if err != nil {
+		return startedModel{}, err
+	}
+	ctxWindow, err := w.ContextWindow(ctx)
+	if err != nil {
+		if rm.ctxHint > 0 {
+			ctxWindow = rm.ctxHint
+			r.cmd.Printf("  note: using catalog context window %d for %q (engine query failed: %v)\n", ctxWindow, rm.served, err)
+		} else {
+			r.cmd.Printf("  warning: could not read context window for %q (%v); fit assertion disabled\n", rm.served, err)
+		}
+	}
+	return startedModel{name: rm.served, worker: w, ctxWindow: ctxWindow}, nil
+}
+
+// startModelsOn launches each spec on the runtime, blocking until each has
+// loaded. It returns the started models and a cleanup that stops every
+// subprocess; on error it stops whatever it already started.
+func startModelsOn(ctx context.Context, rt *engineRuntime, models []string) ([]startedModel, func(), error) {
 	var started []startedModel
 	cleanup := func() {
 		for _, sm := range started {
 			_ = sm.worker.Stop()
 		}
 	}
-
 	seen := map[string]bool{}
 	for _, spec := range models {
-		rm, err := resolveModel(ctx, cmd, engine, st, cat, spec)
+		sm, err := rt.start(ctx, spec)
 		if err != nil {
 			cleanup()
 			return nil, nil, err
 		}
-		if seen[rm.served] {
+		if seen[sm.name] {
+			_ = sm.worker.Stop()
 			cleanup()
-			return nil, nil, fmt.Errorf("duplicate model %q", rm.served)
+			return nil, nil, fmt.Errorf("duplicate model %q", sm.name)
 		}
-		seen[rm.served] = true
-
-		cmd.Printf("Loading model %q (this can take a while on first run)…\n", rm.served)
-		w, err := worker.Start(ctx, worker.Config{
-			Engine:    engine,
-			BinPath:   binPath,
-			ModelArgs: rm.modelArgs,
-			ExtraArgs: append(append([]string{}, engineArgs...), rm.engineArgs...),
-			Model:     rm.served,
-			LogPath:   filepath.Join(stateDir, string(engine)+"-"+rm.served+".log"),
-		})
-		if err != nil {
-			cleanup()
-			return nil, nil, err
-		}
-
-		ctxWindow, err := w.ContextWindow(ctx)
-		if err != nil {
-			if rm.ctxHint > 0 {
-				ctxWindow = rm.ctxHint
-				cmd.Printf("  note: using catalog context window %d for %q (engine query failed: %v)\n", ctxWindow, rm.served, err)
-			} else {
-				cmd.Printf("  warning: could not read context window for %q (%v); fit assertion disabled\n", rm.served, err)
-			}
-		}
-		started = append(started, startedModel{name: rm.served, worker: w, ctxWindow: ctxWindow})
+		seen[sm.name] = true
+		started = append(started, sm)
 	}
-
 	return started, cleanup, nil
+}
+
+// startModels provisions the engine runtime and launches one engine subprocess
+// per --model value. It is the single-node convenience used by `atlas up`;
+// `atlas worker` builds the runtime itself (newEngineRuntime) so it can also
+// serve scheduler-driven loads over the channel.
+func startModels(ctx context.Context, cmd *cobra.Command, engine worker.Engine, engineArgs, models []string, stateDir string) ([]startedModel, func(), error) {
+	rt, err := newEngineRuntime(ctx, cmd, engine, engineArgs, stateDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	return startModelsOn(ctx, rt, models)
+}
+
+// fleetLoader implements worker.Loader by launching one model on a shared engine
+// runtime. The worker holds one and calls it when the scheduler sends a load
+// over the channel (M1 phase 4b). The returned stop func is the engine's Stop,
+// which the worker invokes on unload or disconnect.
+type fleetLoader struct {
+	rt *engineRuntime
+}
+
+func (l *fleetLoader) Load(ctx context.Context, model, engine string) (worker.ServedModel, func(), error) {
+	if engine != "" && engine != string(l.rt.engine) {
+		return worker.ServedModel{}, nil, fmt.Errorf("worker runs engine %s, cannot load %s model %q", l.rt.engine, engine, model)
+	}
+	sm, err := l.rt.start(ctx, model)
+	if err != nil {
+		return worker.ServedModel{}, nil, err
+	}
+	stop := func() { _ = sm.worker.Stop() }
+	return worker.ServedModel{Name: sm.name, ContextWindow: sm.ctxWindow, Engine: sm.worker}, stop, nil
 }

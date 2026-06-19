@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/orchestra-hq/atlas/catalog"
 	"github.com/orchestra-hq/atlas/internal/server"
 )
 
@@ -85,20 +86,34 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 		return err
 	}
 
+	cat, err := catalog.Load()
+	if err != nil {
+		return err
+	}
+
 	// The gateway starts with no models: workers join over the hub and register
 	// the models they serve (M1 phase 2), which the hub adds to the gateway as
 	// remote routes. Operator aliases resolve against those models as they join.
 	// Client auth here reuses M0's shared secret (--api-key); per-key management
 	// replaces it in phase 5. Request logs (per-request token counts — G10) go to
 	// stderr alongside the banner on stdout.
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	gw := server.NewGateway(opts.apiKey, nil, aliases)
-	gw.SetLogger(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	gw.SetLogger(logger)
 	hub := server.NewHub(opts.token, gw)
+	// The scheduler places catalog models onto workers on demand and reconciles
+	// deployments as workers join and leave (M1 phase 4b). The hub notifies it of
+	// worker/model events and sends its load/unload commands.
+	sched := server.NewScheduler(hub, cat, logger)
+	hub.SetScheduler(sched)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /workers/connect", hub.HandleConnect)
 	mux.HandleFunc("GET /admin/workers", hub.HandleListWorkers)
 	mux.HandleFunc("POST /admin/workers/{id}/drain", hub.HandleRemoveWorker)
+	mux.HandleFunc("POST /admin/deployments", sched.HandleSetDeployment)
+	mux.HandleFunc("GET /admin/deployments", sched.HandleListDeployments)
+	mux.HandleFunc("DELETE /admin/deployments/{model}", sched.HandleStopDeployment)
 	// Gateway routes (/v1/*, /healthz, /readyz) handled by the gateway's mux
 	// as a catch-all; hub routes registered above take precedence.
 	mux.Handle("/", gw.Handler())
@@ -117,7 +132,9 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 	cmd.Printf("  API key : %s\n", opts.apiKey)
 	cmd.Println()
 	cmd.Printf("Workers join with:\n")
-	cmd.Printf("  atlas worker --join ws://<this-host>:%s/workers/connect --token %s --model <model>\n", port, opts.token)
+	cmd.Printf("  atlas worker --join ws://<this-host>:%s/workers/connect --token %s\n", port, opts.token)
+	cmd.Printf("\nThen place a model on the fleet:\n")
+	cmd.Printf("  atlas deploy <model> --server http://<this-host>:%s\n", port)
 	cmd.Printf("\nPoint a client at it:\n")
 	cmd.Printf("  ANTHROPIC_BASE_URL=http://<this-host>:%s ANTHROPIC_API_KEY=%s\n", port, opts.apiKey)
 	cmd.Println("\nPress Ctrl-C to stop.")

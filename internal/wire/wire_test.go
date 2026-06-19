@@ -178,6 +178,51 @@ func TestEncode_roundtrip(t *testing.T) {
 				return nil
 			},
 		},
+		{
+			name:    "load",
+			typ:     wire.MsgLoad,
+			payload: wire.LoadPayload{Model: "qwen2.5-1.5b-instruct", Engine: "llamacpp"},
+			decode: func(raw json.RawMessage) error {
+				var p wire.LoadPayload
+				if err := json.Unmarshal(raw, &p); err != nil {
+					return err
+				}
+				if p.Model != "qwen2.5-1.5b-instruct" || p.Engine != "llamacpp" {
+					t.Errorf("decoded load: %+v", p)
+				}
+				return nil
+			},
+		},
+		{
+			name:    "model_ready",
+			typ:     wire.MsgModelReady,
+			payload: wire.ModelReadyPayload{Model: "m", ContextWindow: 8192},
+			decode: func(raw json.RawMessage) error {
+				var p wire.ModelReadyPayload
+				if err := json.Unmarshal(raw, &p); err != nil {
+					return err
+				}
+				if p.Model != "m" || p.ContextWindow != 8192 {
+					t.Errorf("decoded model_ready: %+v", p)
+				}
+				return nil
+			},
+		},
+		{
+			name:    "load_failed",
+			typ:     wire.MsgLoadFailed,
+			payload: wire.LoadFailedPayload{Model: "m", Reason: "out of memory"},
+			decode: func(raw json.RawMessage) error {
+				var p wire.LoadFailedPayload
+				if err := json.Unmarshal(raw, &p); err != nil {
+					return err
+				}
+				if p.Model != "m" || p.Reason != "out of memory" {
+					t.Errorf("decoded load_failed: %+v", p)
+				}
+				return nil
+			},
+		},
 	}
 
 	for _, tc := range cases {
