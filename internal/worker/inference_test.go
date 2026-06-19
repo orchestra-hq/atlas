@@ -78,7 +78,7 @@ func dialedModel(t *testing.T, eng Inferencer) (server.Model, func()) {
 
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		if _, ok := reg.get("m"); ok {
+		if _, ok := reg.get(); ok {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -86,7 +86,7 @@ func dialedModel(t *testing.T, eng Inferencer) (server.Model, func()) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	m, _ := reg.get("m")
+	m, _ := reg.get()
 
 	return m, func() {
 		cancel()
@@ -112,10 +112,11 @@ func (r *capturingRegistry) UnregisterModel(name string) {
 	r.mu.Unlock()
 }
 
-func (r *capturingRegistry) get(name string) (server.Model, bool) {
+// get returns the single served model the tests register (always "m").
+func (r *capturingRegistry) get() (server.Model, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	m, ok := r.models[name]
+	m, ok := r.models["m"]
 	return m, ok
 }
 

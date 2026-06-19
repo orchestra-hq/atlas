@@ -258,6 +258,78 @@ jobs:
             --reasoning-model "$CONF_REASONING_NAME" \
             --require G1,G2,G3,G4,G5,G6,G7,G8,G10
         working-directory: conformance
+      # Phase-3 exit criterion (G-fleet-ops): graceful drain on SIGTERM and the
+      # heartbeat-timeout backstop for a hard-killed worker. Behavioral, so it
+      # rides the two-process deployment rather than a new conformance G-group.
+      - name: Fleet-ops scenarios (drain + heartbeat timeout)
+        run: |
+          set -uo pipefail
+          API=http://127.0.0.1:9090
+          payload() { # $1 = max_tokens, $2 = prompt
+            printf '{"model":"%s","max_tokens":%s,"messages":[{"role":"user","content":"%s"}]}' \
+              "$CONF_MODEL_NAME" "$1" "$2"
+          }
+
+          echo "=== Drain: in-flight request completes; new requests are refused ==="
+          # Start a buffered request and let it reach the worker mid-generation.
+          ( curl -sS -m 120 -o /tmp/drain_body.txt -w '%{http_code}' \
+              -H "x-api-key: $ATLAS_API_KEY" -H 'content-type: application/json' \
+              "$API/v1/messages" -d "$(payload 512 'Write a long detailed paragraph about the history of computing.')" \
+              > /tmp/drain_code.txt ) &
+          DRAIN_PID=$!
+          sleep 3
+          # SIGTERM the worker: it should finish the in-flight request, refuse new
+          # ones, then disconnect (its route is removed on the drain frame).
+          kill -TERM "$(cat worker.pid)"
+          sleep 2
+          NEW=$(curl -sS -m 30 -o /dev/null -w '%{http_code}' \
+            -H "x-api-key: $ATLAS_API_KEY" -H 'content-type: application/json' \
+            "$API/v1/messages" -d "$(payload 16 'hi')" || true)
+          wait "$DRAIN_PID" || true
+          DRAIN_CODE=$(cat /tmp/drain_code.txt)
+          echo "in-flight drain request → $DRAIN_CODE ; post-drain new request → $NEW"
+          if [ "$DRAIN_CODE" != "200" ]; then
+            echo "::error::drain did not let the in-flight request complete (got $DRAIN_CODE)"; cat /tmp/drain_body.txt; exit 1
+          fi
+          if [ "$NEW" = "200" ]; then
+            echo "::error::a new request was accepted after drain (got $NEW, want a non-200 refusal)"; exit 1
+          fi
+
+          echo "=== Heartbeat timeout: kill -9 unblocks an in-flight request with a retryable error ==="
+          # The drained worker has exited; bring a fresh one back.
+          ./atlas worker \
+            --join ws://127.0.0.1:9090/workers/connect --token "$ATLAS_JOIN_TOKEN" \
+            --model "$CONF_MODEL_NAME" --model "$CONF_REASONING_NAME" > atlas-worker2.log 2>&1 &
+          echo $! > worker.pid
+          for _ in $(seq 1 150); do
+            curl -sf -o /dev/null "$API/readyz" && break
+            sleep 2
+          done
+          if ! curl -sf -o /dev/null "$API/readyz"; then
+            echo "::error::worker did not rejoin for the timeout scenario"; cat atlas-worker2.log; exit 1
+          fi
+          # Start a buffered request, let it reach the worker, then hard-kill it.
+          # The request must return a retryable 5xx within the heartbeat timeout
+          # (~30 s), not hang until the client deadline.
+          ( curl -sS -m 90 -o /tmp/to_body.txt -w '%{http_code}' \
+              -H "x-api-key: $ATLAS_API_KEY" -H 'content-type: application/json' \
+              "$API/v1/messages" -d "$(payload 512 'Write a long detailed essay about distributed systems.')" \
+              > /tmp/to_code.txt ) &
+          TO_PID=$!
+          sleep 3
+          start=$(date +%s)
+          kill -9 "$(cat worker.pid)"
+          wait "$TO_PID" || true
+          elapsed=$(( $(date +%s) - start ))
+          CODE=$(cat /tmp/to_code.txt)
+          echo "in-flight request after kill -9 → HTTP $CODE in ${elapsed}s"
+          if [ -z "$CODE" ] || [ "$CODE" -lt 500 ]; then
+            echo "::error::expected a retryable 5xx after the worker was killed, got '$CODE'"; cat /tmp/to_body.txt; exit 1
+          fi
+          if [ "$elapsed" -gt 60 ]; then
+            echo "::error::in-flight request took ${elapsed}s to fail — should unblock within the heartbeat timeout (~30 s)"; exit 1
+          fi
+          echo "Fleet-ops scenarios passed."
       - name: Stop Atlas
         if: always()
         run: |

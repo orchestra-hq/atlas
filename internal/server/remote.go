@@ -147,9 +147,9 @@ func (rw *remoteWorker) overflow(id string) {
 	rw.mu.Unlock()
 }
 
-// sendAck enqueues a control-plane ack (the hub's heartbeat reply) through the
-// single write pump.
-func (rw *remoteWorker) sendAck(typ wire.MessageType, payload any) {
+// sendControl enqueues a control-plane frame (a heartbeat ack, or a drain the
+// server initiates) through the single write pump.
+func (rw *remoteWorker) sendControl(typ wire.MessageType, payload any) {
 	msg, err := wire.Encode(typ, "", payload)
 	if err != nil {
 		return
