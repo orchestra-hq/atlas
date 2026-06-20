@@ -515,11 +515,51 @@ jobs:
           # It now shows up as a scheduler-owned deployment (/admin/* needs the key).
           echo "deployments: $(curl -sS -H "x-api-key: $ATLAS_API_KEY" "$API/admin/deployments")"
           echo "Auto-start scenario passed."
+      # Gate G14 (TLS): a worker joins a self-signed server over wss:// using the
+      # printed cert pin, and a request is served over https end to end — the
+      # phase-7 transport-security path (ADR-0009) on a real two-process
+      # deployment. ACME and the genuine cross-host run live in the nightly tier;
+      # drain/timeout are transport-agnostic and already proven over the channel.
+      - name: TLS wss:// end-to-end (G14)
+        run: |
+          set -uo pipefail
+          PORT=9443
+          # Fresh TLS server, reusing the model store + key db in the state dir.
+          ./atlas server --addr 127.0.0.1:$PORT --token "$ATLAS_JOIN_TOKEN" \
+            --state-dir "$ATLAS_STATE_DIR" --tls-self-signed \
+            --autostart-timeout 0 --idle-timeout 0 >tls-server.log 2>&1 &
+          echo $! > tls-server.pid
+          # The banner prints the cert pin once the server is up.
+          PIN=""
+          for _ in $(seq 1 50); do
+            PIN=$(grep -oE 'sha256:[0-9a-f]{64}' tls-server.log | head -1 || true)
+            [ -n "$PIN" ] && break; sleep 0.2
+          done
+          if [ -z "$PIN" ]; then echo "::error::no TLS pin in banner"; cat tls-server.log; exit 1; fi
+          echo "pin: $PIN"
+          # Worker joins over wss:// pinning that cert, serving the conformance model.
+          ./atlas worker --join wss://127.0.0.1:$PORT/workers/connect --token "$ATLAS_JOIN_TOKEN" \
+            --tls-pin "$PIN" --state-dir "$ATLAS_STATE_DIR" --model "$CONF_MODEL_NAME" >tls-worker.log 2>&1 &
+          echo $! > tls-worker.pid
+          # Validate the server cert from the generated PEM (its SANs include 127.0.0.1).
+          CERT="$ATLAS_STATE_DIR/tls/cert.pem"
+          for _ in $(seq 1 120); do
+            curl -sf --cacert "$CERT" "https://127.0.0.1:$PORT/readyz" >/dev/null && break; sleep 1
+          done
+          CODE=$(curl -sS -o /tmp/tls_body.txt -w '%{http_code}' --cacert "$CERT" \
+            -H "x-api-key: $ATLAS_API_KEY" -H 'content-type: application/json' \
+            "https://127.0.0.1:$PORT/v1/messages" \
+            -d "$(printf '{"model":"%s","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}' "$CONF_MODEL_NAME")")
+          echo "tls request → $CODE"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::wss+TLS request failed ($CODE)"; cat /tmp/tls_body.txt tls-server.log tls-worker.log; exit 1
+          fi
+          echo "G14: worker joined over wss:// with a pinned self-signed cert; request served over https."
       - name: Stop Atlas
         if: always()
         run: |
-          for p in worker.pid wa.pid wb.pid wa2.pid wd.pid as-worker.pid; do kill "$(cat $p 2>/dev/null)" 2>/dev/null || true; done
-          for p in server.pid as-server.pid; do kill "$(cat $p 2>/dev/null)" 2>/dev/null || true; done
+          for p in worker.pid wa.pid wb.pid wa2.pid wd.pid as-worker.pid tls-worker.pid; do kill "$(cat $p 2>/dev/null)" 2>/dev/null || true; done
+          for p in server.pid as-server.pid tls-server.pid; do kill "$(cat $p 2>/dev/null)" 2>/dev/null || true; done
       - uses: actions/upload-artifact@v7
         if: always()
         with:

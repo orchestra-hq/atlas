@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/orchestra-hq/atlas/internal/core"
+	"github.com/orchestra-hq/atlas/internal/tlsx"
 	"github.com/orchestra-hq/atlas/internal/version"
 	"github.com/orchestra-hq/atlas/internal/wire"
 )
@@ -77,6 +79,13 @@ type DialConfig struct {
 	// Engine names the inference engine this worker runs (llamacpp/vllm); the
 	// scheduler places only matching-engine models on it (M1 phase 4b).
 	Engine string
+	// TLSPin, when set, pins the server's leaf certificate for a wss:// join to a
+	// self-signed deployment (ADR-0009): the worker accepts the connection only if
+	// the presented cert matches this pin, in place of CA/hostname validation. It
+	// must be a normalized "sha256:<hex>" pin (tlsx.NormalizePin). Empty leaves the
+	// default system-trust verification, which is correct for ACME / public-CA
+	// certs and for plain ws://.
+	TLSPin string
 	// Loader launches models on demand for scheduler-driven placement (M1 phase
 	// 4b). Nil disables remote loading: the worker serves only its pre-declared
 	// Models. Models a Loader launches are stopped when the connection ends, so a
@@ -164,8 +173,26 @@ func closed(ch <-chan struct{}) bool {
 // vs. one that never reached the server). drained reports whether the connection
 // ended because the worker drained — either a SIGTERM or a server-initiated
 // remove — so the caller stops rather than reconnecting.
+// tlsDialer returns the WebSocket dialer for a connection. With no pin it is the
+// default dialer (plain ws://, or wss:// validated against the system trust
+// store — the ACME / public-CA case). With a pin it disables the default
+// hostname/chain checks and instead accepts the connection only if the server's
+// leaf cert matches the pin (ADR-0009 self-signed path).
+func tlsDialer(pin string) *websocket.Dialer {
+	if pin == "" {
+		return websocket.DefaultDialer
+	}
+	d := *websocket.DefaultDialer
+	d.TLSClientConfig = &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec // not insecure: VerifyConnection pins the exact leaf cert
+		VerifyConnection:   tlsx.PinnedVerifier(pin),
+	}
+	return &d
+}
+
 func dialOnce(ctx context.Context, cfg DialConfig, hw wire.Hardware, log *slog.Logger) (joined, drained bool, err error) {
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, cfg.ServerURL, nil)
+	dialer := tlsDialer(cfg.TLSPin)
+	conn, _, err := dialer.DialContext(ctx, cfg.ServerURL, nil)
 	if err != nil {
 		return false, false, fmt.Errorf("dial %s: %w", cfg.ServerURL, err)
 	}
