@@ -107,6 +107,7 @@ func runUp(ctx context.Context, cmd *cobra.Command, opts *upOptions) error {
 	// stderr, alongside the human-readable banner on stdout.
 	gw := server.NewGateway(keyAuth{db: store}, models, aliases)
 	gw.SetLogger(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	gw.SetUsageRecorder(usageRecorder{db: store}) // durable usage ledger (G13)
 	srv := &http.Server{
 		Addr:              opts.addr,
 		Handler:           gw.Handler(),

@@ -58,6 +58,17 @@ docker exec <container> atlas keys revoke <key-id>
 
 Keys persist in the mounted volume, so they survive restarts. There is no shared-secret flag; revoking a key takes effect on its next request.
 
+## Usage metering
+
+Every completed inference request is recorded in the same state-dir database, tagged with the calling key, the served model, and the worker that ran it. `atlas usage` summarizes the ledger (cumulative since it was created); add `--json` for a machine-readable object.
+
+```bash
+docker exec <container> atlas usage
+docker exec <container> atlas usage --json
+```
+
+The totals are durable across restarts. A stream interrupted partway (worker drop or client disconnect) still records the output it emitted before the cut, so the ledger is not systematically short on interrupted requests.
+
 ## Building locally
 
 The [`Dockerfile`](../Dockerfile) is multi-stage with named targets:

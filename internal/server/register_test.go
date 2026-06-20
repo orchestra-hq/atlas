@@ -204,22 +204,22 @@ func TestUnregisterInstanceRemovesOneWorkersModel(t *testing.T) {
 
 	// Unload model "a" from w1 only: w2 still serves "a", and w1 still serves "b".
 	g.UnregisterInstance("w1", "a")
-	if _, ok := g.resolve("a"); !ok {
+	if _, _, ok := g.resolve("a"); !ok {
 		t.Error("model a stopped resolving, but w2 still serves it")
 	}
-	if _, ok := g.resolve("b"); !ok {
+	if _, _, ok := g.resolve("b"); !ok {
 		t.Error("model b should be unaffected by unloading a from w1")
 	}
 
 	// Removing the last copy of "a" (from w2) drops it entirely.
 	g.UnregisterInstance("w2", "a")
-	if _, ok := g.resolve("a"); ok {
+	if _, _, ok := g.resolve("a"); ok {
 		t.Error("model a should be gone after its last instance was removed")
 	}
 
 	g.UnregisterInstance("w1", "never") // unknown model, must not panic
 	g.UnregisterInstance("nobody", "b") // unknown worker, must not panic
-	if _, ok := g.resolve("b"); !ok {
+	if _, _, ok := g.resolve("b"); !ok {
 		t.Error("model b should survive no-op unregisters")
 	}
 }

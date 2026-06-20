@@ -25,10 +25,6 @@ import (
 // names no live key.
 var ErrKeyNotFound = errors.New("db: key not found")
 
-// schemaVersion is the current schema generation, stamped into PRAGMA
-// user_version. Bump it when adding a migration step in migrate.
-const schemaVersion = 1
-
 // DB is the control plane's SQLite store. Construct with Open; the zero value is
 // not usable. It is safe for concurrent use (database/sql pools connections);
 // writes are serialized by SQLite, reads run under WAL.
@@ -60,22 +56,18 @@ func Open(path string) (*DB, error) {
 // Close releases the database handle.
 func (d *DB) Close() error { return d.sql.Close() }
 
-// migrate brings the schema up to schemaVersion. It is idempotent: CREATE TABLE
-// IF NOT EXISTS on every open, gated by PRAGMA user_version so future versions
-// can add steps without re-running old ones.
-func (d *DB) migrate(ctx context.Context) error {
-	var version int
-	if err := d.sql.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
-		return fmt.Errorf("db: read schema version: %w", err)
-	}
-	if version >= schemaVersion {
-		return nil
-	}
+// migrations is the ordered list of schema steps; its length is the current
+// schema version. Step i (1-based) is applied when PRAGMA user_version is below
+// i, so a store created at an older version catches up step by step and a fresh
+// store runs them all in order. Each step is idempotent (CREATE ... IF NOT
+// EXISTS) as a belt-and-braces guard, but user_version is the real gate. To
+// evolve the schema, append a new step; never edit or reorder an applied one.
+var migrations = []string{
 	// v1: the API key table. hash is the sha256 of the secret (high-entropy
 	// machine tokens, not passwords — a fast indexed hash, not bcrypt; ADR-0008),
 	// unique so a lookup by presented secret is an index hit. allowlist is a JSON
 	// array of model names, empty = all models.
-	const v1 = `
+	`
 CREATE TABLE IF NOT EXISTS api_keys (
 	id          TEXT PRIMARY KEY,
 	prefix      TEXT NOT NULL,
@@ -84,13 +76,47 @@ CREATE TABLE IF NOT EXISTS api_keys (
 	admin       INTEGER NOT NULL DEFAULT 0,
 	created_at  TEXT NOT NULL,
 	revoked_at  TEXT
-);`
-	if _, err := d.sql.ExecContext(ctx, v1); err != nil {
-		return fmt.Errorf("db: create api_keys: %w", err)
+);`,
+	// v2: the usage ledger (phase 6). One row per completed inference request,
+	// tagged with the calling key, the served model, and the worker that ran it,
+	// so totals are queryable by any of the three. ts is RFC3339 UTC. Indexed on
+	// the three group-by columns the `atlas usage` summaries scan.
+	`
+CREATE TABLE IF NOT EXISTS usage (
+	id            INTEGER PRIMARY KEY AUTOINCREMENT,
+	ts            TEXT NOT NULL,
+	key_id        TEXT NOT NULL,
+	model         TEXT NOT NULL,
+	worker_id     TEXT NOT NULL,
+	input_tokens  INTEGER NOT NULL,
+	output_tokens INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_usage_key_id ON usage(key_id);
+CREATE INDEX IF NOT EXISTS idx_usage_model ON usage(model);
+CREATE INDEX IF NOT EXISTS idx_usage_worker_id ON usage(worker_id);`,
+}
+
+// migrate brings the schema up to date by applying each migration step whose
+// version exceeds the store's current PRAGMA user_version, in order. It is safe
+// to run on every open: an up-to-date store applies nothing.
+func (d *DB) migrate(ctx context.Context) error {
+	var version int
+	if err := d.sql.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return fmt.Errorf("db: read schema version: %w", err)
 	}
-	// PRAGMA user_version does not accept a bound parameter.
-	if _, err := d.sql.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
-		return fmt.Errorf("db: set schema version: %w", err)
+	for i, stmt := range migrations {
+		target := i + 1
+		if version >= target {
+			continue
+		}
+		if _, err := d.sql.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("db: migrate to v%d: %w", target, err)
+		}
+		// PRAGMA user_version does not accept a bound parameter.
+		if _, err := d.sql.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", target)); err != nil {
+			return fmt.Errorf("db: set schema version v%d: %w", target, err)
+		}
+		version = target
 	}
 	return nil
 }

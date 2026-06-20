@@ -271,6 +271,27 @@ jobs:
             --reasoning-model "$CONF_REASONING_NAME" \
             --require G1,G2,G3,G4,G5,G6,G7,G8,G10
         working-directory: conformance
+      # Gate G13 (usage metering): the harness above drove dozens of requests
+      # through the remote worker. Assert the durable ledger captured them —
+      # non-empty per-model totals with positive token counts, queryable via
+      # `atlas usage`, and attributed to the real (non-"local") remote worker
+      # connection rather than the in-process sentinel.
+      - name: Verify usage metering (G13)
+        run: |
+          set -uo pipefail
+          ./atlas usage --state-dir "$ATLAS_STATE_DIR" # human-readable, for the log
+          USAGE=$(./atlas usage --state-dir "$ATLAS_STATE_DIR" --json)
+          echo "$USAGE"
+          MODELS=$(echo "$USAGE" | jq '.by_model | length')
+          OUT=$(echo "$USAGE" | jq '[.by_model[].output_tokens] | add // 0')
+          REMOTE=$(echo "$USAGE" | jq '[.by_worker[].group | select(. != "local")] | length')
+          if [ "$MODELS" -lt 1 ] || [ "$OUT" -lt 1 ]; then
+            echo "::error::usage ledger empty after conformance run (models=$MODELS out=$OUT)"; exit 1
+          fi
+          if [ "$REMOTE" -lt 1 ]; then
+            echo "::error::no usage attributed to a remote worker (by_worker=$(echo "$USAGE" | jq -c .by_worker))"; exit 1
+          fi
+          echo "G13: $MODELS model(s), $OUT output tokens, attributed to a remote worker."
       # Phase-3 exit criterion (G-fleet-ops): graceful drain on SIGTERM and the
       # heartbeat-timeout backstop for a hard-killed worker. Behavioral, so it
       # rides the two-process deployment rather than a new conformance G-group.

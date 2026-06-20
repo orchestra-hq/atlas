@@ -106,7 +106,7 @@ Missing `x-api-key` → 401 Anthropic error envelope; invalid key → 401; valid
 
 ### G13 — Usage metering (M1 phase 6)
 
-After N requests across two keys and two models: `atlas usage` returns correct per-key and per-model totals; input + output token sums match the `usage` fields returned on individual responses; records survive process restart (durable in SQLite).
+After N requests across two keys and two models: `atlas usage` returns correct per-key, per-model, and per-worker totals; input + output token sums match the `usage` fields returned on individual responses; records survive process restart (durable in SQLite). Interrupted-stream case (review finding): a stream cut off partway (worker drop or client disconnect) still records the output tokens emitted up to the cut, rather than zero — an estimate when no exact engine count is available, since usage is reported only at end of stream.
 
 ### G14 — Fleet ops (M1 phase 7)
 

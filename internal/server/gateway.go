@@ -116,6 +116,7 @@ type Gateway struct {
 	createdAt string        // wire created_at stamped on model objects
 	logger    *slog.Logger  // one structured line per API request (G10)
 	autostart Autostarter   // deploys+waits on a request for an unrouted model (nil = off)
+	usage     UsageRecorder // durable per-request usage ledger (phase 6, G13; nil = off)
 
 	// mu guards the route table, which is static in single-node mode but changes
 	// as remote workers register and drop their models in fleet mode. resolve and
@@ -165,6 +166,11 @@ func (g *Gateway) SetLogger(l *slog.Logger) {
 // plain 404 — the single-node behavior.
 func (g *Gateway) SetAutostarter(a Autostarter) { g.autostart = a }
 
+// SetUsageRecorder attaches the durable usage ledger (phase 6). Call once at
+// startup; nil (the default) leaves metering off, so requests serve normally but
+// write no usage rows — the behavior in tests and any opt-out deployment.
+func (g *Gateway) SetUsageRecorder(u UsageRecorder) { g.usage = u }
+
 // canonical maps an alias to its target model name (identity if not an alias),
 // so auto-start deploys the served model a client's alias points at.
 func (g *Gateway) canonical(name string) string {
@@ -182,24 +188,25 @@ func (g *Gateway) canonical(name string) string {
 // to deploy and waits, then resolves again. A model that still does not resolve
 // (auto-start off, unknown model, or the wait timed out) returns false, and the
 // caller writes the not-found error.
-func (g *Gateway) resolveOrStart(ctx context.Context, name string) (Model, bool) {
-	if m, ok := g.resolve(name); ok {
+func (g *Gateway) resolveOrStart(ctx context.Context, name string) (Model, string, bool) {
+	if m, worker, ok := g.resolve(name); ok {
 		if g.autostart != nil {
 			g.autostart.Touch(g.canonical(name))
 		}
-		return m, true
+		return m, worker, true
 	}
 	if g.autostart == nil {
-		return Model{}, false
+		return Model{}, "", false
 	}
 	if !g.autostart.EnsureModel(ctx, g.canonical(name)) {
-		return Model{}, false
+		return Model{}, "", false
 	}
 	return g.resolve(name)
 }
 
-// resolve maps a requested model name (alias or canonical) to its Model.
-func (g *Gateway) resolve(name string) (Model, bool) {
+// resolve maps a requested model name (alias or canonical) to its Model and the
+// id of the worker connection chosen to serve it (for usage attribution).
+func (g *Gateway) resolve(name string) (Model, string, bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return g.resolveLocked(name)
@@ -208,20 +215,20 @@ func (g *Gateway) resolve(name string) (Model, bool) {
 // resolveLocked is resolve without locking, for callers already holding mu. When
 // a model has several live instances (replicas across workers) it round-robins
 // across them, so load spreads over the fleet; the returned Model carries the
-// chosen instance's executor.
-func (g *Gateway) resolveLocked(name string) (Model, bool) {
+// chosen instance's executor and the second result is that instance's worker id.
+func (g *Gateway) resolveLocked(name string) (Model, string, bool) {
 	if canon, ok := g.aliases[name]; ok {
 		name = canon
 	}
 	rs := g.routes[name]
 	if len(rs) == 0 {
-		return Model{}, false
+		return Model{}, "", false
 	}
 	r := rs[0]
 	if len(rs) > 1 {
 		r = rs[g.rr.Add(1)%uint64(len(rs))]
 	}
-	return Model{Name: name, Exec: r.exec, ContextWindow: r.contextWindow}, true
+	return Model{Name: name, Exec: r.exec, ContextWindow: r.contextWindow}, r.workerID, true
 }
 
 // RegisterInstance adds one live instance of a model, owned by the given worker
@@ -390,7 +397,7 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	model, ok := g.resolveOrStart(r.Context(), coreReq.Model)
+	model, worker, ok := g.resolveOrStart(r.Context(), coreReq.Model)
 	if !ok {
 		writeModelNotFound(w, coreReq.Model)
 		return
@@ -415,8 +422,10 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 	dispatch := coreReq
 	dispatch.Model = model.Name
 
+	tags := usageTags{keyID: id.KeyID, workerID: worker}
+
 	if req.Stream {
-		g.streamMessages(w, r, model.Exec, dispatch, requested, stops)
+		g.streamMessages(w, r, model.Exec, dispatch, requested, stops, tags)
 		return
 	}
 
@@ -432,7 +441,7 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 		stopSeq = &seq
 	}
 
-	recordUsage(r.Context(), requested, resp.Usage.InputTokens, resp.Usage.OutputTokens)
+	recordBillableUsage(r.Context(), tags, requested, resp.Usage.InputTokens, resp.Usage.OutputTokens)
 	anthropic.WriteJSON(w, http.StatusOK, anthropic.FromCore(newMessageID(), requested, resp, stopSeq))
 }
 
@@ -501,7 +510,7 @@ func (g *Gateway) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	model, ok := g.resolve(coreReq.Model)
+	model, _, ok := g.resolve(coreReq.Model)
 	if !ok {
 		writeModelNotFound(w, coreReq.Model)
 		return
@@ -560,7 +569,7 @@ func (g *Gateway) handleGetModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := r.PathValue("id")
-	if _, ok := g.resolve(id); !ok {
+	if _, _, ok := g.resolve(id); !ok {
 		writeModelNotFound(w, id)
 		return
 	}
@@ -579,7 +588,7 @@ func (g *Gateway) modelInfo(id string) anthropic.ModelInfo {
 
 // modelInfoLocked is modelInfo without locking, for callers already holding mu.
 func (g *Gateway) modelInfoLocked(id string) anthropic.ModelInfo {
-	model, _ := g.resolveLocked(id)
+	model, _, _ := g.resolveLocked(id)
 	return anthropic.NewModelInfo(id, model.Name, g.createdAt, model.ContextWindow)
 }
 
@@ -593,7 +602,7 @@ func (g *Gateway) modelInfoLocked(id string) anthropic.ModelInfo {
 // on the stream's message. Once the SSE headers are written the status is
 // committed: a mid-stream engine failure becomes an error event, not an HTTP
 // error.
-func (g *Gateway) streamMessages(w http.ResponseWriter, r *http.Request, exec Executor, req core.Request, echoModel string, stops []string) {
+func (g *Gateway) streamMessages(w http.ResponseWriter, r *http.Request, exec Executor, req core.Request, echoModel string, stops []string, tags usageTags) {
 	sw, err := anthropic.NewStreamWriter(w, newMessageID(), echoModel)
 	if err != nil {
 		anthropic.WriteError(w, &anthropic.Error{Status: http.StatusInternalServerError, Type: anthropic.ErrAPI, Msg: "streaming unsupported"})
@@ -611,11 +620,19 @@ func (g *Gateway) streamMessages(w http.ResponseWriter, r *http.Request, exec Ex
 		err = bufferedStream(r.Context(), exec, req, sink)
 	}
 	if err != nil {
+		// Interrupted mid-stream (worker drop or client-write failure): record the
+		// usage emitted up to the cut rather than zero, so the ledger is not
+		// systematically short on interrupted streams (G13 interrupted case). A
+		// stream that produced nothing records nothing, matching the non-streaming
+		// error path.
+		if out := sink.partialOutputTokens(); out > 0 {
+			recordBillableUsage(r.Context(), tags, echoModel, sink.usage.InputTokens, out)
+		}
 		_ = sw.Error(anthropic.ErrAPI, "engine error during generation")
 		return
 	}
 
-	recordUsage(r.Context(), echoModel, sink.usage.InputTokens, sink.usage.OutputTokens)
+	recordBillableUsage(r.Context(), tags, echoModel, sink.usage.InputTokens, sink.usage.OutputTokens)
 	_ = sw.Finish(sink.reason, sink.stopSeq, sink.usage)
 }
 
@@ -664,11 +681,25 @@ func bufferedStream(ctx context.Context, exec Executor, req core.Request, sink c
 // one matches) and records the final stop reason, sequence, and usage for the
 // closing message_delta.
 type streamSink struct {
-	sw      *anthropic.StreamWriter
-	scanner *core.StopSequenceScanner
-	reason  core.StopReason
-	stopSeq *string
-	usage   core.Usage
+	sw       *anthropic.StreamWriter
+	scanner  *core.StopSequenceScanner
+	reason   core.StopReason
+	stopSeq  *string
+	usage    core.Usage
+	outBytes int // emitted output text bytes, for the interrupted-stream estimate
+}
+
+// partialOutputTokens returns the output-token count to record when a stream is
+// interrupted before Done. If the engine already reported usage (it never does
+// mid-stream today, but be safe) that exact count wins; otherwise it estimates
+// from the bytes emitted so far, since no per-delta token count is available
+// (the engine reports usage only in its final chunk). The estimate keeps the
+// ledger from recording zero for a stream that did produce output (G13).
+func (s *streamSink) partialOutputTokens() int {
+	if s.usage.OutputTokens > 0 {
+		return s.usage.OutputTokens
+	}
+	return estimateTokens(s.outBytes)
 }
 
 // Thinking forwards a reasoning delta straight to the writer. Stop sequences
@@ -685,6 +716,7 @@ func (s *streamSink) Text(delta string) error {
 		if err := s.sw.TextDelta(emit); err != nil {
 			return err
 		}
+		s.outBytes += len(emit)
 	}
 	if matched {
 		s.reason = core.StopStopSequence
@@ -858,4 +890,19 @@ func newMessageID() string {
 	var b [12]byte
 	_, _ = rand.Read(b[:])
 	return "msg_" + hex.EncodeToString(b[:])
+}
+
+// estimateTokens approximates a token count from a byte length, used only for
+// the output of an interrupted stream where no exact count is available (the
+// engine reports usage only at end of stream). ~4 bytes/token is the standard
+// rough heuristic; any non-empty output rounds up to at least one token so the
+// ledger never records zero for a stream that produced text.
+func estimateTokens(bytes int) int {
+	if bytes <= 0 {
+		return 0
+	}
+	if t := bytes / 4; t > 0 {
+		return t
+	}
+	return 1
 }
