@@ -25,6 +25,7 @@ type serverOptions struct {
 	stateDir         string
 	autostartTimeout time.Duration
 	idleTimeout      time.Duration
+	tls              tlsOptions
 }
 
 func newServerCmd() *cobra.Command {
@@ -49,6 +50,15 @@ func newServerCmd() *cobra.Command {
 		"how long a request waits for a model to auto-start on first use (0 disables auto-start)")
 	cmd.Flags().DurationVar(&opts.idleTimeout, "idle-timeout", 15*time.Minute,
 		"unload an auto-started model after this long with no requests (0 disables idle-stop)")
+	// TLS (M1 phase 7, ADR-0009): mutually exclusive modes; default is plaintext
+	// (ws://, the dev/internal default per ADR-0007).
+	cmd.Flags().StringVar(&opts.tls.certFile, "tls-cert", "", "PEM certificate to serve TLS with (requires --tls-key)")
+	cmd.Flags().StringVar(&opts.tls.keyFile, "tls-key", "", "PEM private key for --tls-cert")
+	cmd.Flags().BoolVar(&opts.tls.selfSigned, "tls-self-signed", false,
+		"serve TLS with a generated self-signed certificate (cached in the state dir); workers join over wss:// with --tls-pin")
+	cmd.Flags().StringVar(&opts.tls.acmeDomain, "tls-acme-domain", "",
+		"obtain a Let's Encrypt certificate for this public DNS name (the server must be reachable on :443)")
+	cmd.Flags().StringVar(&opts.tls.acmeEmail, "tls-acme-email", "", "contact email for the ACME account (optional)")
 	return cmd
 }
 
@@ -140,17 +150,34 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 	// as a catch-all; hub routes registered above take precedence.
 	mux.Handle("/", gw.Handler())
 
+	host, port := splitHostPort(opts.addr)
+	tlsRes, err := resolveServerTLS(opts.tls, opts.stateDir, selfSignedHosts(host))
+	if err != nil {
+		return err
+	}
+
 	srv := &http.Server{
 		Addr:              opts.addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
+		TLSConfig:         tlsRes.config,
 	}
 
-	_, port := splitHostPort(opts.addr)
+	wsScheme, httpScheme := "ws", "http"
+	if tlsRes.scheme == "https" {
+		wsScheme, httpScheme = "wss", "https"
+	}
+	pinFlag := ""
+	if tlsRes.pin != "" {
+		pinFlag = " --tls-pin " + tlsRes.pin
+	}
 	cmd.Println()
 	cmd.Printf("Atlas server starting.\n")
 	cmd.Printf("  Listen  : %s\n", opts.addr)
 	cmd.Printf("  Token   : %s\n", opts.token)
+	for _, note := range tlsRes.notes {
+		cmd.Printf("  %s\n", note)
+	}
 	keyForHint := "<your-api-key>"
 	if defaultKeyCreated {
 		cmd.Printf("  API key : %s  (new default key — save it; it is not shown again)\n", defaultKey)
@@ -160,16 +187,22 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 	}
 	cmd.Println()
 	cmd.Printf("Workers join with:\n")
-	cmd.Printf("  atlas worker --join ws://<this-host>:%s/workers/connect --token %s\n", port, opts.token)
+	cmd.Printf("  atlas worker --join %s://<this-host>:%s/workers/connect --token %s%s\n", wsScheme, port, opts.token, pinFlag)
 	cmd.Printf("\nThen place a model on the fleet:\n")
-	cmd.Printf("  atlas deploy <model> --server http://<this-host>:%s\n", port)
+	cmd.Printf("  atlas deploy <model> --server %s://<this-host>:%s\n", httpScheme, port)
 	cmd.Printf("\nPoint a client at it:\n")
-	cmd.Printf("  ANTHROPIC_BASE_URL=http://<this-host>:%s ANTHROPIC_API_KEY=%s\n", port, keyForHint)
+	cmd.Printf("  ANTHROPIC_BASE_URL=%s://<this-host>:%s ANTHROPIC_API_KEY=%s\n", httpScheme, port, keyForHint)
 	cmd.Println("\nPress Ctrl-C to stop.")
 
 	serveErr := make(chan error, 1)
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		serve := srv.ListenAndServe
+		if tlsRes.config != nil {
+			// Certificates live in TLSConfig (or are fetched by autocert), so the
+			// cert/key file args are empty.
+			serve = func() error { return srv.ListenAndServeTLS("", "") }
+		}
+		if err := serve(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- err
 		}
 	}()

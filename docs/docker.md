@@ -69,6 +69,16 @@ docker exec <container> atlas usage --json
 
 The totals are durable across restarts. A stream interrupted partway (worker drop or client disconnect) still records the output it emitted before the cut, so the ledger is not systematically short on interrupted requests.
 
+## TLS
+
+`atlas server` serves plaintext (`ws://`/`http://`) by default — fine behind an SSH tunnel or on a trusted network. For an exposed endpoint, pick one TLS mode ([ADR-0009](decisions/0009-transport-security-tls-and-pinning.md)):
+
+- `--tls-acme-domain <name>` — Let's Encrypt for a public DNS name (the server must be reachable on `:443`). Clients and workers trust it through the system root store; no pin needed.
+- `--tls-cert <pem> --tls-key <pem>` — an operator-supplied certificate.
+- `--tls-self-signed` — a generated certificate cached in the state dir, for a private fleet with no DNS/CA. The startup banner prints a `sha256:<hex>` **pin**; each worker joins over `wss://` with `--tls-pin <pin>` (or `ATLAS_TLS_PIN`), which authenticates the exact certificate instead of a CA chain or hostname.
+
+The cert pin is stable across restarts (the self-signed material is cached), so a worker's `--tls-pin` keeps working; rotate by deleting the state dir's `tls/` directory and redistributing the new pin.
+
 ## Building locally
 
 The [`Dockerfile`](../Dockerfile) is multi-stage with named targets:

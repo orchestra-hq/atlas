@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/orchestra-hq/atlas/internal/tlsx"
 	"github.com/orchestra-hq/atlas/internal/worker"
 )
 
@@ -22,6 +23,7 @@ type workerOptions struct {
 	engine     string
 	engineArgs []string
 	stateDir   string
+	tlsPin     string
 }
 
 func newWorkerCmd() *cobra.Command {
@@ -35,7 +37,8 @@ func newWorkerCmd() *cobra.Command {
 			"over the channel.\n\n" +
 			"Flags can also be set via environment variables:\n" +
 			"  ATLAS_SERVER_URL  equivalent to --join\n" +
-			"  ATLAS_JOIN_TOKEN  equivalent to --token",
+			"  ATLAS_JOIN_TOKEN  equivalent to --token\n" +
+			"  ATLAS_TLS_PIN     equivalent to --tls-pin",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runWorker(cmd.Context(), cmd, opts)
@@ -51,6 +54,8 @@ func newWorkerCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&opts.engineArgs, "engine-arg", nil,
 		"extra argument passed verbatim to every engine subprocess; repeat for several")
 	cmd.Flags().StringVar(&opts.stateDir, "state-dir", defaultStateDir(), "directory for runtimes, weights, and logs")
+	cmd.Flags().StringVar(&opts.tlsPin, "tls-pin", "",
+		"pin the server's TLS certificate for a wss:// join to a self-signed server (sha256:<hex>, printed by 'atlas server --tls-self-signed'); not needed for ACME/public-CA certs")
 	return cmd
 }
 
@@ -94,6 +99,23 @@ func runWorker(ctx context.Context, cmd *cobra.Command, opts *workerOptions) err
 	}
 	if token == "" {
 		return fmt.Errorf("--token is required (or set ATLAS_JOIN_TOKEN)")
+	}
+
+	// Resolve and validate the optional cert pin up front, so a malformed pin
+	// fails at startup rather than rejecting every connection at dial time.
+	tlsPin := opts.tlsPin
+	if tlsPin == "" {
+		tlsPin = os.Getenv("ATLAS_TLS_PIN")
+	}
+	if tlsPin != "" {
+		normalized, err := tlsx.NormalizePin(tlsPin)
+		if err != nil {
+			return err
+		}
+		tlsPin = normalized
+		if !strings.HasPrefix(serverURL, "wss://") {
+			cmd.Printf("Warning: --tls-pin is set but the server URL is not wss://; the pin is ignored for %s\n", serverURL)
+		}
 	}
 
 	name := opts.name
@@ -143,6 +165,7 @@ func runWorker(ctx context.Context, cmd *cobra.Command, opts *workerOptions) err
 		Models:    served,
 		Drain:     drainCh,
 		Engine:    string(engine),
+		TLSPin:    tlsPin,
 		Loader:    &fleetLoader{rt: rt},
 		Logger:    log,
 	}); err != nil && ctx.Err() == nil {
