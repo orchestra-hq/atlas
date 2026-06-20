@@ -12,7 +12,7 @@ import (
 
 func TestHealthzAlwaysOK(t *testing.T) {
 	// Liveness does not depend on a model being loaded.
-	g := NewGateway(testKey, nil, nil)
+	g := NewGateway(staticAuth(testKey), nil, nil)
 	srv := httptest.NewServer(g.Handler())
 	t.Cleanup(srv.Close)
 
@@ -28,7 +28,7 @@ func TestHealthzAlwaysOK(t *testing.T) {
 
 func TestReadyzReflectsServableModels(t *testing.T) {
 	// No models: not ready.
-	empty := httptest.NewServer(NewGateway(testKey, nil, nil).Handler())
+	empty := httptest.NewServer(NewGateway(staticAuth(testKey), nil, nil).Handler())
 	t.Cleanup(empty.Close)
 	if got := getStatus(t, empty, "/readyz"); got != http.StatusServiceUnavailable {
 		t.Errorf("empty /readyz = %d, want 503", got)
@@ -46,7 +46,7 @@ func TestReadyzReflectsServableModels(t *testing.T) {
 // structured log line carrying its input and output token counts.
 func TestRequestLogIncludesTokenCounts(t *testing.T) {
 	var buf bytes.Buffer
-	g := NewGateway(testKey, []Model{{Name: testModel, Exec: &echoExecutor{reply: "hello", outToken: 11}}}, nil)
+	g := NewGateway(staticAuth(testKey), []Model{{Name: testModel, Exec: &echoExecutor{reply: "hello", outToken: 11}}}, nil)
 	g.SetLogger(slog.New(slog.NewTextHandler(&buf, nil)))
 	srv := httptest.NewServer(g.Handler())
 	t.Cleanup(srv.Close)
@@ -74,7 +74,7 @@ func TestRequestLogIncludesTokenCounts(t *testing.T) {
 // log so it does not drown the per-request token accounting.
 func TestProbesAreNotLogged(t *testing.T) {
 	var buf bytes.Buffer
-	g := NewGateway(testKey, []Model{{Name: testModel, Exec: &echoExecutor{reply: "hi"}}}, nil)
+	g := NewGateway(staticAuth(testKey), []Model{{Name: testModel, Exec: &echoExecutor{reply: "hi"}}}, nil)
 	g.SetLogger(slog.New(slog.NewTextHandler(&buf, nil)))
 	srv := httptest.NewServer(g.Handler())
 	t.Cleanup(srv.Close)

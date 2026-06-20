@@ -18,8 +18,9 @@ import (
 // context-window assertion, and gateway-owned stop-sequence semantics as the
 // Anthropic path — only the wire shapes differ (build-time decision 1).
 func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
-	if !g.authenticated(r) {
-		writeOpenAIUnauthorized(w)
+	id, authErr := g.authenticate(r)
+	if authErr != nil {
+		writeOpenAIErr(w, authErr)
 		return
 	}
 
@@ -38,6 +39,11 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	coreReq, err := req.ToCore()
 	if err != nil {
 		writeOpenAIErr(w, err)
+		return
+	}
+
+	if !g.modelPermitted(id, coreReq.Model) {
+		writeOpenAIErr(w, forbiddenModelErr(coreReq.Model))
 		return
 	}
 
@@ -167,14 +173,6 @@ func (s *openaiStreamSink) Done(reason core.StopReason, usage core.Usage) error 
 	return nil
 }
 
-func writeOpenAIUnauthorized(w http.ResponseWriter) {
-	openai.WriteError(w, &openai.Error{
-		Status: http.StatusUnauthorized,
-		Type:   openai.ErrAuthentication,
-		Msg:    "missing or invalid API key",
-	})
-}
-
 func writeOpenAIModelNotFound(w http.ResponseWriter, model string) {
 	openai.WriteError(w, &openai.Error{
 		Status: http.StatusNotFound,
@@ -227,6 +225,8 @@ func openaiErrType(t anthropic.ErrorType) openai.ErrorType {
 		return openai.ErrInvalidRequest
 	case anthropic.ErrAuthentication:
 		return openai.ErrAuthentication
+	case anthropic.ErrPermission:
+		return openai.ErrPermission
 	case anthropic.ErrNotFound:
 		return openai.ErrNotFound
 	case anthropic.ErrOverloaded:

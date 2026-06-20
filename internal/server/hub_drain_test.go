@@ -311,7 +311,7 @@ func TestHub_removeWorkerSendsDrain(t *testing.T) {
 // drops, the hub's teardown removes only that connection's instance, so the
 // model stays routable via the other — the case a name-keyed registry dropped.
 func TestHub_sameModelTwoConnectionsKeepsRoute(t *testing.T) {
-	gw := NewGateway(testKey, nil, nil)
+	gw := NewGateway(staticAuth(testKey), nil, nil)
 	hub := NewHub("tok", gw)
 	ts := httptest.NewServer(http.HandlerFunc(hub.HandleConnect))
 	defer ts.Close()

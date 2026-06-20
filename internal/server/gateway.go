@@ -6,7 +6,6 @@ package server
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -63,6 +62,26 @@ type Autostarter interface {
 	Touch(model string)
 }
 
+// Identity is the authenticated caller behind a request: which key it is, the
+// model names it may use (empty = all), and whether it carries the admin scope
+// the /admin/* surface requires (phase 5b). The gateway gets it from the
+// Authenticator on every request.
+type Identity struct {
+	KeyID     string
+	Allowlist []string
+	Admin     bool
+}
+
+// Authenticator validates a presented API-key secret (from x-api-key or
+// Authorization: Bearer). ok is false for an unknown or revoked key (the
+// gateway answers 401); a non-nil error is an auth-backend failure (500). It is
+// consulted on every client request, with no caching, so a revoked key stops
+// working immediately (ADR-0008). The concrete implementation is the SQLite key
+// store (internal/db) bridged in the CLI; tests supply a static stub.
+type Authenticator interface {
+	Authenticate(ctx context.Context, secret string) (id Identity, ok bool, err error)
+}
+
 // Model is one model the gateway serves: a canonical Name, the Executor that
 // runs it, and its ContextWindow in tokens (0 = unknown, assertion skipped).
 type Model struct {
@@ -93,10 +112,10 @@ const localWorkerID = "local"
 // dispatch to a worker. It serves the Anthropic surface: POST /v1/messages
 // (buffered and SSE), POST /v1/messages/count_tokens, and GET /v1/models[/{id}].
 type Gateway struct {
-	apiKey    string
-	createdAt string       // wire created_at stamped on model objects
-	logger    *slog.Logger // one structured line per API request (G10)
-	autostart Autostarter  // deploys+waits on a request for an unrouted model (nil = off)
+	auth      Authenticator // validates the API key on every request (ADR-0008)
+	createdAt string        // wire created_at stamped on model objects
+	logger    *slog.Logger  // one structured line per API request (G10)
+	autostart Autostarter   // deploys+waits on a request for an unrouted model (nil = off)
 
 	// mu guards the route table, which is static in single-node mode but changes
 	// as remote workers register and drop their models in fleet mode. resolve and
@@ -110,17 +129,17 @@ type Gateway struct {
 	rr      atomic.Uint64      // round-robin cursor for selecting among a model's replicas
 }
 
-// NewGateway builds a gateway that accepts apiKey, serves each model in models
-// by its Name, and resolves each alias to a canonical model name. In M0
-// single-node mode every model maps to one in-process worker; operator-defined
-// aliases (e.g. claude-sonnet-4-6 -> a local model) let SDK/tool defaults
-// resolve (docs/api-surface.md).
-func NewGateway(apiKey string, models []Model, aliases map[string]string) *Gateway {
+// NewGateway builds a gateway that authenticates requests with auth, serves each
+// model in models by its Name, and resolves each alias to a canonical model
+// name. In M0 single-node mode every model maps to one in-process worker;
+// operator-defined aliases (e.g. claude-sonnet-4-6 -> a local model) let SDK/tool
+// defaults resolve (docs/api-surface.md).
+func NewGateway(auth Authenticator, models []Model, aliases map[string]string) *Gateway {
 	if aliases == nil {
 		aliases = map[string]string{}
 	}
 	g := &Gateway{
-		apiKey:    apiKey,
+		auth:      auth,
 		routes:    make(map[string][]route, len(models)),
 		aliases:   aliases,
 		order:     make([]string, 0, len(models)),
@@ -342,8 +361,9 @@ func (g *Gateway) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 const maxRequestBytes = 32 << 20 // 32 MiB
 
 func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
-	if !g.authenticated(r) {
-		writeUnauthorized(w)
+	id, authErr := g.authenticate(r)
+	if authErr != nil {
+		anthropic.WriteError(w, authErr)
 		return
 	}
 
@@ -362,6 +382,11 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 	coreReq, err := req.ToCore()
 	if err != nil {
 		writeErr(w, err)
+		return
+	}
+
+	if !g.modelPermitted(id, coreReq.Model) {
+		anthropic.WriteError(w, forbiddenModelErr(coreReq.Model))
 		return
 	}
 
@@ -447,8 +472,9 @@ func (g *Gateway) assertContextFits(ctx context.Context, model Model, req core.R
 // handleCountTokens serves POST /v1/messages/count_tokens: the prompt's token
 // count from the target model's real tokenizer (criterion 5).
 func (g *Gateway) handleCountTokens(w http.ResponseWriter, r *http.Request) {
-	if !g.authenticated(r) {
-		writeUnauthorized(w)
+	id, authErr := g.authenticate(r)
+	if authErr != nil {
+		anthropic.WriteError(w, authErr)
 		return
 	}
 
@@ -467,6 +493,11 @@ func (g *Gateway) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 	coreReq, err := req.ToCore()
 	if err != nil {
 		writeErr(w, err)
+		return
+	}
+
+	if !g.modelPermitted(id, coreReq.Model) {
+		anthropic.WriteError(w, forbiddenModelErr(coreReq.Model))
 		return
 	}
 
@@ -498,8 +529,8 @@ func (g *Gateway) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 // handleListModels serves GET /v1/models: every deployed model followed by
 // every alias, each with context-window metadata (criterion 4).
 func (g *Gateway) handleListModels(w http.ResponseWriter, r *http.Request) {
-	if !g.authenticated(r) {
-		writeUnauthorized(w)
+	if _, authErr := g.authenticate(r); authErr != nil {
+		anthropic.WriteError(w, authErr)
 		return
 	}
 
@@ -523,8 +554,8 @@ func (g *Gateway) handleListModels(w http.ResponseWriter, r *http.Request) {
 
 // handleGetModel serves GET /v1/models/{id} for an alias or a canonical name.
 func (g *Gateway) handleGetModel(w http.ResponseWriter, r *http.Request) {
-	if !g.authenticated(r) {
-		writeUnauthorized(w)
+	if _, authErr := g.authenticate(r); authErr != nil {
+		anthropic.WriteError(w, authErr)
 		return
 	}
 
@@ -692,32 +723,65 @@ func (s *streamSink) Done(reason core.StopReason, usage core.Usage) error {
 	return nil
 }
 
-// authenticated checks the key from x-api-key or Authorization: Bearer
-// (clients vary — docs/api-surface.md), constant-time.
-func (g *Gateway) authenticated(r *http.Request) bool {
-	key := r.Header.Get("x-api-key")
-	if key == "" {
-		if after, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); found {
-			key = after
+// authenticate validates a request's API key against the store, returning the
+// caller's Identity. A nil error means authenticated; otherwise the returned
+// *anthropic.Error is ready to write (401 for a missing/unknown/revoked key, 500
+// for an auth-backend failure). The OpenAI handler reshapes the same error onto
+// its envelope via writeOpenAIErr.
+func (g *Gateway) authenticate(r *http.Request) (Identity, *anthropic.Error) {
+	secret := apiKeyFromRequest(r)
+	if secret == "" {
+		return Identity{}, unauthorizedErr()
+	}
+	id, ok, err := g.auth.Authenticate(r.Context(), secret)
+	if err != nil {
+		return Identity{}, &anthropic.Error{Status: http.StatusInternalServerError, Type: anthropic.ErrAPI, Msg: "authentication backend error"}
+	}
+	if !ok {
+		return Identity{}, unauthorizedErr()
+	}
+	return id, nil
+}
+
+// apiKeyFromRequest extracts the presented secret from x-api-key or
+// Authorization: Bearer (clients vary — docs/api-surface.md).
+func apiKeyFromRequest(r *http.Request) string {
+	if key := r.Header.Get("x-api-key"); key != "" {
+		return key
+	}
+	if after, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); found {
+		return after
+	}
+	return ""
+}
+
+// modelPermitted reports whether id may use the requested model. An empty
+// allowlist permits every model; otherwise the requested name or its canonical
+// target (the client may have addressed an alias) must be listed.
+func (g *Gateway) modelPermitted(id Identity, requested string) bool {
+	if len(id.Allowlist) == 0 {
+		return true
+	}
+	canon := g.canonical(requested)
+	for _, allowed := range id.Allowlist {
+		if allowed == requested || allowed == canon {
+			return true
 		}
 	}
-	if key == "" {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(key), []byte(g.apiKey)) == 1
+	return false
+}
+
+func unauthorizedErr() *anthropic.Error {
+	return &anthropic.Error{Status: http.StatusUnauthorized, Type: anthropic.ErrAuthentication, Msg: "missing or invalid API key"}
+}
+
+func forbiddenModelErr(model string) *anthropic.Error {
+	return &anthropic.Error{Status: http.StatusForbidden, Type: anthropic.ErrPermission, Msg: "this API key is not permitted to use model: " + model}
 }
 
 // readBody reads a request body under the size cap.
 func readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	return io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBytes))
-}
-
-func writeUnauthorized(w http.ResponseWriter) {
-	anthropic.WriteError(w, &anthropic.Error{
-		Status: http.StatusUnauthorized,
-		Type:   anthropic.ErrAuthentication,
-		Msg:    "missing or invalid API key",
-	})
 }
 
 func writeModelNotFound(w http.ResponseWriter, model string) {

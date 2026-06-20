@@ -17,20 +17,20 @@ The slim image stays small and fetches the pinned llama-server (or, if you ask f
 
 All runtime state — downloaded engine runtimes, model weights, logs — lives under `/var/lib/atlas` (exported as `ATLAS_STATE_DIR`). Mount a volume there so it survives container restarts and so you only download a model once.
 
-The gateway listens on `8080` and the image's default command binds `0.0.0.0:8080` so the published port is reachable. Clients still need the API key Atlas prints on startup (or one you supply with `--api-key` / `$ATLAS_API_KEY`).
+The gateway listens on `8080` and the image's default command binds `0.0.0.0:8080` so the published port is reachable. On first start Atlas mints a default API key and prints it (read it from `docker logs`); clients must present it. Mint more — or model-scoped — keys with `atlas keys create` (see [api keys](#api-keys) below). Because keys live in the state-dir database, they survive restarts when `/var/lib/atlas` is a mounted volume.
 
 ## Quick start (slim / CPU)
 
 ```bash
 docker run --rm -p 8080:8080 -v atlas-state:/var/lib/atlas \
   ghcr.io/orchestra-hq/atlas:slim \
-  up --model qwen3-0.6b --addr 0.0.0.0:8080 --api-key dev-key
+  up --model qwen3-0.6b --addr 0.0.0.0:8080
 ```
 
-Then point a client at it:
+Atlas prints a default API key on first start (`docker logs` shows it). Then point a client at it:
 
 ```bash
-ANTHROPIC_BASE_URL=http://localhost:8080 ANTHROPIC_API_KEY=dev-key claude
+ANTHROPIC_BASE_URL=http://localhost:8080 ANTHROPIC_API_KEY=<key-from-logs> claude
 ```
 
 ## Quick start (CUDA / GPU)
@@ -40,8 +40,23 @@ Requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud
 ```bash
 docker run --rm --gpus all -p 8080:8080 -v atlas-state:/var/lib/atlas \
   ghcr.io/orchestra-hq/atlas:cuda \
-  up --engine vllm --model Qwen/Qwen3-8B --addr 0.0.0.0:8080 --api-key dev-key
+  up --engine vllm --model Qwen/Qwen3-8B --addr 0.0.0.0:8080
 ```
+
+## API keys
+
+Atlas authenticates every client request against keys stored in the state-dir database (`/var/lib/atlas/atlas.db`). On first start it mints a default full-access admin key and prints it once. To mint more keys — for example one scoped to a single model — exec into a running container:
+
+```bash
+# a model-scoped client key, printed once
+docker exec <container> atlas keys create --allow qwen3-0.6b
+# scripting: print only the secret
+docker exec <container> atlas keys create --quiet
+docker exec <container> atlas keys list
+docker exec <container> atlas keys revoke <key-id>
+```
+
+Keys persist in the mounted volume, so they survive restarts. There is no shared-secret flag; revoking a key takes effect on its next request.
 
 ## Building locally
 

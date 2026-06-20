@@ -7,7 +7,7 @@ Two recipes for running Atlas on a GPU you rent and pointing your tools at it. B
 | [SkyPilot one-command](#skypilot-one-command)      | `skypilot` + a cloud | you want the cheapest GPU across clouds picked for you, in one command |
 | [Single box + SSH tunnel](#single-box--ssh-tunnel) | none                 | you already have a GPU box (any cloud, or your own) and want zero deps |
 
-> Security: the gateway always requires the API key it prints (or one you pass). The SkyPilot recipe opens port 8080 on the host, so set a strong `ATLAS_API_KEY` and lock the security group. The single-box recipe binds to localhost and reaches it over an SSH tunnel — nothing is exposed to the internet. A proper TLS termination story lands in M1.
+> Security: the gateway mints an API key on first start and requires it on every request — the endpoint is never open, even with the port exposed. The SkyPilot recipe opens port 8080 on the host, so still lock the security group; read the minted key from `sky logs` (or mint more with `atlas keys create`). The single-box recipe binds to localhost and reaches it over an SSH tunnel — nothing is exposed to the internet. A proper TLS termination story lands in M1.
 
 ## SkyPilot one-command
 
@@ -17,12 +17,14 @@ Two recipes for running Atlas on a GPU you rent and pointing your tools at it. B
 pip install 'skypilot[aws]'   # or [gcp], [azure], [kubernetes], …
 sky check
 
-sky launch -c atlas examples/serve/atlas-serve.sky.yaml \
-  --env ATLAS_API_KEY="$(openssl rand -hex 16)" -y
+sky launch -c atlas examples/serve/atlas-serve.sky.yaml -y
+
+# Atlas mints and prints an API key on first start; read it from the logs:
+sky logs atlas | grep 'ATLAS API KEY'
 
 # Find your endpoint, then point a client at it:
 sky status --endpoint 8080 atlas        # -> http://<ip>:8080
-ANTHROPIC_BASE_URL=http://<ip>:8080 ANTHROPIC_API_KEY=<your key> claude
+ANTHROPIC_BASE_URL=http://<ip>:8080 ANTHROPIC_API_KEY=<key from logs> claude
 
 sky down atlas                          # tear it down when done
 ```
@@ -35,7 +37,7 @@ No extra tooling — works on any GPU host (EC2, GCE, a box under your desk).
 
 1. **Get a GPU box** and SSH in. Install Atlas one of three ways:
    - the static binary from [GitHub Releases](https://github.com/orchestra-hq/atlas/releases), or
-   - the container image: `docker run --gpus all -p 127.0.0.1:8080:8080 -v atlas:/var/lib/atlas ghcr.io/orchestra-hq/atlas:cuda up --engine vllm --model Qwen/Qwen3-8B --addr 0.0.0.0:8080 --api-key "$KEY"` (see [docs/docker.md](../../docs/docker.md)), or
+   - the container image: `docker run --gpus all -p 127.0.0.1:8080:8080 -v atlas:/var/lib/atlas ghcr.io/orchestra-hq/atlas:cuda up --engine vllm --model Qwen/Qwen3-8B --addr 0.0.0.0:8080` (see [docs/docker.md](../../docs/docker.md)), or
    - build from source.
 
 2. **Serve, bound to localhost** (so nothing is exposed):
@@ -45,8 +47,10 @@ No extra tooling — works on any GPU host (EC2, GCE, a box under your desk).
      --alias claude-sonnet-4-6=Qwen/Qwen3-8B \
      --engine-arg --tool-call-parser --engine-arg hermes \
      --engine-arg --reasoning-parser --engine-arg qwen3 \
-     --addr 127.0.0.1:8080 --api-key "$KEY"
+     --addr 127.0.0.1:8080
    ```
+
+   Atlas prints a default API key on first start (or mint one with `atlas keys create`); save it for the next step.
 
 3. **Tunnel from your laptop** and point Claude Code at it:
 

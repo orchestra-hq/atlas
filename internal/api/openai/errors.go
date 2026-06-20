@@ -15,6 +15,7 @@ type ErrorType string
 const (
 	ErrInvalidRequest ErrorType = "invalid_request_error"
 	ErrAuthentication ErrorType = "authentication_error"
+	ErrPermission     ErrorType = "permission_error"
 	ErrNotFound       ErrorType = "not_found_error"
 	ErrAPI            ErrorType = "api_error"
 	ErrOverloaded     ErrorType = "overloaded_error"

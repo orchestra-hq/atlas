@@ -30,7 +30,6 @@ REPO=$PWD
 # --- config (env, with defaults) --------------------------------------------
 ENGINES=${ACCEPTANCE_ENGINES:-"vllm llamacpp"}
 ADDR=${ATLAS_ADDR:-127.0.0.1:8080}
-export ATLAS_API_KEY=${ATLAS_API_KEY:-acceptance-key}
 export ATLAS_STATE_DIR=${ATLAS_STATE_DIR:-$REPO/.atlas-acceptance}
 export CONF_CLAUDE_CODE_SMOKE=${CONF_CLAUDE_CODE_SMOKE:-1}
 READY_TIMEOUT=${READY_TIMEOUT:-600} # seconds; an 8B vLLM load is minutes-slow
@@ -66,6 +65,12 @@ if [[ "$CONF_CLAUDE_CODE_SMOKE" == "1" ]]; then need claude; fi
 echo "==> Building atlas"
 go build -o "$REPO/atlas" ./cmd/atlas
 
+# API keys replaced the shared --api-key secret in phase 5 (ADR-0008): mint one
+# into the state-dir store the gateway reads, and hand it to the harness via the
+# env (run.py reads ATLAS_API_KEY).
+echo "==> Provisioning API key"
+export ATLAS_API_KEY=$("$REPO/atlas" keys create --state-dir "$ATLAS_STATE_DIR" --quiet)
+
 echo "==> Installing conformance TS deps"
 ( cd conformance/ts && npm ci --no-fund --no-audit --loglevel=error )
 
@@ -87,7 +92,7 @@ run_engine() {
   echo "===================================================================="
 
   # Unique --model list (the reasoning model is the same model when hybrid).
-  local -a up_args=(up --engine "$engine" --addr "$ADDR" --api-key "$ATLAS_API_KEY")
+  local -a up_args=(up --engine "$engine" --addr "$ADDR")
   up_args+=(--model "$model")
   if [[ "$rmodel" != "$model" ]]; then up_args+=(--model "$rmodel"); fi
   up_args+=(--alias "${SONNET_ALIAS}=${model}")

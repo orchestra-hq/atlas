@@ -47,7 +47,7 @@ func readyStatus(t *testing.T, srv *httptest.Server) int {
 // servable, and unregistering it (worker drop) removes the route — the
 // mechanism phase 2 relies on for routing to remote workers.
 func TestRegisterUnregisterModel(t *testing.T) {
-	g := NewGateway(testKey, nil, nil)
+	g := NewGateway(staticAuth(testKey), nil, nil)
 	srv := httptest.NewServer(g.Handler())
 	defer srv.Close()
 
@@ -103,7 +103,7 @@ func TestRegisterUnregisterModel(t *testing.T) {
 // disconnect, since UnregisterWorker removes all of a worker's routes at once). A
 // genuinely different worker is still a distinct replica.
 func TestRegisterInstance_replacesSameWorkerModelInPlace(t *testing.T) {
-	g := NewGateway(testKey, nil, nil)
+	g := NewGateway(staticAuth(testKey), nil, nil)
 
 	g.RegisterInstance("w1", Model{Name: "m", Exec: &echoExecutor{reply: "v1"}, ContextWindow: 100})
 	g.RegisterInstance("w1", Model{Name: "m", Exec: &echoExecutor{reply: "v2"}, ContextWindow: 200})
@@ -134,7 +134,7 @@ func TestRegisterInstance_replacesSameWorkerModelInPlace(t *testing.T) {
 // so the model never transiently 404s — the bug a name-keyed registry had, where
 // the stale teardown deleted the route the live connection had just installed.
 func TestReconnectOverlapKeepsLiveRoute(t *testing.T) {
-	g := NewGateway(testKey, nil, nil)
+	g := NewGateway(staticAuth(testKey), nil, nil)
 	srv := httptest.NewServer(g.Handler())
 	defer srv.Close()
 
@@ -167,7 +167,7 @@ func TestReconnectOverlapKeepsLiveRoute(t *testing.T) {
 // requests for that model continue to be served by the other — neither worker's
 // teardown drops the route the other owns.
 func TestSameModelTwoWorkersKeepsRoute(t *testing.T) {
-	g := NewGateway(testKey, nil, nil)
+	g := NewGateway(staticAuth(testKey), nil, nil)
 	srv := httptest.NewServer(g.Handler())
 	defer srv.Close()
 
@@ -196,7 +196,7 @@ func TestSameModelTwoWorkersKeepsRoute(t *testing.T) {
 // the scheduler uses on unload (M1 phase 4b): removing one worker's instance of a
 // model leaves that worker's other models and other workers' copies untouched.
 func TestUnregisterInstanceRemovesOneWorkersModel(t *testing.T) {
-	g := NewGateway(testKey, nil, nil)
+	g := NewGateway(staticAuth(testKey), nil, nil)
 
 	g.RegisterInstance("w1", Model{Name: "a", Exec: &echoExecutor{reply: "x"}, ContextWindow: 4096})
 	g.RegisterInstance("w1", Model{Name: "b", Exec: &echoExecutor{reply: "x"}, ContextWindow: 4096})
@@ -230,7 +230,7 @@ func TestUnregisterInstanceRemovesOneWorkersModel(t *testing.T) {
 // while the response still echoes the alias the client used.
 func TestAliasDispatchesUnderCanonicalName(t *testing.T) {
 	exec := &echoExecutor{reply: "ok"}
-	g := NewGateway(testKey, []Model{{Name: "canon", Exec: exec, ContextWindow: 4096}}, map[string]string{"my-alias": "canon"})
+	g := NewGateway(staticAuth(testKey), []Model{{Name: "canon", Exec: exec, ContextWindow: 4096}}, map[string]string{"my-alias": "canon"})
 	srv := httptest.NewServer(g.Handler())
 	defer srv.Close()
 

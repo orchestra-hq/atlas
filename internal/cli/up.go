@@ -30,7 +30,6 @@ type upOptions struct {
 	engine     string
 	engineArgs []string
 	addr       string
-	apiKey     string
 	stateDir   string
 }
 
@@ -56,8 +55,7 @@ func newUpCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&opts.engineArgs, "engine-arg", nil,
 		"extra argument passed verbatim to every engine subprocess; repeat for several (e.g. --engine-arg=--reasoning-parser --engine-arg=qwen3)")
 	cmd.Flags().StringVar(&opts.addr, "addr", "127.0.0.1:8080", "address the gateway listens on")
-	cmd.Flags().StringVar(&opts.apiKey, "api-key", "", "API key clients must present; a random key is generated if unset")
-	cmd.Flags().StringVar(&opts.stateDir, "state-dir", defaultStateDir(), "directory for runtimes, weights, and logs")
+	cmd.Flags().StringVar(&opts.stateDir, "state-dir", defaultStateDir(), "directory for runtimes, weights, logs, and the key store")
 	_ = cmd.MarkFlagRequired("model")
 	return cmd
 }
@@ -66,15 +64,20 @@ func runUp(ctx context.Context, cmd *cobra.Command, opts *upOptions) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if opts.apiKey == "" {
-		opts.apiKey = generateAPIKey()
-	}
 	engine, err := parseEngine(opts.engine)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(opts.stateDir, 0o755); err != nil {
-		return fmt.Errorf("create state dir: %w", err)
+	// Open the control-plane key store and mint a default admin key on first run,
+	// so a fresh node is usable without a manual `atlas keys create` (ADR-0008).
+	store, err := openStateDB(opts.stateDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.Close() }()
+	defaultKey, defaultKeyCreated, err := bootstrapDefaultKey(ctx, store)
+	if err != nil {
+		return fmt.Errorf("bootstrap default key: %w", err)
 	}
 
 	// Provision the runtime and launch an engine per requested model, each under
@@ -102,7 +105,7 @@ func runUp(ctx context.Context, cmd *cobra.Command, opts *upOptions) error {
 	// 3. Serve the gateway, routing each served model to its worker. Request
 	// logs (one structured line per request, with token counts — G10) go to
 	// stderr, alongside the human-readable banner on stdout.
-	gw := server.NewGateway(opts.apiKey, models, aliases)
+	gw := server.NewGateway(keyAuth{db: store}, models, aliases)
 	gw.SetLogger(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	srv := &http.Server{
 		Addr:              opts.addr,
@@ -124,9 +127,15 @@ func runUp(ctx context.Context, cmd *cobra.Command, opts *upOptions) error {
 	if len(aliases) > 0 {
 		cmd.Printf("  Aliases  : %s\n", strings.Join(aliasLines(aliases), ", "))
 	}
-	cmd.Printf("  API key  : %s\n", opts.apiKey)
+	keyForHint := "<your-api-key>"
+	if defaultKeyCreated {
+		cmd.Printf("  API key  : %s  (new default key — save it; it is not shown again)\n", defaultKey)
+		keyForHint = defaultKey
+	} else {
+		cmd.Printf("  API key  : use a saved key, or run `atlas keys create`\n")
+	}
 	cmd.Printf("\nPoint a client at it:\n")
-	cmd.Printf("  ANTHROPIC_BASE_URL=http://%s ANTHROPIC_API_KEY=%s\n", opts.addr, opts.apiKey)
+	cmd.Printf("  ANTHROPIC_BASE_URL=http://%s ANTHROPIC_API_KEY=%s\n", opts.addr, keyForHint)
 	cmd.Println("\nPress Ctrl-C to stop.")
 
 	select {

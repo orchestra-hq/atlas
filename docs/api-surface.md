@@ -53,7 +53,7 @@ What the CLI and web console use. Not a compatibility surface — design for us.
 | Usage     | tokens by key/model/worker/time window                                                   |
 | System    | health, version, license info                                                            |
 
-Admin auth is separate from inference API keys (admin tokens / console session).
+Admin auth reuses the same API-key system: the `/admin/*` surface requires a key carrying the `admin` scope, not a separate token ([ADR-0008](decisions/0008-control-plane-persistence-and-api-keys.md)). Scoped keys and the `/admin/*` gate land in phase 5 (5a mints admin-scoped keys; 5b enforces the gate).
 
 ## Translation layer
 
