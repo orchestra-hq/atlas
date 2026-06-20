@@ -173,7 +173,11 @@ type deploymentsResponse struct {
 }
 
 func runDeployments(cmd *cobra.Command, serverURL string) error {
-	resp, err := http.Get(serverURL + "/admin/deployments") //nolint:noctx
+	req, err := http.NewRequestWithContext(cmd.Context(), http.MethodGet, serverURL+"/admin/deployments", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("reach server: %w", err)
 	}

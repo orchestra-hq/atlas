@@ -217,14 +217,24 @@ func (g *Gateway) resolveLocked(name string) (Model, bool) {
 func (g *Gateway) RegisterInstance(workerID string, m Model) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if len(g.routes[m.Name]) == 0 {
+	rs := g.routes[m.Name]
+	next := route{workerID: workerID, exec: m.Exec, contextWindow: m.ContextWindow}
+	// One route per (worker connection, model): a re-registration of the same pair
+	// replaces in place rather than appending a duplicate — e.g. a worker re-emits
+	// model_ready for a model it already serves. Duplicates would double-weight
+	// that connection in resolveLocked's round-robin and inflate replica counts,
+	// and UnregisterWorker removes all of a worker's routes at once, so they would
+	// only self-heal on disconnect.
+	for i, r := range rs {
+		if r.workerID == workerID {
+			rs[i] = next
+			return
+		}
+	}
+	if len(rs) == 0 {
 		g.order = append(g.order, m.Name)
 	}
-	g.routes[m.Name] = append(g.routes[m.Name], route{
-		workerID:      workerID,
-		exec:          m.Exec,
-		contextWindow: m.ContextWindow,
-	})
+	g.routes[m.Name] = append(rs, next)
 }
 
 // UnregisterInstance removes one worker's instance of a single model, called

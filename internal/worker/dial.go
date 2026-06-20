@@ -390,6 +390,7 @@ type session struct {
 
 	mu       sync.Mutex
 	draining bool // set under mu; once true, new requests are refused
+	closed   bool // set under mu by stopAllLoaded; the connection has torn down
 	inflight map[string]context.CancelFunc
 	models   map[string]ServedModel // served models, mutated by load/unload
 	loaded   map[string]func()      // stop funcs for models this connection loaded
@@ -498,9 +499,16 @@ func (s *session) handleLoad(ctx context.Context, p wire.LoadPayload) {
 		return
 	}
 
-	// Re-check under lock: the connection may have begun draining, or a
-	// concurrent load may have won, while the engine booted.
+	// Re-check under lock: the connection may have torn down or begun draining, or
+	// a concurrent load may have won, while the engine booted.
 	s.mu.Lock()
+	if s.closed {
+		// stopAllLoaded already swept the loaded set, so registering this engine now
+		// would orphan it past the connection's life. Stop it instead.
+		s.mu.Unlock()
+		stop()
+		return
+	}
 	if s.draining {
 		s.mu.Unlock()
 		stop()
@@ -544,6 +552,10 @@ func (s *session) handleUnload(ctx context.Context, p wire.UnloadPayload) {
 // when the connection ends so no orphan engines outlive it.
 func (s *session) stopAllLoaded() {
 	s.mu.Lock()
+	// Mark the session torn down before sweeping so a handleLoad whose engine is
+	// still booting sees closed on its post-Load re-check and stops the engine
+	// rather than registering it into a set this sweep already passed.
+	s.closed = true
 	stops := make([]func(), 0, len(s.loaded))
 	for name, stop := range s.loaded {
 		stops = append(stops, stop)

@@ -102,6 +102,82 @@ func TestEnsureModel_doesNotClobberOperatorReplicas(t *testing.T) {
 	}
 }
 
+// TestEnsureModel_reconcilesUnroutedDeployment covers a review finding: a request
+// for a model that is deployed but has lost its only replica (and no reconcile has
+// since been kicked for it — e.g. capacity that freed up on an unload, which does
+// not reconcile-up) must drive a fresh placement, not poll a model nothing is
+// loading until the timeout.
+func TestEnsureModel_reconcilesUnroutedDeployment(t *testing.T) {
+	cmd := newFakeCommander()
+	s := newTestScheduler(t, cmd)
+	s.SetLifecycle(2*time.Second, 0)
+	s.WorkerJoined(WorkerSnapshot{ID: "a", Engine: "llamacpp", Hardware: ramWorker(16)})
+
+	// A deployment exists with no live replica, no in-flight load, no kicked reconcile.
+	s.mu.Lock()
+	s.deployments[smallModel] = &deployment{replicas: 1, auto: true, lastUsed: time.Now()}
+	s.mu.Unlock()
+
+	done := make(chan bool, 1)
+	go func() { done <- s.EnsureModel(context.Background(), smallModel) }()
+
+	waitForCond(t, func() bool { return len(cmd.loadTargets(smallModel)) == 1 }, "placement for an unrouted deployment")
+	s.ModelReady("a", smallModel, 0)
+	if !<-done {
+		t.Fatal("EnsureModel returned false for a placeable unrouted deployment; want true")
+	}
+}
+
+// TestEnsureModel_keepsDeploymentAliveWhileWaiting covers a review finding: while a
+// request is actively waiting for an auto-started model to come online, the idle
+// reaper must not unload it out from under the waiter — even when the cold boot
+// outlasts the idle timeout. EnsureModel refreshes the idle clock each poll.
+func TestEnsureModel_keepsDeploymentAliveWhileWaiting(t *testing.T) {
+	cmd := newFakeCommander()
+	s := newTestScheduler(t, cmd)
+	// Idle timeout (200ms) comfortably exceeds the 50ms poll but is far shorter
+	// than the simulated boot below, so only the in-wait Touch keeps it alive.
+	s.SetLifecycle(2*time.Second, 200*time.Millisecond)
+	s.WorkerJoined(WorkerSnapshot{ID: "a", Engine: "llamacpp", Hardware: ramWorker(16)})
+
+	done := make(chan bool, 1)
+	go func() { done <- s.EnsureModel(context.Background(), smallModel) }()
+	waitForCond(t, func() bool { return len(cmd.loadTargets(smallModel)) == 1 }, "auto-start load")
+
+	// Simulate a slow boot: sweep repeatedly (well past the idle timeout) while the
+	// load is in flight. The waiter's refresh must keep the reaper off it.
+	for i := 0; i < 8; i++ {
+		s.reapIdle()
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got := cmd.unloadTargets(smallModel); len(got) != 0 {
+		t.Fatalf("reaper unloaded a model a request was still waiting on: %v", got)
+	}
+
+	s.ModelReady("a", smallModel, 0)
+	if !<-done {
+		t.Fatal("EnsureModel returned false; want true once the model reports ready")
+	}
+}
+
+// TestModelReady_ignoresUnsolicited covers a review finding: a model_ready for a
+// model the scheduler never placed on a worker (no pending) must not fabricate a
+// loaded instance, which would permanently corrupt that worker's capacity
+// accounting.
+func TestModelReady_ignoresUnsolicited(t *testing.T) {
+	s := newTestScheduler(t, newFakeCommander())
+	s.WorkerJoined(WorkerSnapshot{ID: "a", Engine: "llamacpp", Hardware: ramWorker(16)})
+
+	s.ModelReady("a", smallModel, 0) // never placed here
+
+	s.mu.Lock()
+	loaded := s.workers["a"].loaded[smallModel]
+	s.mu.Unlock()
+	if loaded {
+		t.Fatal("an unsolicited model_ready marked the model loaded; want it ignored")
+	}
+}
+
 // TestReapIdle_stopsIdleAutoDeployment unloads an auto-started deployment once
 // it has gone untouched for longer than the idle timeout, and removes it.
 func TestReapIdle_stopsIdleAutoDeployment(t *testing.T) {
