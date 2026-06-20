@@ -39,6 +39,12 @@ The starter catalog (`/catalog`) carries two fields the build wires through to *
 
 `/readyz` returns 200 once a model is registered, and in single-node mode a model is registered only after its worker's `Start` confirms the engine reported healthy — so at startup "ready" genuinely means "a model can answer". It is **not** a live probe: if an engine subprocess dies _after_ registration, `/readyz` keeps returning 200 (the next request surfaces the failure as a 529). For M0's single-node hero path this is acceptable; a periodic worker health re-probe feeding readiness is an M1 concern, alongside the remote-worker hub. Stated as an assumption rather than silently shipped.
 
+## Auth for the `/admin/*` control surface (phase 5)
+
+The server's admin endpoints — `/admin/workers`, `/admin/workers/{id}/drain` (phase 1/3), and `/admin/deployments` deploy/scale/stop (phase 4) — are registered on the same mux as the api-key-gated `/v1/*` surface but currently carry **no authentication**. Phase 4 widened this surface from per-worker drain to fleet-wide model load/unload/scale, so anyone who can reach the server port (default bind `0.0.0.0:9090`) can deploy replicas (exhausting VRAM) or stop running models. The in-code "phase 5 replaces it" note (`internal/cli/server.go`) refers only to the **client** api-key; the `/admin/*` surface has no auth story yet.
+
+**Open:** in phase 5 (API key management → G12), gate `/admin/*` by (a) a client API key carrying an `admin` scope, (b) a separate operator/admin token (cf. the join token of build-time decision 6), or (c) bind `/admin/*` to a separate loopback-only listener and keep it unauthenticated. Until decided, M1's threat model assumes the server port is reachable only by trusted operators and workers (the same assumption M0 made for `--api-key`). G12 should grow an admin-auth case once the model is chosen.
+
 ## Resolved
 
 How workers get engine runtimes — settled: M0 ships managed runtimes only (downloaded prebuilt llama.cpp binaries, a `uv`-managed vLLM venv), with the container path arriving at M1 behind the same provisioner interface. Recorded in [m0-build-plan.md](m0-build-plan.md#engine-runtime-provisioning) and implemented for llama.cpp in phase 2.

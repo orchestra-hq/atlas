@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/orchestra-hq/atlas/internal/server"
+	"github.com/orchestra-hq/atlas/internal/wire"
 )
 
 // fakeLoader stands in for the CLI's engine loader: it records load calls and
@@ -99,6 +101,35 @@ func TestLoadRegistersRouteThenUnloadRemovesIt(t *testing.T) {
 	}
 	waitFor(t, func() bool { return !reg.has() }, 3*time.Second, "unloaded model's route to be removed")
 	waitFor(t, func() bool { return loader.stopCount() == 1 }, 3*time.Second, "loaded engine to be stopped")
+}
+
+// TestHandleLoad_closedSessionStopsEngine covers a review finding: if a load's
+// engine finishes booting after the connection has torn down — stopAllLoaded
+// already swept the loaded set — handleLoad must stop the engine rather than
+// register it, otherwise it orphans a subprocess that outlives the connection.
+func TestHandleLoad_closedSessionStopsEngine(t *testing.T) {
+	loader := &fakeLoader{eng: &fakeEngine{}}
+	sess := &session{
+		loader: loader,
+		log:    slog.Default(),
+		models: map[string]ServedModel{},
+		loaded: map[string]func(){},
+		out:    make(chan wire.Message, 4),
+	}
+	// The connection has already torn down (stopAllLoaded ran, setting closed)
+	// while this load's engine was still booting.
+	sess.mu.Lock()
+	sess.closed = true
+	sess.mu.Unlock()
+
+	sess.handleLoad(context.Background(), wire.LoadPayload{Model: "m2", Engine: "llamacpp"})
+
+	if loader.stopCount() != 1 {
+		t.Fatalf("engine stop count = %d, want 1 (a load completing after teardown must be stopped)", loader.stopCount())
+	}
+	if _, ok := sess.lookupModel("m2"); ok {
+		t.Error("the model was registered into a closed session; want it dropped")
+	}
 }
 
 // TestLoadFailureDoesNotRegister: a Loader error reports load_failed and leaves

@@ -217,10 +217,14 @@ func (s *Scheduler) WorkerLeft(workerID string) {
 }
 
 // ModelReady marks a model loaded on a worker (clearing its pending state) and
-// reconciles in case the deployment still needs more replicas.
+// reconciles in case the deployment still needs more replicas. It acts only on a
+// model the scheduler actually placed here (pending) or already tracks as loaded;
+// an unsolicited model_ready for a model never placed on this worker is ignored,
+// so a buggy or stale frame can't fabricate a loaded instance and corrupt the
+// worker's capacity accounting.
 func (s *Scheduler) ModelReady(workerID, model string, _ int) {
 	s.mu.Lock()
-	if w, ok := s.workers[workerID]; ok {
+	if w, ok := s.workers[workerID]; ok && (w.pending[model] || w.loaded[model]) {
 		delete(w.pending, model)
 		w.loaded[model] = true
 	}
@@ -335,12 +339,14 @@ func (s *Scheduler) EnsureModel(ctx context.Context, model string) bool {
 		d.lastUsed = time.Now()
 	} else {
 		s.deployments[model] = &deployment{replicas: 1, auto: true, lastUsed: time.Now()}
+		s.log.Info("auto-start: deploying model on first request", "model", model)
 	}
 	s.mu.Unlock()
-	if !deployed {
-		s.log.Info("auto-start: deploying model on first request", "model", model)
-		s.reconcile(model)
-	}
+	// Reconcile whether the deployment is new or pre-existing: a deployment that
+	// lost its only replica (a failed or evicted load) is under-replicated, so a
+	// request for it must drive a fresh placement rather than poll a model nothing
+	// is loading until the timeout.
+	s.reconcile(model)
 
 	ctx, cancel := context.WithTimeout(ctx, s.autostartTimeout)
 	defer cancel()
@@ -356,6 +362,11 @@ func (s *Scheduler) EnsureModel(ctx context.Context, model string) bool {
 			// block the request for the full timeout on an unsatisfiable placement.
 			return false
 		}
+		// A load is in flight (or a worker can still take it): keep this
+		// deployment's idle clock fresh so the reaper does not unload it out from
+		// under a request that is actively waiting on it (a cold boot can outlast
+		// the idle timeout).
+		s.Touch(model)
 		select {
 		case <-ctx.Done():
 			return false
@@ -370,7 +381,6 @@ func (s *Scheduler) EnsureModel(ctx context.Context, model string) bool {
 // it: ready ends the wait, while !pending && !placeable means giving up.
 func (s *Scheduler) placementState(model, engine string) (ready, pending, placeable bool) {
 	est := s.estimate(model)
-	requiresGPU := engine == engineVLLM
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, w := range s.workers {
@@ -380,17 +390,28 @@ func (s *Scheduler) placementState(model, engine string) (ready, pending, placea
 		if w.pending[model] {
 			pending = true
 		}
-		if w.serves(model) || w.failed[model] || w.engine != engine {
-			continue
-		}
-		if requiresGPU && !w.hasGPU {
-			continue
-		}
-		if est == 0 || w.capacity-s.used(w) >= est {
+		if s.fits(w, model, engine, est) {
 			placeable = true
 		}
 	}
 	return ready, pending, placeable
+}
+
+// fits reports whether worker w can accept a new instance of model: it is not
+// already serving or failed for it, its engine matches, it has a GPU when the
+// engine requires one, and its free capacity covers the model's estimated need
+// (est == 0 means the size is unknown, so the fit check is skipped). It is the
+// single placement predicate shared by placementState (auto-start's wait) and
+// reconcile (the actual placement), so the two cannot drift. The caller holds
+// s.mu.
+func (s *Scheduler) fits(w *schedWorker, model, engine string, est int64) bool {
+	if w.serves(model) || w.failed[model] || w.engine != engine {
+		return false
+	}
+	if engine == engineVLLM && !w.hasGPU {
+		return false
+	}
+	return est == 0 || w.capacity-s.used(w) >= est
 }
 
 // Touch records that a request resolved to a model, resetting its idle clock so
@@ -425,20 +446,26 @@ func (s *Scheduler) Run(ctx context.Context) {
 }
 
 // reapIdle stops every auto-started deployment whose last request is older than
-// the idle timeout. Operator deployments (auto == false) are never reaped.
+// the idle timeout. Operator deployments (auto == false) are never reaped. The
+// staleness check and the delete happen under one lock hold — guarding the same
+// lastUsed/auto fields that Touch, Deploy, and Scale mutate — so a request that
+// touches a model, or an operator that takes ownership of it, in the same instant
+// is not clobbered by a stop decided a moment earlier (the unload runs only for
+// deployments actually removed here).
 func (s *Scheduler) reapIdle() {
 	now := time.Now()
 	s.mu.Lock()
 	var stale []string
 	for model, d := range s.deployments {
 		if d.auto && now.Sub(d.lastUsed) > s.idleTimeout {
+			delete(s.deployments, model)
 			stale = append(stale, model)
 		}
 	}
 	s.mu.Unlock()
 	for _, model := range stale {
 		s.log.Info("idle-stop: unloading idle auto-started model", "model", model, "idle_timeout", s.idleTimeout)
-		_ = s.Stop(model)
+		s.unloadAll(model)
 	}
 }
 
@@ -451,7 +478,6 @@ func (s *Scheduler) reconcile(model string) {
 		return
 	}
 	est := s.estimate(model)
-	requiresGPU := entry.Engine == engineVLLM
 
 	s.mu.Lock()
 	desired := 0
@@ -474,17 +500,10 @@ func (s *Scheduler) reconcile(model string) {
 		}
 		var cands []cand
 		for id, w := range s.workers {
-			if w.serves(model) || w.failed[model] || w.engine != entry.Engine {
+			if !s.fits(w, model, entry.Engine, est) {
 				continue
 			}
-			if requiresGPU && !w.hasGPU {
-				continue
-			}
-			free := w.capacity - s.used(w)
-			if est > 0 && free < est {
-				continue
-			}
-			cands = append(cands, cand{id, free})
+			cands = append(cands, cand{id, w.capacity - s.used(w)})
 		}
 		// Most free first, so load spreads across the fleet rather than packing
 		// one worker tight.
@@ -627,7 +646,7 @@ func (s *Scheduler) HandleSetDeployment(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(map[string]any{"model": req.Model, "replicas": maxInt(req.Replicas, 1)})
+	_ = json.NewEncoder(w).Encode(map[string]any{"model": req.Model, "replicas": max(req.Replicas, 1)})
 }
 
 // HandleListDeployments serves GET /admin/deployments.
@@ -644,11 +663,4 @@ func (s *Scheduler) HandleStopDeployment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

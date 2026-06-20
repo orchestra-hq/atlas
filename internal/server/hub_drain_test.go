@@ -65,6 +65,14 @@ func (r *drainRegistry) get() (Model, bool) {
 	return m, ok
 }
 
+// hasName reports whether any route is registered for a model by name.
+func (r *drainRegistry) hasName(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.models[name]
+	return ok
+}
+
 func waitForCond(t *testing.T, cond func() bool, what string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -202,6 +210,46 @@ func TestHub_drainStopsRouting(t *testing.T) {
 	}
 	if !workers[0].Draining {
 		t.Error("worker not marked draining after drain frame")
+	}
+}
+
+// TestHub_drainingIgnoresLateModelReady covers a review finding: once a worker is
+// draining (its routes torn down — possibly by an operator drain on another
+// goroutine, which consumes the teardown-once), a model_ready that arrives
+// afterward must not re-install a route, because the connection-end teardown would
+// never remove it.
+func TestHub_drainingIgnoresLateModelReady(t *testing.T) {
+	reg := newDrainRegistry()
+	hub := NewHub("tok", reg)
+	ts := httptest.NewServer(http.HandlerFunc(hub.HandleConnect))
+	defer ts.Close()
+	url := "ws" + strings.TrimPrefix(ts.URL, "http")
+
+	conn, _ := joinRawWorker(t, url)
+	defer func() { _ = conn.Close() }()
+	waitForCond(t, func() bool { _, ok := reg.get(); return ok }, "model registered")
+
+	// The worker begins draining: its routes are removed.
+	drain, _ := wire.Encode(wire.MsgDrain, "", wire.DrainPayload{})
+	dd, _ := json.Marshal(drain)
+	if err := conn.WriteMessage(websocket.TextMessage, dd); err != nil {
+		t.Fatalf("write drain: %v", err)
+	}
+	waitForCond(t, func() bool { _, ok := reg.get(); return !ok }, "route removed on drain")
+
+	// A late model_ready for a scheduler-loaded model must be ignored while draining.
+	ready, _ := wire.Encode(wire.MsgModelReady, "", wire.ModelReadyPayload{Model: "late", ContextWindow: 4096})
+	rd, _ := json.Marshal(ready)
+	if err := conn.WriteMessage(websocket.TextMessage, rd); err != nil {
+		t.Fatalf("write model_ready: %v", err)
+	}
+
+	// The frame is processed in order after the drain; give the hub a moment, then
+	// confirm no route was installed.
+	waitForCond(t, func() bool { _, ok := reg.get(); return !ok }, "route stays removed")
+	time.Sleep(50 * time.Millisecond)
+	if reg.hasName("late") {
+		t.Error("a model_ready received while draining re-installed a route; want it ignored")
 	}
 }
 

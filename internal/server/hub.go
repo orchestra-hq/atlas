@@ -241,6 +241,16 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 			if json.Unmarshal(m.Payload, &p) != nil {
 				continue
 			}
+			// Ignore a ready that arrives once the worker is draining: its routes
+			// were already torn down (possibly by an operator drain on another
+			// goroutine, which consumed unregOnce), so re-registering here would
+			// install a route the connection-end teardown will never remove.
+			h.mu.RLock()
+			draining := hw.info.Draining
+			h.mu.RUnlock()
+			if draining {
+				continue
+			}
 			h.registerInstance(wid, Model{Name: p.Model, Exec: rw, ContextWindow: p.ContextWindow})
 			h.addWorkerModel(wid, p.Model)
 			if h.sched != nil {

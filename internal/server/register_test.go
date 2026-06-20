@@ -73,13 +73,14 @@ func TestRegisterUnregisterModel(t *testing.T) {
 		t.Fatalf("messages to registered model = %d (%v)", resp.StatusCode, parsed)
 	}
 
-	// A second instance of the same name adds a replica, not a second listing entry.
-	g.RegisterInstance("w1", Model{Name: "remote-a", Exec: &echoExecutor{reply: "hi"}, ContextWindow: 4096})
+	// A second worker serving the same name adds a replica, not a second listing entry.
+	g.RegisterInstance("w2", Model{Name: "remote-a", Exec: &echoExecutor{reply: "hi"}, ContextWindow: 4096})
 	if ids := modelIDs(t, srv); len(ids) != 1 {
 		t.Errorf("models after second instance = %v, want one entry", ids)
 	}
 
-	g.UnregisterWorker("w1")         // removes both of w1's instances
+	g.UnregisterWorker("w1")         // removes w1's instance
+	g.UnregisterWorker("w2")         // removes the replica too
 	g.UnregisterWorker("never-seen") // no-op, must not panic
 
 	if got := readyStatus(t, srv); got != http.StatusServiceUnavailable {
@@ -91,6 +92,38 @@ func TestRegisterUnregisterModel(t *testing.T) {
 	resp, _ = post(t, srv, testKey, `{"model":"remote-a","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("messages to unregistered model = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestRegisterInstance_replacesSameWorkerModelInPlace covers a review finding: a
+// re-registration of the same (worker connection, model) — e.g. a worker re-emits
+// model_ready for a model it already serves — must replace the route in place, not
+// append a duplicate. A duplicate would double-weight that connection in the
+// replica round-robin and inflate replica counts (and only self-heal on
+// disconnect, since UnregisterWorker removes all of a worker's routes at once). A
+// genuinely different worker is still a distinct replica.
+func TestRegisterInstance_replacesSameWorkerModelInPlace(t *testing.T) {
+	g := NewGateway(testKey, nil, nil)
+
+	g.RegisterInstance("w1", Model{Name: "m", Exec: &echoExecutor{reply: "v1"}, ContextWindow: 100})
+	g.RegisterInstance("w1", Model{Name: "m", Exec: &echoExecutor{reply: "v2"}, ContextWindow: 200})
+
+	g.mu.RLock()
+	rs := g.routes["m"]
+	g.mu.RUnlock()
+	if len(rs) != 1 {
+		t.Fatalf("routes for m = %d after re-registering the same worker, want 1 (replace in place)", len(rs))
+	}
+	if rs[0].contextWindow != 200 {
+		t.Errorf("contextWindow = %d, want 200 (the latest registration wins)", rs[0].contextWindow)
+	}
+
+	g.RegisterInstance("w2", Model{Name: "m", Exec: &echoExecutor{reply: "v3"}, ContextWindow: 200})
+	g.mu.RLock()
+	n := len(g.routes["m"])
+	g.mu.RUnlock()
+	if n != 2 {
+		t.Fatalf("routes for m = %d after a second worker joins, want 2 distinct replicas", n)
 	}
 }
 
