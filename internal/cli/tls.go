@@ -170,7 +170,7 @@ func loadOrCreateSelfSigned(dir, certPath, keyPath string, hosts []string) (cert
 	if err != nil {
 		return nil, nil, false, err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil { // holds key.pem; owner-only
 		return nil, nil, false, fmt.Errorf("create tls dir: %w", err)
 	}
 	if err := os.WriteFile(certPath, gen.CertPEM, 0o644); err != nil { //nolint:gosec // a cert is public

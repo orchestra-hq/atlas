@@ -96,14 +96,18 @@ func GenerateSelfSigned(hosts []string) (SelfSigned, error) {
 		return SelfSigned{}, fmt.Errorf("generate serial: %w", err)
 	}
 	tmpl := x509.Certificate{
-		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "atlas"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().AddDate(10, 0, 0), // long-lived: identity is the pin, not expiry
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageCertSign,
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "atlas"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().AddDate(10, 0, 0), // long-lived: identity is the pin, not expiry
+		// A leaf server certificate, not a CA: the worker trusts it by pinning its
+		// exact bytes (PinnedVerifier), so it never needs to sign other certs. Minting
+		// it without IsCA/CertSign keeps the on-disk private key from doubling as a
+		// signing CA if it ever leaks or an operator installs the cert into a trust store.
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		IsCA:                  true,
+		IsCA:                  false,
 	}
 	for _, h := range dedupeHosts(hosts) {
 		if ip := net.ParseIP(h); ip != nil {

@@ -18,9 +18,18 @@ const dbFileName = "atlas.db"
 // inside it. Both the long-running server and the short-lived `atlas keys`
 // commands open the same file; SQLite (WAL + busy timeout) handles the
 // concurrent access (ADR-0008).
+//
+// The state dir is created (and re-tightened if it predates this) as owner-only
+// 0700: it holds the control-plane DB — API-key hashes and the usage ledger —
+// plus the self-signed TLS private key, so it must not be readable by other
+// local users. 0700 on the directory protects the DB and its -wal/-shm
+// side-files in one step regardless of their own modes.
 func openStateDB(stateDir string) (*db.DB, error) {
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create state dir: %w", err)
+	}
+	if err := os.Chmod(stateDir, 0o700); err != nil {
+		return nil, fmt.Errorf("secure state dir: %w", err)
 	}
 	return db.Open(filepath.Join(stateDir, dbFileName))
 }

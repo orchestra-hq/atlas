@@ -405,8 +405,11 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 
 	// Assert the prompt fits the model's window before dispatch, so an oversized
 	// request fails with a clean 400 rather than a garbled engine overflow
-	// (docs/m0-acceptance.md context-window handling).
-	if err := g.assertContextFits(r.Context(), model, coreReq); err != nil {
+	// (docs/m0-acceptance.md context-window handling). The returned count is the
+	// prompt's input tokens, reused to attribute input usage on an interrupted
+	// stream (the engine reports usage only on a clean completion).
+	promptTokens, err := g.assertContextFits(r.Context(), model, coreReq)
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -422,7 +425,7 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 	dispatch := coreReq
 	dispatch.Model = model.Name
 
-	tags := usageTags{keyID: id.KeyID, workerID: worker}
+	tags := usageTags{keyID: id.KeyID, workerID: worker, model: model.Name, inputTokens: promptTokens}
 
 	if req.Stream {
 		g.streamMessages(w, r, model.Exec, dispatch, requested, stops, tags)
@@ -441,7 +444,7 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 		stopSeq = &seq
 	}
 
-	recordBillableUsage(r.Context(), tags, requested, resp.Usage.InputTokens, resp.Usage.OutputTokens)
+	recordBillableUsage(r.Context(), tags, resp.Usage.InputTokens, resp.Usage.OutputTokens)
 	anthropic.WriteJSON(w, http.StatusOK, anthropic.FromCore(newMessageID(), requested, resp, stopSeq))
 }
 
@@ -452,30 +455,34 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 // best-effort: if the tokenizer call fails (and the engine is truly down,
 // dispatch surfaces that as a 529), the request proceeds rather than being
 // blocked on a transient hiccup.
-func (g *Gateway) assertContextFits(ctx context.Context, model Model, req core.Request) error {
+//
+// It returns the counted prompt tokens (0 when not counted: unknown window,
+// non-counting engine, or a failed count) so the caller can attribute input
+// usage on an interrupted stream, where the engine never reports its own count.
+func (g *Gateway) assertContextFits(ctx context.Context, model Model, req core.Request) (int, error) {
 	if model.ContextWindow <= 0 {
-		return nil // unknown window: nothing to assert against
+		return 0, nil // unknown window: nothing to assert against
 	}
 	if req.MaxTokens >= model.ContextWindow {
-		return anthropic.ErrInvalid("max_tokens (%d) exceeds the model's %d-token context window", req.MaxTokens, model.ContextWindow)
+		return 0, anthropic.ErrInvalid("max_tokens (%d) exceeds the model's %d-token context window", req.MaxTokens, model.ContextWindow)
 	}
 	tc, ok := model.Exec.(TokenCounter)
 	if !ok {
-		return nil
+		return 0, nil
 	}
 	// Route to the executor under the canonical served name: a remote worker
 	// dispatches by req.Model, and the client may have addressed an alias.
 	req.Model = model.Name
 	n, err := tc.CountTokens(ctx, req)
 	if err != nil {
-		return nil // best-effort; see doc comment
+		return 0, nil // best-effort; see doc comment
 	}
 	if n+req.MaxTokens > model.ContextWindow {
-		return anthropic.ErrInvalid(
+		return n, anthropic.ErrInvalid(
 			"prompt is too long: %d input tokens + %d max_tokens exceeds the model's %d-token context window",
 			n, req.MaxTokens, model.ContextWindow)
 	}
-	return nil
+	return n, nil
 }
 
 // handleCountTokens serves POST /v1/messages/count_tokens: the prompt's token
@@ -626,13 +633,13 @@ func (g *Gateway) streamMessages(w http.ResponseWriter, r *http.Request, exec Ex
 		// stream that produced nothing records nothing, matching the non-streaming
 		// error path.
 		if out := sink.partialOutputTokens(); out > 0 {
-			recordBillableUsage(r.Context(), tags, echoModel, sink.usage.InputTokens, out)
+			recordBillableUsage(r.Context(), tags, partialInputTokens(sink.usage.InputTokens, tags), out)
 		}
 		_ = sw.Error(anthropic.ErrAPI, "engine error during generation")
 		return
 	}
 
-	recordBillableUsage(r.Context(), tags, echoModel, sink.usage.InputTokens, sink.usage.OutputTokens)
+	recordBillableUsage(r.Context(), tags, sink.usage.InputTokens, sink.usage.OutputTokens)
 	_ = sw.Finish(sink.reason, sink.stopSeq, sink.usage)
 }
 
@@ -700,6 +707,19 @@ func (s *streamSink) partialOutputTokens() int {
 		return s.usage.OutputTokens
 	}
 	return estimateTokens(s.outBytes)
+}
+
+// partialInputTokens returns the input-token count to record for an interrupted
+// stream. The engine reports its own input count only on a clean completion
+// (Done), so on an interruption engineInput is 0; fall back to the prompt count
+// computed before dispatch (assertContextFits, carried on tags) so the ledger
+// records the input the request actually consumed rather than zero. Shared by
+// the Anthropic and OpenAI stream paths.
+func partialInputTokens(engineInput int, tags usageTags) int {
+	if engineInput > 0 {
+		return engineInput
+	}
+	return tags.inputTokens
 }
 
 // Thinking forwards a reasoning delta straight to the writer. Stop sequences

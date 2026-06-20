@@ -101,21 +101,11 @@ func runWorker(ctx context.Context, cmd *cobra.Command, opts *workerOptions) err
 		return fmt.Errorf("--token is required (or set ATLAS_JOIN_TOKEN)")
 	}
 
-	// Resolve and validate the optional cert pin up front, so a malformed pin
-	// fails at startup rather than rejecting every connection at dial time.
-	tlsPin := opts.tlsPin
-	if tlsPin == "" {
-		tlsPin = os.Getenv("ATLAS_TLS_PIN")
-	}
-	if tlsPin != "" {
-		normalized, err := tlsx.NormalizePin(tlsPin)
-		if err != nil {
-			return err
-		}
-		tlsPin = normalized
-		if !strings.HasPrefix(serverURL, "wss://") {
-			cmd.Printf("Warning: --tls-pin is set but the server URL is not wss://; the pin is ignored for %s\n", serverURL)
-		}
+	// Resolve and validate the optional cert pin up front, so a malformed pin (or
+	// a pin that could not take effect) fails at startup rather than at dial time.
+	tlsPin, err := resolveWorkerPin(opts.tlsPin, serverURL)
+	if err != nil {
+		return err
 	}
 
 	name := opts.name
@@ -172,6 +162,30 @@ func runWorker(ctx context.Context, cmd *cobra.Command, opts *workerOptions) err
 		return err
 	}
 	return nil
+}
+
+// resolveWorkerPin resolves the optional TLS cert pin (flag, then ATLAS_TLS_PIN),
+// normalizes it, and enforces that a pin is only meaningful on a wss:// join.
+// A pin set against a non-wss URL would silently be dropped and the worker would
+// dial plaintext ws://, downgrading exactly the connection the operator asked to
+// protect — so that combination is a hard error, not a warning. Returns "" when
+// no pin is configured (the worker then dials with default trust).
+func resolveWorkerPin(flagPin, serverURL string) (string, error) {
+	pin := flagPin
+	if pin == "" {
+		pin = os.Getenv("ATLAS_TLS_PIN")
+	}
+	if pin == "" {
+		return "", nil
+	}
+	normalized, err := tlsx.NormalizePin(pin)
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(serverURL, "wss://") {
+		return "", fmt.Errorf("--tls-pin is set but the server URL is not wss:// (%s); use a wss:// URL or drop the pin", serverURL)
+	}
+	return normalized, nil
 }
 
 func servedModelNames(models []worker.ServedModel) []string {
