@@ -18,6 +18,37 @@ const (
 	testModel = "test-model"
 )
 
+// staticAuth is a test Authenticator that accepts exactly one secret, granting
+// full access (no model allowlist) with the admin scope. Tests that need a
+// restricted key or a backend failure use allowlistAuth / errAuth instead.
+type staticAuth string
+
+func (s staticAuth) Authenticate(_ context.Context, secret string) (Identity, bool, error) {
+	if secret == string(s) {
+		return Identity{KeyID: "test", Admin: true}, true, nil
+	}
+	return Identity{}, false, nil
+}
+
+// allowlistAuth accepts testKey and returns a fixed Identity, so tests can
+// exercise per-key model allowlist enforcement (403).
+type allowlistAuth Identity
+
+func (a allowlistAuth) Authenticate(_ context.Context, secret string) (Identity, bool, error) {
+	if secret == testKey {
+		return Identity(a), true, nil
+	}
+	return Identity{}, false, nil
+}
+
+// errAuth always fails with a backend error, so tests can assert the gateway
+// answers 500 (not 401) when the key store itself is broken.
+type errAuth struct{}
+
+func (errAuth) Authenticate(_ context.Context, _ string) (Identity, bool, error) {
+	return Identity{}, false, fmt.Errorf("store is down")
+}
+
 // echoExecutor replies with a fixed text, echoing the request so tests can
 // assert the gateway stripped stop sequences before dispatch.
 type echoExecutor struct {
@@ -44,7 +75,7 @@ func (e *echoExecutor) Execute(_ context.Context, req core.Request) (core.Respon
 }
 
 func newTestServer(exec Executor) *httptest.Server {
-	g := NewGateway(testKey, []Model{{Name: testModel, Exec: exec}}, nil)
+	g := NewGateway(staticAuth(testKey), []Model{{Name: testModel, Exec: exec}}, nil)
 	return httptest.NewServer(g.Handler())
 }
 
@@ -126,6 +157,110 @@ func TestAuthErrors(t *testing.T) {
 		if errType(parsed) != "authentication_error" {
 			t.Errorf("key %q: type = %v", key, errType(parsed))
 		}
+	}
+}
+
+// A backend failure in the authenticator is a 500, distinct from a 401 for a
+// merely-invalid key, so a broken key store is not mistaken for bad credentials.
+func TestAuthBackendErrorIs500(t *testing.T) {
+	g := NewGateway(errAuth{}, []Model{{Name: testModel, Exec: &echoExecutor{reply: "x"}}}, nil)
+	srv := httptest.NewServer(g.Handler())
+	defer srv.Close()
+
+	resp, parsed := post(t, srv, testKey, `{"model":"test-model","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", resp.StatusCode)
+	}
+	if errType(parsed) != "api_error" {
+		t.Errorf("type = %v, want api_error", errType(parsed))
+	}
+}
+
+// A key whose allowlist does not include the requested model is rejected with
+// 403 permission_error before the request reaches a worker — even when the
+// model exists and the key is otherwise valid.
+func TestModelAllowlistForbids(t *testing.T) {
+	auth := allowlistAuth(Identity{KeyID: "k", Allowlist: []string{"other-model"}})
+	g := NewGateway(auth, []Model{
+		{Name: testModel, Exec: &echoExecutor{reply: "x"}},
+		{Name: "other-model", Exec: &echoExecutor{reply: "ok"}},
+	}, nil)
+	srv := httptest.NewServer(g.Handler())
+	defer srv.Close()
+
+	// Disallowed model: 403.
+	resp, parsed := post(t, srv, testKey, `{"model":"test-model","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
+	if resp.StatusCode != http.StatusForbidden || errType(parsed) != "permission_error" {
+		t.Fatalf("disallowed: status = %d, type = %v", resp.StatusCode, errType(parsed))
+	}
+
+	// Allowed model: 200.
+	resp, _ = post(t, srv, testKey, `{"model":"other-model","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("allowed: status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// An empty allowlist permits every model.
+func TestEmptyAllowlistPermitsAll(t *testing.T) {
+	auth := allowlistAuth(Identity{KeyID: "k"}) // nil allowlist
+	g := NewGateway(auth, []Model{{Name: testModel, Exec: &echoExecutor{reply: "x"}}}, nil)
+	srv := httptest.NewServer(g.Handler())
+	defer srv.Close()
+
+	resp, _ := post(t, srv, testKey, `{"model":"test-model","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// The allowlist matches an alias's canonical target, so a key allowed the
+// served model works when the client addresses an alias for it.
+func TestAllowlistMatchesAliasTarget(t *testing.T) {
+	auth := allowlistAuth(Identity{KeyID: "k", Allowlist: []string{testModel}})
+	g := NewGateway(auth,
+		[]Model{{Name: testModel, Exec: &echoExecutor{reply: "x"}, ContextWindow: 4096}},
+		map[string]string{"claude-sonnet-4-6": testModel})
+	srv := httptest.NewServer(g.Handler())
+	defer srv.Close()
+
+	resp, _ := post(t, srv, testKey, `{"model":"claude-sonnet-4-6","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (alias target is allowlisted)", resp.StatusCode)
+	}
+}
+
+// RequireAdmin admits only a valid admin-scoped key: 401 without one, 403 for a
+// valid non-admin key, and passes through to the handler for an admin key.
+func TestRequireAdmin(t *testing.T) {
+	admin := allowlistAuth(Identity{KeyID: "a", Admin: true})
+
+	do := func(auth Authenticator, key string) int {
+		s := httptest.NewServer(RequireAdmin(auth, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+		defer s.Close()
+		req, _ := http.NewRequest(http.MethodGet, s.URL, nil)
+		if key != "" {
+			req.Header.Set("x-api-key", key)
+		}
+		resp, err := s.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if got := do(admin, ""); got != http.StatusUnauthorized {
+		t.Errorf("no key: %d, want 401", got)
+	}
+	if got := do(allowlistAuth(Identity{KeyID: "c", Admin: false}), testKey); got != http.StatusForbidden {
+		t.Errorf("non-admin key: %d, want 403", got)
+	}
+	if got := do(admin, testKey); got != http.StatusOK {
+		t.Errorf("admin key: %d, want 200", got)
+	}
+	if got := do(errAuth{}, testKey); got != http.StatusInternalServerError {
+		t.Errorf("backend error: %d, want 500", got)
 	}
 }
 
@@ -644,7 +779,7 @@ func getJSON(t *testing.T, srv *httptest.Server, path, key string) (int, map[str
 
 // registryServer builds a gateway with explicit models and aliases.
 func registryServer(models []Model, aliases map[string]string) *httptest.Server {
-	return httptest.NewServer(NewGateway(testKey, models, aliases).Handler())
+	return httptest.NewServer(NewGateway(staticAuth(testKey), models, aliases).Handler())
 }
 
 func TestListModels(t *testing.T) {

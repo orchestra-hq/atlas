@@ -52,7 +52,7 @@ func (f *fakeAutostarter) touchedModels() []string {
 
 func autostartServer(t *testing.T, aliases map[string]string, succeed bool) (*httptest.Server, *fakeAutostarter) {
 	t.Helper()
-	g := NewGateway(testKey, nil, aliases)
+	g := NewGateway(staticAuth(testKey), nil, aliases)
 	fa := &fakeAutostarter{g: g, exec: &echoExecutor{reply: "hi"}, succeed: succeed}
 	g.SetAutostarter(fa)
 	srv := httptest.NewServer(g.Handler())

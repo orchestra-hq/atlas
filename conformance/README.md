@@ -37,14 +37,17 @@ go build -o atlas ./cmd/atlas
 # Pull two starter-catalog models from cold: a non-reasoning one and a
 # reasoning one (G4 needs both). atlas up would also pull on demand.
 ./atlas pull qwen2.5-1.5b-instruct qwen3-0.6b
+# Auth is per-key since phase 5 (ADR-0008): mint one into the state-dir store the
+# gateway reads, then hand it to the harness. (atlas up also prints a default key.)
+KEY=$(./atlas keys create --quiet)
 ./atlas up --model qwen2.5-1.5b-instruct --model qwen3-0.6b \
   --alias claude-sonnet-4-6=qwen2.5-1.5b-instruct \
   --alias claude-haiku-4-5=qwen2.5-1.5b-instruct \
   --alias claude-opus-4-1=qwen3-0.6b \
-  --api-key dev-key > atlas.log 2>&1 &   # provisions llama.cpp, boots from the store, serves :8080
+  > atlas.log 2>&1 &   # provisions llama.cpp, boots from the store, serves :8080
 # ATLAS_LOG_FILE lets G10 check that per-request token counts are logged.
 cd conformance && ATLAS_LOG_FILE=../atlas.log uv run python run.py \
-  --base-url http://127.0.0.1:8080 --api-key dev-key \
+  --base-url http://127.0.0.1:8080 --api-key "$KEY" \
   --engine llamacpp --model qwen2.5-1.5b-instruct \
   --reasoning-model qwen3-0.6b --require G1,G2,G3,G4,G5,G6,G7,G8,G9,G10
 ```
@@ -56,7 +59,7 @@ G9's `agent-sdk` cell (a streamed ≥3-call tool loop) runs by default. The real
 # system prompt inside the model's context window; raise it on a larger model.
 CONF_CLAUDE_CODE_SMOKE=1 CLAUDE_CODE_MAX_OUTPUT_TOKENS=2048 \
   ATLAS_LOG_FILE=../atlas.log uv run python run.py \
-  --base-url http://127.0.0.1:8080 --api-key dev-key \
+  --base-url http://127.0.0.1:8080 --api-key "$KEY" \
   --engine llamacpp --model qwen2.5-1.5b-instruct \
   --reasoning-model qwen3-0.6b --require G1,G2,G3,G4,G5,G6,G7,G8,G9,G10
 ```
@@ -64,13 +67,13 @@ CONF_CLAUDE_CODE_SMOKE=1 CLAUDE_CODE_MAX_OUTPUT_TOKENS=2048 \
 The harness is engine-agnostic, so the same suite runs against a vLLM-backed Atlas on a GPU host (the full-matrix tier — not yet wired into CI; see [open-questions.md](../docs/open-questions.md)):
 
 ```sh
+KEY=$(./atlas keys create --quiet)
 ./atlas up --engine vllm \
   --model Qwen/Qwen2.5-1.5B-Instruct --model Qwen/Qwen3-0.6B \
   --engine-arg --enable-auto-tool-choice --engine-arg --tool-call-parser --engine-arg hermes \
   --engine-arg --reasoning-parser --engine-arg qwen3 \
-  --alias claude-sonnet-4-6=Qwen/Qwen2.5-1.5B-Instruct \
-  --api-key dev-key &   # provisions a uv-managed vLLM venv, serves :8080
-CONF_CLAUDE_CODE_SMOKE=1 uv run python run.py --base-url http://127.0.0.1:8080 --api-key dev-key \
+  --alias claude-sonnet-4-6=Qwen/Qwen2.5-1.5B-Instruct &   # provisions a uv-managed vLLM venv, serves :8080
+CONF_CLAUDE_CODE_SMOKE=1 uv run python run.py --base-url http://127.0.0.1:8080 --api-key "$KEY" \
   --engine vllm --model Qwen/Qwen2.5-1.5B-Instruct --reasoning-model Qwen/Qwen3-0.6B \
   --require G1,G2,G3,G4,G5,G6,G7,G8,G9,G10
 ```

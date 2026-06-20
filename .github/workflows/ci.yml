@@ -84,7 +84,6 @@ jobs:
       CONF_MODEL_NAME: qwen2.5-1.5b-instruct
       CONF_REASONING_NAME: qwen3-0.6b
       ATLAS_STATE_DIR: ${{ github.workspace }}/.atlas-state
-      ATLAS_API_KEY: conformance-ci-key
       # Where atlas writes its request log; G10 reads it to assert per-request
       # token counts are logged. Absolute so the harness (run from conformance/)
       # and the Start Atlas step (run from the workspace root) agree.
@@ -126,6 +125,11 @@ jobs:
         with:
           path: ${{ env.ATLAS_STATE_DIR }}/runtimes
           key: llamacpp-runtime-${{ runner.os }}-${{ runner.arch }}-b9611
+      # API keys replaced the shared --api-key secret in phase 5 (ADR-0008): mint
+      # a key into the state-dir store and hand it to the harness via the env. The
+      # server reads the same store, so it accepts this key.
+      - name: Provision API key
+        run: echo "ATLAS_API_KEY=$(./atlas keys create --state-dir "$ATLAS_STATE_DIR" --quiet)" >> "$GITHUB_ENV"
       - name: Start Atlas
         run: |
           ./atlas up \
@@ -134,7 +138,7 @@ jobs:
             --alias "claude-sonnet-4-6=${CONF_MODEL_NAME}" \
             --alias "claude-haiku-4-5=${CONF_MODEL_NAME}" \
             --alias "claude-opus-4-1=${CONF_REASONING_NAME}" \
-            --addr 127.0.0.1:8080 --api-key "$ATLAS_API_KEY" > "$ATLAS_LOG_FILE" 2>&1 &
+            --addr 127.0.0.1:8080 > "$ATLAS_LOG_FILE" 2>&1 &
           echo $! > atlas.pid
           # Readiness, not just liveness: wait until a model can actually answer.
           for _ in $(seq 1 150); do
@@ -182,7 +186,6 @@ jobs:
       CONF_MODEL_NAME: qwen2.5-1.5b-instruct
       CONF_REASONING_NAME: qwen3-0.6b
       ATLAS_STATE_DIR: ${{ github.workspace }}/.atlas-state
-      ATLAS_API_KEY: conformance-ci-key
       ATLAS_JOIN_TOKEN: conformance-join-token
       # The gateway runs inside `atlas server`, so its request log (G10 token
       # counts) is the server process's log.
@@ -219,6 +222,12 @@ jobs:
         with:
           path: ${{ env.ATLAS_STATE_DIR }}/runtimes
           key: llamacpp-runtime-${{ runner.os }}-${{ runner.arch }}-b9611
+      # API keys replaced the shared --api-key secret in phase 5 (ADR-0008): mint
+      # a key into the state-dir store the server reads. This fleet job drives the
+      # admin surface (atlas deploy/stop, /admin/deployments), so the key is
+      # admin-scoped (phase 5b) — admin keys also pass the client /v1 surface.
+      - name: Provision API key
+        run: echo "ATLAS_API_KEY=$(./atlas keys create --state-dir "$ATLAS_STATE_DIR" --admin --quiet)" >> "$GITHUB_ENV"
       - name: Start Atlas server + worker
         run: |
           # Control plane: gateway + hub, no local engine. Tier aliases resolve
@@ -229,7 +238,7 @@ jobs:
           # auto-start scenario runs its own server below.
           ./atlas server \
             --addr 127.0.0.1:9090 --autostart-timeout 0 \
-            --token "$ATLAS_JOIN_TOKEN" --api-key "$ATLAS_API_KEY" \
+            --token "$ATLAS_JOIN_TOKEN" \
             --alias "claude-sonnet-4-6=${CONF_MODEL_NAME}" \
             --alias "claude-haiku-4-5=${CONF_MODEL_NAME}" \
             --alias "claude-opus-4-1=${CONF_REASONING_NAME}" > "$ATLAS_LOG_FILE" 2>&1 &
@@ -456,7 +465,7 @@ jobs:
           set -uo pipefail
           API=http://127.0.0.1:9091
           ./atlas server --addr 127.0.0.1:9091 --autostart-timeout 120s \
-            --token "$ATLAS_JOIN_TOKEN" --api-key "$ATLAS_API_KEY" > as-server.log 2>&1 &
+            --token "$ATLAS_JOIN_TOKEN" > as-server.log 2>&1 &
           echo $! > as-server.pid
           sleep 2
           # Bare worker (no --model): provisions the engine, serves nothing yet.
@@ -482,8 +491,8 @@ jobs:
           if [ "$CODE" != "200" ]; then
             echo "::error::model did not auto-start on first request (got $CODE)"; cat as-worker.log; exit 1
           fi
-          # It now shows up as a scheduler-owned deployment.
-          echo "deployments: $(curl -sS "$API/admin/deployments")"
+          # It now shows up as a scheduler-owned deployment (/admin/* needs the key).
+          echo "deployments: $(curl -sS -H "x-api-key: $ATLAS_API_KEY" "$API/admin/deployments")"
           echo "Auto-start scenario passed."
       - name: Stop Atlas
         if: always()

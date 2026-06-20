@@ -21,7 +21,6 @@ import (
 type serverOptions struct {
 	addr             string
 	token            string
-	apiKey           string
 	aliases          []string
 	stateDir         string
 	autostartTimeout time.Duration
@@ -43,10 +42,9 @@ func newServerCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&opts.addr, "addr", "0.0.0.0:9090", "address the gateway and worker hub listen on")
 	cmd.Flags().StringVar(&opts.token, "token", "", "join token workers must present (a random token is generated if unset)")
-	cmd.Flags().StringVar(&opts.apiKey, "api-key", "", "API key clients must present to the gateway (a random key is generated if unset)")
 	cmd.Flags().StringArrayVar(&opts.aliases, "alias", nil,
 		"model alias as name=target, e.g. claude-sonnet-4-6=qwen2.5-1.5b-instruct; resolves once a worker registers the target (docs/api-surface.md); repeat for several")
-	cmd.Flags().StringVar(&opts.stateDir, "state-dir", defaultStateDir(), "directory for state (logs, future SQLite DB)")
+	cmd.Flags().StringVar(&opts.stateDir, "state-dir", defaultStateDir(), "directory for state (logs, the key store)")
 	cmd.Flags().DurationVar(&opts.autostartTimeout, "autostart-timeout", 5*time.Minute,
 		"how long a request waits for a model to auto-start on first use (0 disables auto-start)")
 	cmd.Flags().DurationVar(&opts.idleTimeout, "idle-timeout", 15*time.Minute,
@@ -80,11 +78,18 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 	if opts.token == "" {
 		opts.token = generateAPIKey()
 	}
-	if opts.apiKey == "" {
-		opts.apiKey = generateAPIKey()
+
+	// Open the control-plane key store and mint a default admin key on first run,
+	// so a fresh control plane is usable without a manual `atlas keys create`
+	// (ADR-0008). The worker join token stays a separate shared --token.
+	store, err := openStateDB(opts.stateDir)
+	if err != nil {
+		return err
 	}
-	if err := os.MkdirAll(opts.stateDir, 0o755); err != nil {
-		return fmt.Errorf("create state dir: %w", err)
+	defer func() { _ = store.Close() }()
+	defaultKey, defaultKeyCreated, err := bootstrapDefaultKey(ctx, store)
+	if err != nil {
+		return fmt.Errorf("bootstrap default key: %w", err)
 	}
 
 	aliases, err := parseServerAliases(opts.aliases)
@@ -100,11 +105,12 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 	// The gateway starts with no models: workers join over the hub and register
 	// the models they serve (M1 phase 2), which the hub adds to the gateway as
 	// remote routes. Operator aliases resolve against those models as they join.
-	// Client auth here reuses M0's shared secret (--api-key); per-key management
-	// replaces it in phase 5. Request logs (per-request token counts — G10) go to
-	// stderr alongside the banner on stdout.
+	// Client auth validates each request's API key against the store (ADR-0008).
+	// Request logs (per-request token counts — G10) go to stderr alongside the
+	// banner on stdout.
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	gw := server.NewGateway(opts.apiKey, nil, aliases)
+	authn := keyAuth{db: store}
+	gw := server.NewGateway(authn, nil, aliases)
 	gw.SetLogger(logger)
 	hub := server.NewHub(opts.token, gw)
 	// The scheduler places catalog models onto workers on demand and reconciles
@@ -120,12 +126,15 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 	go sched.Run(ctx)
 
 	mux := http.NewServeMux()
+	// Worker join is authenticated by the join --token, not an API key.
 	mux.HandleFunc("GET /workers/connect", hub.HandleConnect)
-	mux.HandleFunc("GET /admin/workers", hub.HandleListWorkers)
-	mux.HandleFunc("POST /admin/workers/{id}/drain", hub.HandleRemoveWorker)
-	mux.HandleFunc("POST /admin/deployments", sched.HandleSetDeployment)
-	mux.HandleFunc("GET /admin/deployments", sched.HandleListDeployments)
-	mux.HandleFunc("DELETE /admin/deployments/{model}", sched.HandleStopDeployment)
+	// The /admin/* control surface requires an admin-scoped API key (ADR-0008,
+	// phase 5b): the same key store as the client gateway, gated by scope.
+	mux.HandleFunc("GET /admin/workers", server.RequireAdmin(authn, hub.HandleListWorkers))
+	mux.HandleFunc("POST /admin/workers/{id}/drain", server.RequireAdmin(authn, hub.HandleRemoveWorker))
+	mux.HandleFunc("POST /admin/deployments", server.RequireAdmin(authn, sched.HandleSetDeployment))
+	mux.HandleFunc("GET /admin/deployments", server.RequireAdmin(authn, sched.HandleListDeployments))
+	mux.HandleFunc("DELETE /admin/deployments/{model}", server.RequireAdmin(authn, sched.HandleStopDeployment))
 	// Gateway routes (/v1/*, /healthz, /readyz) handled by the gateway's mux
 	// as a catch-all; hub routes registered above take precedence.
 	mux.Handle("/", gw.Handler())
@@ -141,14 +150,20 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 	cmd.Printf("Atlas server starting.\n")
 	cmd.Printf("  Listen  : %s\n", opts.addr)
 	cmd.Printf("  Token   : %s\n", opts.token)
-	cmd.Printf("  API key : %s\n", opts.apiKey)
+	keyForHint := "<your-api-key>"
+	if defaultKeyCreated {
+		cmd.Printf("  API key : %s  (new default key — save it; it is not shown again)\n", defaultKey)
+		keyForHint = defaultKey
+	} else {
+		cmd.Printf("  API key : use a saved key, or run `atlas keys create`\n")
+	}
 	cmd.Println()
 	cmd.Printf("Workers join with:\n")
 	cmd.Printf("  atlas worker --join ws://<this-host>:%s/workers/connect --token %s\n", port, opts.token)
 	cmd.Printf("\nThen place a model on the fleet:\n")
 	cmd.Printf("  atlas deploy <model> --server http://<this-host>:%s\n", port)
 	cmd.Printf("\nPoint a client at it:\n")
-	cmd.Printf("  ANTHROPIC_BASE_URL=http://<this-host>:%s ANTHROPIC_API_KEY=%s\n", port, opts.apiKey)
+	cmd.Printf("  ANTHROPIC_BASE_URL=http://<this-host>:%s ANTHROPIC_API_KEY=%s\n", port, keyForHint)
 	cmd.Println("\nPress Ctrl-C to stop.")
 
 	serveErr := make(chan error, 1)

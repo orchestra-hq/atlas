@@ -11,12 +11,14 @@
 #
 #   pip install 'skypilot[aws]'   # or [gcp], [azure], [kubernetes], …
 #   sky check
-#   sky launch -c atlas examples/serve/atlas-serve.sky.yaml \
-#       --env ATLAS_API_KEY="$(openssl rand -hex 16)" --down -y
+#   sky launch -c atlas examples/serve/atlas-serve.sky.yaml --down -y
 #   sky status --endpoint 8080 atlas   # -> http://<ip>:8080  (your endpoint)
 #
+# Atlas mints an API key on first start and prints it; read it from the logs:
+#   sky logs atlas | grep 'ATLAS API KEY'
+#
 # Then, from your laptop:
-#   ANTHROPIC_BASE_URL=http://<ip>:8080 ANTHROPIC_API_KEY=<your key> claude
+#   ANTHROPIC_BASE_URL=http://<ip>:8080 ANTHROPIC_API_KEY=<key from logs> claude
 #
 # Tear down when done:  sky down atlas
 
@@ -34,7 +36,6 @@ envs:
   # parsers for tool use + thinking). Override per launch with `sky launch --env`.
   ATLAS_MODEL: Qwen/Qwen3-8B
   ATLAS_ENGINE_ARGS: --tool-call-parser hermes --reasoning-parser qwen3
-  ATLAS_API_KEY: "" # set a real key: --env ATLAS_API_KEY="$(openssl rand -hex 16)"
   GO_VERSION: 1.26.4
 
 setup: |
@@ -49,7 +50,11 @@ setup: |
 run: |
   set -euo pipefail
   nvidia-smi || { echo "no GPU visible on the host" >&2; exit 1; }
-  [ -n "$ATLAS_API_KEY" ] || { echo "set --env ATLAS_API_KEY=... so the endpoint is not open" >&2; exit 1; }
+  # API keys replaced the shared secret in phase 5 (ADR-0008): mint one into the
+  # state-dir store the gateway reads and print it so `sky logs` surfaces it. The
+  # port is exposed, but the endpoint always requires this key — it is never open.
+  KEY=$("$HOME/atlas" keys create --quiet)
+  echo "================ ATLAS API KEY: $KEY ================"
   # shellcheck disable=SC2086
   "$HOME/atlas" up \
     --engine vllm \
@@ -57,5 +62,4 @@ run: |
     --alias "claude-sonnet-4-6=$ATLAS_MODEL" \
     --alias "claude-opus-4-1=$ATLAS_MODEL" \
     --addr 0.0.0.0:8080 \
-    --api-key "$ATLAS_API_KEY" \
     $(for a in $ATLAS_ENGINE_ARGS; do printf -- '--engine-arg %s ' "$a"; done)
