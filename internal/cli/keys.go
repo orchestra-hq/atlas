@@ -57,7 +57,11 @@ func newKeysCreateCmd() *cobra.Command {
 				return err
 			}
 			if quiet {
-				cmd.Println(secret)
+				// Print only the secret, on stdout, for `KEY=$(atlas keys create
+				// --quiet)`. cobra's cmd.Print* default to stderr, so write to
+				// OutOrStdout explicitly — otherwise command substitution captures
+				// nothing.
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), secret)
 				return nil
 			}
 			cmd.Printf("Created key %s\n", k.ID)

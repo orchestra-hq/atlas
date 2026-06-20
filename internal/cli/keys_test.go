@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"io"
+	"os"
 	"strings"
 	"testing"
 )
@@ -95,6 +97,34 @@ func TestKeysCreateQuiet(t *testing.T) {
 	defer func() { _ = store.Close() }()
 	if _, ok, err := (keyAuth{db: store}).Authenticate(context.Background(), secret); !ok || err != nil {
 		t.Errorf("quiet secret does not authenticate: ok=%v err=%v", ok, err)
+	}
+}
+
+// TestKeysCreateQuietGoesToRealStdout guards the scripting contract
+// (KEY=$(atlas keys create --quiet)) against cobra's gotcha that cmd.Print*
+// default to stderr. It captures the real os.Stdout fd — SetOut-based tests
+// cannot distinguish stdout from stderr because cobra routes both through the
+// same writer once SetOut is called.
+func TestKeysCreateQuietGoesToRealStdout(t *testing.T) {
+	dir := t.TempDir()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	cmd := newKeysCmd()
+	cmd.SetArgs([]string{"create", "--quiet", "--state-dir", dir})
+	runErr := cmd.Execute()
+	_ = w.Close()
+	os.Stdout = old
+	out, _ := io.ReadAll(r)
+	if runErr != nil {
+		t.Fatalf("execute: %v", runErr)
+	}
+	secret := strings.TrimSpace(string(out))
+	if !strings.HasPrefix(secret, "atlas-") {
+		t.Fatalf("secret did not land on real stdout (got %q) — cmd.Print* defaults to stderr", string(out))
 	}
 }
 
