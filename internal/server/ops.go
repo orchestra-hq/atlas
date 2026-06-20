@@ -10,13 +10,38 @@ import (
 // (/readyz in gateway.go); this file carries the per-request structured log,
 // which records the token counts the criterion requires.
 
+// UsageRecord is one completed inference request's token accounting, handed to
+// a UsageRecorder for durable storage (phase 6, G13). KeyID is the calling API
+// key, Model the served model, WorkerID the worker that ran it. This is a
+// consumer-defined type so the server package needs no dependency on the storage
+// layer; the CLI bridges it to the SQLite ledger (internal/db).
+type UsageRecord struct {
+	KeyID        string
+	Model        string
+	WorkerID     string
+	InputTokens  int
+	OutputTokens int
+}
+
+// UsageRecorder persists a usage record. The gateway calls Record once per
+// completed inference request, off the response path (the client has already
+// been served), so an error is for logging only — it never fails the request.
+// nil disables metering (tests, and any deployment that opts out).
+type UsageRecorder interface {
+	Record(ctx context.Context, u UsageRecord) error
+}
+
 // reqLog accumulates the loggable facts of one request as its handler runs.
-// The handler fills model and usage via recordUsage once they are known; the
+// The handler fills model and usage via recordUsage (log only) or
+// recordBillableUsage (log + durable ledger) once they are known; the
 // middleware reads it after the handler returns.
 type reqLog struct {
 	model        string
 	inputTokens  int
 	outputTokens int
+	keyID        string // set for a billable request: the calling API key
+	workerID     string // set for a billable request: the worker that ran it
+	billable     bool   // true once recordBillableUsage ran: write a ledger row
 }
 
 type reqLogKey struct{}
@@ -24,13 +49,40 @@ type reqLogKey struct{}
 // recordUsage stashes the resolved model and its token usage on the in-flight
 // request so the logging middleware can emit them once the handler returns. A
 // no-op if the request was not wrapped (e.g. in a unit test that calls a
-// handler directly).
+// handler directly). This is the log-only path (e.g. count_tokens), which is not
+// billable; inference handlers use recordBillableUsage.
 func recordUsage(ctx context.Context, model string, in, out int) {
 	if rec, ok := ctx.Value(reqLogKey{}).(*reqLog); ok {
 		rec.model = model
 		rec.inputTokens = in
 		rec.outputTokens = out
 	}
+}
+
+// recordBillableUsage records token usage for a completed inference request,
+// both for the log line and for the durable usage ledger: it stashes the model,
+// tokens, calling key, and serving worker, and marks the request billable so the
+// logging middleware writes a ledger row. Called on the success path and, with
+// the partial count, on the interrupted-stream path (the review finding behind
+// G13's interrupted case).
+func recordBillableUsage(ctx context.Context, tags usageTags, model string, in, out int) {
+	if rec, ok := ctx.Value(reqLogKey{}).(*reqLog); ok {
+		rec.model = model
+		rec.inputTokens = in
+		rec.outputTokens = out
+		rec.keyID = tags.keyID
+		rec.workerID = tags.workerID
+		rec.billable = true
+	}
+}
+
+// usageTags identify who and what a billable request is charged to: the calling
+// API key and the worker that served it. Threaded from the handler (which knows
+// the key from auth and the worker from route resolution) into the streaming and
+// non-streaming record calls.
+type usageTags struct {
+	keyID    string
+	workerID string
 }
 
 // withRequestLog wraps the API mux to emit exactly one structured line per
@@ -62,8 +114,30 @@ func (g *Gateway) withRequestLog(next http.Handler) http.Handler {
 			"output_tokens", rec.outputTokens,
 			"duration_ms", time.Since(start).Milliseconds(),
 		)
+
+		// Durable usage ledger (G13): write one row per completed inference
+		// request. Use a cancel-immune context so an interrupted stream — the very
+		// case we must not under-record — still persists its partial usage after
+		// the client's context was canceled.
+		if rec.billable && g.usage != nil {
+			wctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), usageWriteTimeout)
+			defer cancel()
+			if err := g.usage.Record(wctx, UsageRecord{
+				KeyID:        rec.keyID,
+				Model:        rec.model,
+				WorkerID:     rec.workerID,
+				InputTokens:  rec.inputTokens,
+				OutputTokens: rec.outputTokens,
+			}); err != nil {
+				g.logger.Warn("usage ledger write failed", "error", err, "model", rec.model)
+			}
+		}
 	})
 }
+
+// usageWriteTimeout bounds the post-response ledger write so a stuck store can
+// never pin a request goroutine open.
+const usageWriteTimeout = 5 * time.Second
 
 // statusWriter records the response status code while delegating everything
 // else to the wrapped ResponseWriter. It forwards Flush so SSE streaming (which

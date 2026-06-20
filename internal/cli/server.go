@@ -112,6 +112,7 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 	authn := keyAuth{db: store}
 	gw := server.NewGateway(authn, nil, aliases)
 	gw.SetLogger(logger)
+	gw.SetUsageRecorder(usageRecorder{db: store}) // durable usage ledger (G13)
 	hub := server.NewHub(opts.token, gw)
 	// The scheduler places catalog models onto workers on demand and reconciles
 	// deployments as workers join and leave (M1 phase 4b). The hub notifies it of

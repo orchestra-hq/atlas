@@ -47,7 +47,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	model, ok := g.resolveOrStart(r.Context(), coreReq.Model)
+	model, worker, ok := g.resolveOrStart(r.Context(), coreReq.Model)
 	if !ok {
 		writeOpenAIModelNotFound(w, coreReq.Model)
 		return
@@ -67,9 +67,11 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	requested := coreReq.Model
 	coreReq.Model = model.Name
 
+	tags := usageTags{keyID: id.KeyID, workerID: worker}
+
 	if req.Stream {
 		includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
-		g.streamChatCompletion(w, r, model.Exec, coreReq, requested, stops, includeUsage)
+		g.streamChatCompletion(w, r, model.Exec, coreReq, requested, stops, includeUsage, tags)
 		return
 	}
 
@@ -80,7 +82,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	resp, _ = core.ApplyStopSequences(resp, stops)
-	recordUsage(r.Context(), requested, resp.Usage.InputTokens, resp.Usage.OutputTokens)
+	recordBillableUsage(r.Context(), tags, requested, resp.Usage.InputTokens, resp.Usage.OutputTokens)
 	openai.WriteJSON(w, http.StatusOK, openai.FromCore(newCompletionID(), time.Now().Unix(), requested, resp))
 }
 
@@ -93,7 +95,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 // req is the request to dispatch (its Model is the canonical served name);
 // echoModel is the name the client addressed (possibly an alias), echoed back on
 // the stream and in usage.
-func (g *Gateway) streamChatCompletion(w http.ResponseWriter, r *http.Request, exec Executor, req core.Request, echoModel string, stops []string, includeUsage bool) {
+func (g *Gateway) streamChatCompletion(w http.ResponseWriter, r *http.Request, exec Executor, req core.Request, echoModel string, stops []string, includeUsage bool, tags usageTags) {
 	sw, err := openai.NewStreamWriter(w, newCompletionID(), time.Now().Unix(), echoModel)
 	if err != nil {
 		openai.WriteError(w, &openai.Error{Status: http.StatusInternalServerError, Type: openai.ErrAPI, Msg: "streaming unsupported"})
@@ -111,11 +113,17 @@ func (g *Gateway) streamChatCompletion(w http.ResponseWriter, r *http.Request, e
 		err = bufferedStream(r.Context(), exec, req, sink)
 	}
 	if err != nil {
+		// Interrupted mid-stream: record the usage emitted up to the cut rather
+		// than zero, matching the Anthropic path (G13 interrupted case). A stream
+		// that produced nothing records nothing.
+		if out := sink.partialOutputTokens(); out > 0 {
+			recordBillableUsage(r.Context(), tags, echoModel, sink.usage.InputTokens, out)
+		}
 		_ = sw.Error(openai.ErrAPI, "engine error during generation")
 		return
 	}
 
-	recordUsage(r.Context(), echoModel, sink.usage.InputTokens, sink.usage.OutputTokens)
+	recordBillableUsage(r.Context(), tags, echoModel, sink.usage.InputTokens, sink.usage.OutputTokens)
 	_ = sw.Finish(sink.reason, sink.usage, includeUsage)
 }
 
@@ -123,10 +131,21 @@ func (g *Gateway) streamChatCompletion(w http.ResponseWriter, r *http.Request, e
 // running text through the stop-sequence scanner so a matched sequence
 // truncates output and ends the stream the same way the Anthropic path does.
 type openaiStreamSink struct {
-	sw      *openai.StreamWriter
-	scanner *core.StopSequenceScanner
-	reason  core.StopReason
-	usage   core.Usage
+	sw       *openai.StreamWriter
+	scanner  *core.StopSequenceScanner
+	reason   core.StopReason
+	usage    core.Usage
+	outBytes int // emitted output text bytes, for the interrupted-stream estimate
+}
+
+// partialOutputTokens mirrors streamSink.partialOutputTokens for the OpenAI
+// path: the engine's exact count if known, else an estimate from emitted bytes,
+// so an interrupted stream records what it produced rather than zero (G13).
+func (s *openaiStreamSink) partialOutputTokens() int {
+	if s.usage.OutputTokens > 0 {
+		return s.usage.OutputTokens
+	}
+	return estimateTokens(s.outBytes)
 }
 
 // Thinking is dropped: the OpenAI chat surface does not carry reasoning. (The
@@ -140,6 +159,7 @@ func (s *openaiStreamSink) Text(delta string) error {
 		if err := s.sw.TextDelta(emit); err != nil {
 			return err
 		}
+		s.outBytes += len(emit)
 	}
 	if matched {
 		s.reason = core.StopStopSequence

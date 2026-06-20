@@ -41,6 +41,20 @@ func (a keyAuth) Authenticate(ctx context.Context, secret string) (server.Identi
 	return server.Identity{KeyID: k.ID, Allowlist: k.Allowlist, Admin: k.Admin}, true, nil
 }
 
+// usageRecorder adapts the SQLite ledger to the gateway's server.UsageRecorder,
+// translating the server's consumer-defined record into the db row (phase 6).
+type usageRecorder struct{ db *db.DB }
+
+func (u usageRecorder) Record(ctx context.Context, rec server.UsageRecord) error {
+	return u.db.RecordUsage(ctx, db.UsageRecord{
+		KeyID:        rec.KeyID,
+		Model:        rec.Model,
+		WorkerID:     rec.WorkerID,
+		InputTokens:  rec.InputTokens,
+		OutputTokens: rec.OutputTokens,
+	})
+}
+
 // bootstrapDefaultKey mints a default full-access admin key when the store has
 // no keys yet, so a freshly-started node is usable without a manual
 // `atlas keys create` (ADR-0008). It returns the new secret and created=true on
