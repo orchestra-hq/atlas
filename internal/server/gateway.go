@@ -743,6 +743,43 @@ func (g *Gateway) authenticate(r *http.Request) (Identity, *anthropic.Error) {
 	return id, nil
 }
 
+// RequireAdmin wraps an admin handler so only a request carrying a valid
+// admin-scoped API key reaches it: a missing/unknown/revoked key is 401, a valid
+// but non-admin key is 403, an auth-backend failure is 500. The /admin/* control
+// surface (worker drain, deploy/scale/stop) uses it; it shares the same
+// Authenticator and key store as the client gateway (ADR-0008, phase 5b), so one
+// key system covers both surfaces — scope on the key, not a second secret.
+func RequireAdmin(auth Authenticator, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		secret := apiKeyFromRequest(r)
+		if secret == "" {
+			writeAdminError(w, http.StatusUnauthorized, "missing or invalid API key")
+			return
+		}
+		id, ok, err := auth.Authenticate(r.Context(), secret)
+		if err != nil {
+			writeAdminError(w, http.StatusInternalServerError, "authentication backend error")
+			return
+		}
+		if !ok {
+			writeAdminError(w, http.StatusUnauthorized, "missing or invalid API key")
+			return
+		}
+		if !id.Admin {
+			writeAdminError(w, http.StatusForbidden, "this API key is not permitted to use the admin surface")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// writeAdminError renders an admin-surface error as a small JSON object. The
+// admin surface is Atlas's own control plane (the CLI keys on status codes), not
+// an Anthropic-compatible surface, so it does not use the Anthropic envelope.
+func writeAdminError(w http.ResponseWriter, status int, msg string) {
+	anthropic.WriteJSON(w, status, map[string]string{"error": msg})
+}
+
 // apiKeyFromRequest extracts the presented secret from x-api-key or
 // Authorization: Bearer (clients vary — docs/api-surface.md).
 func apiKeyFromRequest(r *http.Request) string {

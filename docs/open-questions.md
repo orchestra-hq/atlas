@@ -39,6 +39,12 @@ The starter catalog (`/catalog`) carries two fields the build wires through to *
 
 `/readyz` returns 200 once a model is registered, and in single-node mode a model is registered only after its worker's `Start` confirms the engine reported healthy — so at startup "ready" genuinely means "a model can answer". It is **not** a live probe: if an engine subprocess dies _after_ registration, `/readyz` keeps returning 200 (the next request surfaces the failure as a 529). For M0's single-node hero path this is acceptable; a periodic worker health re-probe feeding readiness is an M1 concern, alongside the remote-worker hub. Stated as an assumption rather than silently shipped.
 
+## Seeding a chosen API key for non-interactive deploys (phase 5)
+
+[ADR-0008](decisions/0008-control-plane-persistence-and-api-keys.md) removed the shared `--api-key` secret: the control plane mints a default key on first run and prints it, and `atlas keys create` mints more. This is clean for interactive use, but non-interactive deploys (Docker, the SkyPilot recipe, k8s, anything driven from a secrets manager) can no longer **inject a known key** — they must scrape it from the process logs (`docker logs` / `sky logs`) after boot. The recipes in `examples/serve` and `docs/docker.md` do exactly that today.
+
+**Open:** add a first-boot seed path so an operator can supply the exact secret out of band — e.g. an `ATLAS_API_KEY` env (or `--seed-key`) that, **only when the store is empty**, creates a key with that value instead of a random one. The tension is convenience vs. reintroducing a shared-secret-shaped env var that ADR-0008 deliberately retired; mitigations would be to seed only on an empty store and to document it as a bootstrap convenience, not an auth mechanism. Flagged during phase 5a; nothing depends on it (the log-scrape path works), so it is deferred rather than built.
+
 ## Resolved
 
 Auth for the `/admin/*` control surface (phase 5) — settled in [ADR-0008](decisions/0008-control-plane-persistence-and-api-keys.md): gate `/admin/*` with an **admin-scoped API key** (option (a)), reusing the same key store and middleware as the client `/v1/*` surface rather than a separate token or loopback listener. The admin CLI clients send the key via flag or `ATLAS_API_KEY`. G12 grows an admin-auth case. Until phase 5 lands, the surface stays unauthenticated and M1's threat model assumes the server port is reachable only by trusted operators and workers.

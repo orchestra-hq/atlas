@@ -108,3 +108,63 @@ func TestG12_ClientAuthContract(t *testing.T) {
 		t.Errorf("post-revoke: status = %d, want 401 (immediate revocation)", got)
 	}
 }
+
+// G12 admin-auth case (phase 5b): the /admin/* surface requires an admin-scoped
+// key. This wires the production RequireAdmin middleware to the real keyAuth
+// adapter — the same composition cli/server.go uses for the control routes.
+func TestG12_AdminAuthContract(t *testing.T) {
+	ctx := context.Background()
+	store, err := openStateDB(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	adminKey, _, err := store.CreateKey(ctx, nil, true) // admin scope
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientKey, _, err := store.CreateKey(ctx, nil, false) // no admin scope
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reached := false
+	handler := server.RequireAdmin(keyAuth{db: store}, func(w http.ResponseWriter, _ *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	get := func(key string) int {
+		req, err := http.NewRequest(http.MethodGet, srv.URL+"/admin/workers", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if key != "" {
+			req.Header.Set("x-api-key", key)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode
+	}
+
+	if got := get(""); got != http.StatusUnauthorized {
+		t.Errorf("no key: status = %d, want 401", got)
+	}
+	if got := get(clientKey); got != http.StatusForbidden {
+		t.Errorf("non-admin key: status = %d, want 403", got)
+	}
+	reached = false
+	if got := get(adminKey); got != http.StatusOK {
+		t.Errorf("admin key: status = %d, want 200", got)
+	}
+	if !reached {
+		t.Error("admin key did not reach the wrapped handler")
+	}
+}

@@ -109,7 +109,8 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 	// Request logs (per-request token counts — G10) go to stderr alongside the
 	// banner on stdout.
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	gw := server.NewGateway(keyAuth{db: store}, nil, aliases)
+	authn := keyAuth{db: store}
+	gw := server.NewGateway(authn, nil, aliases)
 	gw.SetLogger(logger)
 	hub := server.NewHub(opts.token, gw)
 	// The scheduler places catalog models onto workers on demand and reconciles
@@ -125,12 +126,15 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 	go sched.Run(ctx)
 
 	mux := http.NewServeMux()
+	// Worker join is authenticated by the join --token, not an API key.
 	mux.HandleFunc("GET /workers/connect", hub.HandleConnect)
-	mux.HandleFunc("GET /admin/workers", hub.HandleListWorkers)
-	mux.HandleFunc("POST /admin/workers/{id}/drain", hub.HandleRemoveWorker)
-	mux.HandleFunc("POST /admin/deployments", sched.HandleSetDeployment)
-	mux.HandleFunc("GET /admin/deployments", sched.HandleListDeployments)
-	mux.HandleFunc("DELETE /admin/deployments/{model}", sched.HandleStopDeployment)
+	// The /admin/* control surface requires an admin-scoped API key (ADR-0008,
+	// phase 5b): the same key store as the client gateway, gated by scope.
+	mux.HandleFunc("GET /admin/workers", server.RequireAdmin(authn, hub.HandleListWorkers))
+	mux.HandleFunc("POST /admin/workers/{id}/drain", server.RequireAdmin(authn, hub.HandleRemoveWorker))
+	mux.HandleFunc("POST /admin/deployments", server.RequireAdmin(authn, sched.HandleSetDeployment))
+	mux.HandleFunc("GET /admin/deployments", server.RequireAdmin(authn, sched.HandleListDeployments))
+	mux.HandleFunc("DELETE /admin/deployments/{model}", server.RequireAdmin(authn, sched.HandleStopDeployment))
 	// Gateway routes (/v1/*, /healthz, /readyz) handled by the gateway's mux
 	// as a catch-all; hub routes registered above take precedence.
 	mux.Handle("/", gw.Handler())

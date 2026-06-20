@@ -230,6 +230,40 @@ func TestAllowlistMatchesAliasTarget(t *testing.T) {
 	}
 }
 
+// RequireAdmin admits only a valid admin-scoped key: 401 without one, 403 for a
+// valid non-admin key, and passes through to the handler for an admin key.
+func TestRequireAdmin(t *testing.T) {
+	admin := allowlistAuth(Identity{KeyID: "a", Admin: true})
+
+	do := func(auth Authenticator, key string) int {
+		s := httptest.NewServer(RequireAdmin(auth, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+		defer s.Close()
+		req, _ := http.NewRequest(http.MethodGet, s.URL, nil)
+		if key != "" {
+			req.Header.Set("x-api-key", key)
+		}
+		resp, err := s.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if got := do(admin, ""); got != http.StatusUnauthorized {
+		t.Errorf("no key: %d, want 401", got)
+	}
+	if got := do(allowlistAuth(Identity{KeyID: "c", Admin: false}), testKey); got != http.StatusForbidden {
+		t.Errorf("non-admin key: %d, want 403", got)
+	}
+	if got := do(admin, testKey); got != http.StatusOK {
+		t.Errorf("admin key: %d, want 200", got)
+	}
+	if got := do(errAuth{}, testKey); got != http.StatusInternalServerError {
+		t.Errorf("backend error: %d, want 500", got)
+	}
+}
+
 func TestBearerAuthAccepted(t *testing.T) {
 	srv := newTestServer(&echoExecutor{reply: "x"})
 	defer srv.Close()

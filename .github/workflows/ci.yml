@@ -223,9 +223,11 @@ jobs:
           path: ${{ env.ATLAS_STATE_DIR }}/runtimes
           key: llamacpp-runtime-${{ runner.os }}-${{ runner.arch }}-b9611
       # API keys replaced the shared --api-key secret in phase 5 (ADR-0008): mint
-      # a key into the state-dir store that the server (gateway) reads.
+      # a key into the state-dir store the server reads. This fleet job drives the
+      # admin surface (atlas deploy/stop, /admin/deployments), so the key is
+      # admin-scoped (phase 5b) — admin keys also pass the client /v1 surface.
       - name: Provision API key
-        run: echo "ATLAS_API_KEY=$(./atlas keys create --state-dir "$ATLAS_STATE_DIR" --quiet)" >> "$GITHUB_ENV"
+        run: echo "ATLAS_API_KEY=$(./atlas keys create --state-dir "$ATLAS_STATE_DIR" --admin --quiet)" >> "$GITHUB_ENV"
       - name: Start Atlas server + worker
         run: |
           # Control plane: gateway + hub, no local engine. Tier aliases resolve
@@ -489,8 +491,8 @@ jobs:
           if [ "$CODE" != "200" ]; then
             echo "::error::model did not auto-start on first request (got $CODE)"; cat as-worker.log; exit 1
           fi
-          # It now shows up as a scheduler-owned deployment.
-          echo "deployments: $(curl -sS "$API/admin/deployments")"
+          # It now shows up as a scheduler-owned deployment (/admin/* needs the key).
+          echo "deployments: $(curl -sS -H "x-api-key: $ATLAS_API_KEY" "$API/admin/deployments")"
           echo "Auto-start scenario passed."
       - name: Stop Atlas
         if: always()

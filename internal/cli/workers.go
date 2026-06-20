@@ -24,7 +24,7 @@ func newWorkersCmd() *cobra.Command {
 }
 
 func newWorkersListCmd() *cobra.Command {
-	var serverURL string
+	var serverURL, apiKey string
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List workers connected to the server",
@@ -36,15 +36,16 @@ func newWorkersListCmd() *cobra.Command {
 			if serverURL == "" {
 				return fmt.Errorf("--server is required (or set ATLAS_SERVER_URL)")
 			}
-			return runWorkersList(cmd, serverURL)
+			return runWorkersList(cmd, serverURL, resolveAdminKey(apiKey))
 		},
 	}
 	cmd.Flags().StringVar(&serverURL, "server", "", "server HTTP URL, e.g. http://server:9090; also ATLAS_SERVER_URL")
+	adminKeyFlag(cmd, &apiKey)
 	return cmd
 }
 
 func newWorkersRemoveCmd() *cobra.Command {
-	var serverURL string
+	var serverURL, apiKey string
 	cmd := &cobra.Command{
 		Use:   "remove <worker-id>",
 		Short: "Gracefully drain and disconnect a worker",
@@ -58,24 +59,29 @@ func newWorkersRemoveCmd() *cobra.Command {
 			if serverURL == "" {
 				return fmt.Errorf("--server is required (or set ATLAS_SERVER_URL)")
 			}
-			return runWorkersRemove(cmd, serverURL, args[0])
+			return runWorkersRemove(cmd, serverURL, resolveAdminKey(apiKey), args[0])
 		},
 	}
 	cmd.Flags().StringVar(&serverURL, "server", "", "server HTTP URL, e.g. http://server:9090; also ATLAS_SERVER_URL")
+	adminKeyFlag(cmd, &apiKey)
 	return cmd
 }
 
-func runWorkersRemove(cmd *cobra.Command, serverURL, id string) error {
+func runWorkersRemove(cmd *cobra.Command, serverURL, apiKey, id string) error {
 	url := serverURL + "/admin/workers/" + id + "/drain"
 	req, err := http.NewRequestWithContext(cmd.Context(), http.MethodPost, url, nil)
 	if err != nil {
 		return err
 	}
+	setAdminAuth(req, apiKey)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("reach server: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if err := adminStatusError(resp); err != nil {
+		return err
+	}
 	switch resp.StatusCode {
 	case http.StatusAccepted:
 		cmd.Printf("Worker %s draining; it will disconnect once in-flight requests finish.\n", id)
@@ -99,12 +105,20 @@ type workersListResponse struct {
 	} `json:"workers"`
 }
 
-func runWorkersList(cmd *cobra.Command, serverURL string) error {
-	resp, err := http.Get(serverURL + "/admin/workers") //nolint:noctx
+func runWorkersList(cmd *cobra.Command, serverURL, apiKey string) error {
+	req, err := http.NewRequestWithContext(cmd.Context(), http.MethodGet, serverURL+"/admin/workers", nil)
+	if err != nil {
+		return err
+	}
+	setAdminAuth(req, apiKey)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("reach server: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if err := adminStatusError(resp); err != nil {
+		return err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("server returned %s", resp.Status)
 	}

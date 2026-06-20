@@ -23,8 +23,42 @@ func resolveServerURL(serverURL string) (string, error) {
 	return serverURL, nil
 }
 
+// resolveAdminKey returns the admin API key from the flag, falling back to
+// ATLAS_API_KEY. The /admin/* surface requires an admin-scoped key (ADR-0008);
+// an empty key is left as-is so the request returns a clear 401.
+func resolveAdminKey(apiKey string) string {
+	if apiKey == "" {
+		apiKey = os.Getenv("ATLAS_API_KEY")
+	}
+	return apiKey
+}
+
+// setAdminAuth attaches the admin API key to a control-plane request.
+func setAdminAuth(req *http.Request, apiKey string) {
+	if apiKey != "" {
+		req.Header.Set("x-api-key", apiKey)
+	}
+}
+
+// adminStatusError maps an admin auth rejection to a clear, actionable error,
+// or nil when the status is not an auth failure.
+func adminStatusError(resp *http.Response) error {
+	switch resp.StatusCode {
+	case http.StatusUnauthorized:
+		return fmt.Errorf("unauthorized: an admin API key is required (pass --api-key or set ATLAS_API_KEY)")
+	case http.StatusForbidden:
+		return fmt.Errorf("forbidden: this API key lacks the admin scope (mint one with `atlas keys create --admin`)")
+	}
+	return nil
+}
+
+// adminKeyFlag registers the shared --api-key flag for an admin command.
+func adminKeyFlag(cmd *cobra.Command, apiKey *string) {
+	cmd.Flags().StringVar(apiKey, "api-key", "", "admin API key to authenticate to the server; also ATLAS_API_KEY")
+}
+
 func newDeployCmd() *cobra.Command {
-	var serverURL string
+	var serverURL, apiKey string
 	var replicas int
 	var worker string
 	cmd := &cobra.Command{
@@ -39,17 +73,18 @@ func newDeployCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runDeploy(cmd, url, args[0], replicas, worker)
+			return runDeploy(cmd, url, resolveAdminKey(apiKey), args[0], replicas, worker)
 		},
 	}
 	cmd.Flags().StringVar(&serverURL, "server", "", "server HTTP URL, e.g. http://server:9090; also ATLAS_SERVER_URL")
 	cmd.Flags().IntVar(&replicas, "replicas", 1, "number of replicas to run across the fleet")
 	cmd.Flags().StringVar(&worker, "worker", "", "pin a replica to a specific worker id (else the scheduler best-fits)")
+	adminKeyFlag(cmd, &apiKey)
 	return cmd
 }
 
 func newScaleCmd() *cobra.Command {
-	var serverURL string
+	var serverURL, apiKey string
 	var replicas int
 	cmd := &cobra.Command{
 		Use:   "scale <model> --replicas N",
@@ -63,16 +98,17 @@ func newScaleCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runScale(cmd, url, args[0], replicas)
+			return runScale(cmd, url, resolveAdminKey(apiKey), args[0], replicas)
 		},
 	}
 	cmd.Flags().StringVar(&serverURL, "server", "", "server HTTP URL, e.g. http://server:9090; also ATLAS_SERVER_URL")
 	cmd.Flags().IntVar(&replicas, "replicas", 0, "desired replica count")
+	adminKeyFlag(cmd, &apiKey)
 	return cmd
 }
 
 func newStopCmd() *cobra.Command {
-	var serverURL string
+	var serverURL, apiKey string
 	cmd := &cobra.Command{
 		Use:   "stop <model>",
 		Short: "Stop a deployment and unload it from the fleet",
@@ -82,15 +118,16 @@ func newStopCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runStop(cmd, url, args[0])
+			return runStop(cmd, url, resolveAdminKey(apiKey), args[0])
 		},
 	}
 	cmd.Flags().StringVar(&serverURL, "server", "", "server HTTP URL, e.g. http://server:9090; also ATLAS_SERVER_URL")
+	adminKeyFlag(cmd, &apiKey)
 	return cmd
 }
 
 func newDeploymentsCmd() *cobra.Command {
-	var serverURL string
+	var serverURL, apiKey string
 	cmd := &cobra.Command{
 		Use:   "deployments",
 		Short: "List model deployments and their placement state",
@@ -100,58 +137,67 @@ func newDeploymentsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runDeployments(cmd, url)
+			return runDeployments(cmd, url, resolveAdminKey(apiKey))
 		},
 	}
 	cmd.Flags().StringVar(&serverURL, "server", "", "server HTTP URL, e.g. http://server:9090; also ATLAS_SERVER_URL")
+	adminKeyFlag(cmd, &apiKey)
 	return cmd
 }
 
 // postDeployment is the shared body for deploy and scale (POST /admin/deployments).
-func postDeployment(cmd *cobra.Command, serverURL, model string, replicas int, worker string) error {
+func postDeployment(cmd *cobra.Command, serverURL, apiKey, model string, replicas int, worker string) error {
 	body, _ := json.Marshal(map[string]any{"model": model, "replicas": replicas, "worker": worker})
 	req, err := http.NewRequestWithContext(cmd.Context(), http.MethodPost, serverURL+"/admin/deployments", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	setAdminAuth(req, apiKey)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("reach server: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if err := adminStatusError(resp); err != nil {
+		return err
+	}
 	if resp.StatusCode != http.StatusAccepted {
 		return fmt.Errorf("server returned %s: %s", resp.Status, readError(resp))
 	}
 	return nil
 }
 
-func runDeploy(cmd *cobra.Command, serverURL, model string, replicas int, worker string) error {
-	if err := postDeployment(cmd, serverURL, model, replicas, worker); err != nil {
+func runDeploy(cmd *cobra.Command, serverURL, apiKey, model string, replicas int, worker string) error {
+	if err := postDeployment(cmd, serverURL, apiKey, model, replicas, worker); err != nil {
 		return err
 	}
 	cmd.Printf("Deploying %q (%d replica(s)); it becomes routable once a worker reports ready.\n", model, replicas)
 	return nil
 }
 
-func runScale(cmd *cobra.Command, serverURL, model string, replicas int) error {
-	if err := postDeployment(cmd, serverURL, model, replicas, ""); err != nil {
+func runScale(cmd *cobra.Command, serverURL, apiKey, model string, replicas int) error {
+	if err := postDeployment(cmd, serverURL, apiKey, model, replicas, ""); err != nil {
 		return err
 	}
 	cmd.Printf("Scaled %q to %d replica(s).\n", model, replicas)
 	return nil
 }
 
-func runStop(cmd *cobra.Command, serverURL, model string) error {
+func runStop(cmd *cobra.Command, serverURL, apiKey, model string) error {
 	req, err := http.NewRequestWithContext(cmd.Context(), http.MethodDelete, serverURL+"/admin/deployments/"+model, nil)
 	if err != nil {
 		return err
 	}
+	setAdminAuth(req, apiKey)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("reach server: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if err := adminStatusError(resp); err != nil {
+		return err
+	}
 	switch resp.StatusCode {
 	case http.StatusNoContent:
 		cmd.Printf("Stopped %q; unloading from the fleet.\n", model)
@@ -172,16 +218,20 @@ type deploymentsResponse struct {
 	} `json:"deployments"`
 }
 
-func runDeployments(cmd *cobra.Command, serverURL string) error {
+func runDeployments(cmd *cobra.Command, serverURL, apiKey string) error {
 	req, err := http.NewRequestWithContext(cmd.Context(), http.MethodGet, serverURL+"/admin/deployments", nil)
 	if err != nil {
 		return err
 	}
+	setAdminAuth(req, apiKey)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("reach server: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if err := adminStatusError(resp); err != nil {
+		return err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("server returned %s", resp.Status)
 	}
