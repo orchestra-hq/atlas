@@ -72,6 +72,16 @@ func TestGenerateSelfSignedAndPin(t *testing.T) {
 	if !hasLoopback {
 		t.Error("cert does not include the 127.0.0.1 loopback SAN")
 	}
+
+	// The cert is a leaf server certificate, not a CA: pinning trusts its exact
+	// bytes, so it must not carry CA/cert-signing privilege that would let the
+	// on-disk key sign other certificates if it leaked.
+	if leaf.IsCA {
+		t.Error("self-signed leaf is marked IsCA; a served leaf must not be a CA")
+	}
+	if leaf.KeyUsage&x509.KeyUsageCertSign != 0 {
+		t.Error("self-signed leaf has KeyUsageCertSign; a served leaf must not sign certificates")
+	}
 }
 
 func TestPinnedVerifier(t *testing.T) {

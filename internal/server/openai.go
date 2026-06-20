@@ -53,7 +53,8 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if err := g.assertContextFits(r.Context(), model, coreReq); err != nil {
+	promptTokens, err := g.assertContextFits(r.Context(), model, coreReq)
+	if err != nil {
 		writeOpenAIErr(w, err)
 		return
 	}
@@ -67,7 +68,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	requested := coreReq.Model
 	coreReq.Model = model.Name
 
-	tags := usageTags{keyID: id.KeyID, workerID: worker}
+	tags := usageTags{keyID: id.KeyID, workerID: worker, model: model.Name, inputTokens: promptTokens}
 
 	if req.Stream {
 		includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
@@ -82,7 +83,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	resp, _ = core.ApplyStopSequences(resp, stops)
-	recordBillableUsage(r.Context(), tags, requested, resp.Usage.InputTokens, resp.Usage.OutputTokens)
+	recordBillableUsage(r.Context(), tags, resp.Usage.InputTokens, resp.Usage.OutputTokens)
 	openai.WriteJSON(w, http.StatusOK, openai.FromCore(newCompletionID(), time.Now().Unix(), requested, resp))
 }
 
@@ -94,7 +95,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 // event, not an HTTP error.
 // req is the request to dispatch (its Model is the canonical served name);
 // echoModel is the name the client addressed (possibly an alias), echoed back on
-// the stream and in usage.
+// the stream. Usage is recorded under the canonical model name (tags.model).
 func (g *Gateway) streamChatCompletion(w http.ResponseWriter, r *http.Request, exec Executor, req core.Request, echoModel string, stops []string, includeUsage bool, tags usageTags) {
 	sw, err := openai.NewStreamWriter(w, newCompletionID(), time.Now().Unix(), echoModel)
 	if err != nil {
@@ -117,13 +118,13 @@ func (g *Gateway) streamChatCompletion(w http.ResponseWriter, r *http.Request, e
 		// than zero, matching the Anthropic path (G13 interrupted case). A stream
 		// that produced nothing records nothing.
 		if out := sink.partialOutputTokens(); out > 0 {
-			recordBillableUsage(r.Context(), tags, echoModel, sink.usage.InputTokens, out)
+			recordBillableUsage(r.Context(), tags, partialInputTokens(sink.usage.InputTokens, tags), out)
 		}
 		_ = sw.Error(openai.ErrAPI, "engine error during generation")
 		return
 	}
 
-	recordBillableUsage(r.Context(), tags, echoModel, sink.usage.InputTokens, sink.usage.OutputTokens)
+	recordBillableUsage(r.Context(), tags, sink.usage.InputTokens, sink.usage.OutputTokens)
 	_ = sw.Finish(sink.reason, sink.usage, includeUsage)
 }
 

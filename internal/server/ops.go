@@ -64,10 +64,12 @@ func recordUsage(ctx context.Context, model string, in, out int) {
 // tokens, calling key, and serving worker, and marks the request billable so the
 // logging middleware writes a ledger row. Called on the success path and, with
 // the partial count, on the interrupted-stream path (the review finding behind
-// G13's interrupted case).
-func recordBillableUsage(ctx context.Context, tags usageTags, model string, in, out int) {
+// G13's interrupted case). The model recorded is the canonical served name from
+// tags (not the alias a client may have addressed), so per-model ledger totals
+// group by the real model — see internal/db.UsageRecord.
+func recordBillableUsage(ctx context.Context, tags usageTags, in, out int) {
 	if rec, ok := ctx.Value(reqLogKey{}).(*reqLog); ok {
-		rec.model = model
+		rec.model = tags.model
 		rec.inputTokens = in
 		rec.outputTokens = out
 		rec.keyID = tags.keyID
@@ -76,13 +78,18 @@ func recordBillableUsage(ctx context.Context, tags usageTags, model string, in, 
 	}
 }
 
-// usageTags identify who and what a billable request is charged to: the calling
-// API key and the worker that served it. Threaded from the handler (which knows
-// the key from auth and the worker from route resolution) into the streaming and
-// non-streaming record calls.
+// usageTags identify who and what a billable request is charged to. Threaded
+// from the handler (which knows the key from auth, and the canonical model and
+// serving worker from route resolution) into the streaming and non-streaming
+// record calls. model is the canonical served name (not the client's alias).
+// inputTokens is the prompt token count computed before dispatch (assertContextFits),
+// used to attribute input usage on an interrupted stream, where the engine never
+// reports its own count.
 type usageTags struct {
-	keyID    string
-	workerID string
+	keyID       string
+	workerID    string
+	model       string
+	inputTokens int
 }
 
 // withRequestLog wraps the API mux to emit exactly one structured line per

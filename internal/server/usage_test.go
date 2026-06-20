@@ -33,19 +33,19 @@ func (u *recordingUsage) snapshot() []UsageRecord {
 	return append([]UsageRecord(nil), u.records...)
 }
 
-// waitForRecords polls until the recorder holds n records or the deadline
-// passes. The ledger write happens in the logging middleware after the handler
-// returns, so a test that reads the response may briefly race it.
-func (u *recordingUsage) waitForRecords(t *testing.T, n int) []UsageRecord {
+// waitForRecord polls until the recorder holds at least one record or the
+// deadline passes. The ledger write happens in the logging middleware after the
+// handler returns, so a test that reads the response may briefly race it.
+func (u *recordingUsage) waitForRecord(t *testing.T) []UsageRecord {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		got := u.snapshot()
-		if len(got) >= n {
+		if len(got) >= 1 {
 			return got
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("usage records = %d after timeout, want %d", len(got), n)
+			t.Fatal("no usage records after timeout, want at least 1")
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -71,7 +71,7 @@ func TestUsageRecordedOnSuccess(t *testing.T) {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
 
-	got := rec.waitForRecords(t, 1)
+	got := rec.waitForRecord(t)
 	r := got[0]
 	if r.KeyID != "test" || r.Model != testModel || r.WorkerID != localWorkerID {
 		t.Errorf("record identity = %+v, want key=test model=%s worker=%s", r, testModel, localWorkerID)
@@ -91,7 +91,7 @@ func TestUsageRecordedOnStream(t *testing.T) {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
 
-	got := rec.waitForRecords(t, 1)
+	got := rec.waitForRecord(t)
 	// streamExecutor.Done reports usage {4, len(deltas)=3}.
 	if got[0].InputTokens != 4 || got[0].OutputTokens != 3 {
 		t.Errorf("stream record tokens = (%d,%d), want (4,3)", got[0].InputTokens, got[0].OutputTokens)
@@ -148,7 +148,7 @@ func TestInterruptedStreamRecordsPartialUsage(t *testing.T) {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
 
-	got := rec.waitForRecords(t, 1)
+	got := rec.waitForRecord(t)
 	if got[0].OutputTokens <= 0 {
 		t.Errorf("interrupted stream recorded %d output tokens, want > 0 (the bytes emitted before the cut)", got[0].OutputTokens)
 	}
@@ -169,6 +169,75 @@ func (i *interruptingStreamer) ExecuteStream(_ context.Context, _ core.Request, 
 		}
 	}
 	return errors.New("worker dropped mid-stream")
+}
+
+// TestInterruptedStreamRecordsInputTokens covers the input half of the G13
+// interrupted case: the engine reports usage only on a clean completion, so an
+// interrupted stream must attribute input from the prompt count taken before
+// dispatch rather than recording zero input.
+func TestInterruptedStreamRecordsInputTokens(t *testing.T) {
+	srv, rec := meteredServer(t, &countingInterruptingStreamer{deltas: []string{"hello ", "world "}, prompt: 13})
+
+	resp, _ := streamPost(t, srv, `{"model":"test-model","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+
+	got := rec.waitForRecord(t)
+	if got[0].InputTokens != 13 {
+		t.Errorf("interrupted stream recorded %d input tokens, want 13 (the pre-dispatch prompt count, since the engine never reported usage)", got[0].InputTokens)
+	}
+	if got[0].OutputTokens <= 0 {
+		t.Errorf("interrupted stream recorded %d output tokens, want > 0", got[0].OutputTokens)
+	}
+}
+
+// countingInterruptingStreamer fails before Done (so the engine never reports
+// usage) and counts prompt tokens — modeling a real engine on the interrupted
+// path, where input usage must come from the pre-dispatch count.
+type countingInterruptingStreamer struct {
+	deltas []string
+	prompt int
+}
+
+func (s *countingInterruptingStreamer) Execute(context.Context, core.Request) (core.Response, error) {
+	return core.Response{}, errors.New("not used")
+}
+
+func (s *countingInterruptingStreamer) ExecuteStream(_ context.Context, _ core.Request, sink core.StreamSink) error {
+	for _, d := range s.deltas {
+		if err := sink.Text(d); err != nil {
+			return err
+		}
+	}
+	return errors.New("worker dropped mid-stream")
+}
+
+func (s *countingInterruptingStreamer) CountTokens(context.Context, core.Request) (int, error) {
+	return s.prompt, nil
+}
+
+// TestUsageRecordsCanonicalModelName asserts the ledger records the canonical
+// served model, not the alias a client addressed, so per-model totals group by
+// the real model (internal/db.UsageRecord's documented invariant).
+func TestUsageRecordsCanonicalModelName(t *testing.T) {
+	rec := &recordingUsage{}
+	g := NewGateway(staticAuth(testKey),
+		[]Model{{Name: testModel, Exec: &echoExecutor{reply: "hi", outToken: 4}, ContextWindow: 4096}},
+		map[string]string{"my-alias": testModel})
+	g.SetUsageRecorder(rec)
+	srv := httptest.NewServer(g.Handler())
+	t.Cleanup(srv.Close)
+
+	resp, _ := post(t, srv, testKey, `{"model":"my-alias","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+
+	got := rec.waitForRecord(t)
+	if got[0].Model != testModel {
+		t.Errorf("usage recorded model %q, want canonical %q (not the alias the client addressed)", got[0].Model, testModel)
+	}
 }
 
 func TestEstimateTokens(t *testing.T) {
