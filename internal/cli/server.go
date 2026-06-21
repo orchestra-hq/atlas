@@ -189,14 +189,13 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 	cmd.Printf("Workers join with:\n")
 	cmd.Printf("  atlas worker --join %s://<this-host>:%s/workers/connect --token %s%s\n", wsScheme, port, opts.token, pinFlag)
 	cmd.Printf("\nThen place a model on the fleet:\n")
-	cmd.Printf("  atlas deploy <model> --server %s://<this-host>:%s\n", httpScheme, port)
+	adminPinFlag := ""
 	if tlsRes.pin != "" {
-		// The admin CLI (deploy/scale/stop/workers) validates TLS against the system
-		// trust store and has no pin flag yet, so a self-signed / privately-issued
-		// cert must be trusted out of band until admin-side pinning lands (M1
-		// follow-up, see docs/m1-build-plan.md).
-		cmd.Printf("  (admin commands need this certificate trusted by the OS; pinning for the admin CLI is not yet wired)\n")
+		// The admin CLI pins the self-signed cert the same way a worker does, so a
+		// private/self-signed deployment needs no OS trust-store install (M2 phase 1).
+		adminPinFlag = " --tls-pin " + tlsRes.pin
 	}
+	cmd.Printf("  atlas deploy <model> --server %s://<this-host>:%s%s\n", httpScheme, port, adminPinFlag)
 	cmd.Printf("\nPoint a client at it:\n")
 	cmd.Printf("  ANTHROPIC_BASE_URL=%s://<this-host>:%s ANTHROPIC_API_KEY=%s\n", httpScheme, port, keyForHint)
 	cmd.Println("\nPress Ctrl-C to stop.")

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"text/tabwriter"
 	"time"
 
@@ -24,28 +23,25 @@ func newWorkersCmd() *cobra.Command {
 }
 
 func newWorkersListCmd() *cobra.Command {
-	var serverURL, apiKey string
+	var serverURL, apiKey, tlsPin string
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List workers connected to the server",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if serverURL == "" {
-				serverURL = os.Getenv("ATLAS_SERVER_URL")
+			client, err := newAdminClient(serverURL, apiKey, tlsPin)
+			if err != nil {
+				return err
 			}
-			if serverURL == "" {
-				return fmt.Errorf("--server is required (or set ATLAS_SERVER_URL)")
-			}
-			return runWorkersList(cmd, serverURL, resolveAdminKey(apiKey))
+			return runWorkersList(cmd, client)
 		},
 	}
-	cmd.Flags().StringVar(&serverURL, "server", "", "server HTTP URL, e.g. http://server:9090; also ATLAS_SERVER_URL")
-	adminKeyFlag(cmd, &apiKey)
+	adminFlags(cmd, &serverURL, &apiKey, &tlsPin)
 	return cmd
 }
 
 func newWorkersRemoveCmd() *cobra.Command {
-	var serverURL, apiKey string
+	var serverURL, apiKey, tlsPin string
 	cmd := &cobra.Command{
 		Use:   "remove <worker-id>",
 		Short: "Gracefully drain and disconnect a worker",
@@ -53,30 +49,21 @@ func newWorkersRemoveCmd() *cobra.Command {
 			"requests to it, its in-flight requests finish, then it disconnects.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if serverURL == "" {
-				serverURL = os.Getenv("ATLAS_SERVER_URL")
+			client, err := newAdminClient(serverURL, apiKey, tlsPin)
+			if err != nil {
+				return err
 			}
-			if serverURL == "" {
-				return fmt.Errorf("--server is required (or set ATLAS_SERVER_URL)")
-			}
-			return runWorkersRemove(cmd, serverURL, resolveAdminKey(apiKey), args[0])
+			return runWorkersRemove(cmd, client, args[0])
 		},
 	}
-	cmd.Flags().StringVar(&serverURL, "server", "", "server HTTP URL, e.g. http://server:9090; also ATLAS_SERVER_URL")
-	adminKeyFlag(cmd, &apiKey)
+	adminFlags(cmd, &serverURL, &apiKey, &tlsPin)
 	return cmd
 }
 
-func runWorkersRemove(cmd *cobra.Command, serverURL, apiKey, id string) error {
-	url := serverURL + "/admin/workers/" + id + "/drain"
-	req, err := http.NewRequestWithContext(cmd.Context(), http.MethodPost, url, nil)
+func runWorkersRemove(cmd *cobra.Command, client *adminClient, id string) error {
+	resp, err := client.do(cmd.Context(), http.MethodPost, "/admin/workers/"+id+"/drain", nil)
 	if err != nil {
 		return err
-	}
-	setAdminAuth(req, apiKey)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("reach server: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if err := adminStatusError(resp); err != nil {
@@ -105,15 +92,10 @@ type workersListResponse struct {
 	} `json:"workers"`
 }
 
-func runWorkersList(cmd *cobra.Command, serverURL, apiKey string) error {
-	req, err := http.NewRequestWithContext(cmd.Context(), http.MethodGet, serverURL+"/admin/workers", nil)
+func runWorkersList(cmd *cobra.Command, client *adminClient) error {
+	resp, err := client.do(cmd.Context(), http.MethodGet, "/admin/workers", nil)
 	if err != nil {
 		return err
-	}
-	setAdminAuth(req, apiKey)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("reach server: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if err := adminStatusError(resp); err != nil {

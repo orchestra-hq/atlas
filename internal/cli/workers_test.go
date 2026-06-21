@@ -24,7 +24,11 @@ func TestWorkersListShowsStatus(t *testing.T) {
 	cmd.SetContext(context.Background())
 	var out bytes.Buffer
 	cmd.SetOut(&out)
-	if err := runWorkersList(cmd, srv.URL, ""); err != nil {
+	client, err := newAdminClient(srv.URL, "", "")
+	if err != nil {
+		t.Fatalf("newAdminClient: %v", err)
+	}
+	if err := runWorkersList(cmd, client); err != nil {
 		t.Fatalf("runWorkersList: %v", err)
 	}
 	got := out.String()
@@ -47,7 +51,11 @@ func TestWorkersRemoveSuccess(t *testing.T) {
 	cmd.SetContext(context.Background())
 	var out bytes.Buffer
 	cmd.SetOut(&out)
-	if err := runWorkersRemove(cmd, srv.URL, "", "w_xyz"); err != nil {
+	client, err := newAdminClient(srv.URL, "", "")
+	if err != nil {
+		t.Fatalf("newAdminClient: %v", err)
+	}
+	if err := runWorkersRemove(cmd, client, "w_xyz"); err != nil {
 		t.Fatalf("runWorkersRemove: %v", err)
 	}
 	if gotPath != "POST /admin/workers/w_xyz/drain" {
@@ -66,7 +74,11 @@ func TestWorkersRemoveNotFound(t *testing.T) {
 
 	cmd := testCmd()
 	cmd.SetContext(context.Background())
-	err := runWorkersRemove(cmd, srv.URL, "", "w_missing")
+	client, err := newAdminClient(srv.URL, "", "")
+	if err != nil {
+		t.Fatalf("newAdminClient: %v", err)
+	}
+	err = runWorkersRemove(cmd, client, "w_missing")
 	if err == nil {
 		t.Fatal("expected error removing an unknown worker")
 	}
