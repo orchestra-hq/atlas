@@ -33,6 +33,7 @@ Teams building on LLMs increasingly want control over where the model runs and w
 | [examples/acceptance/](examples/acceptance/README.md)                                                      | GPU acceptance run that flips M0 to done (M0.5) + AWS setup      |
 | [docs/m0-build-plan.md](docs/m0-build-plan.md)                                                             | M0 phased build order, repo layout, and build-time decisions     |
 | [docs/m1-build-plan.md](docs/m1-build-plan.md)                                                             | M1 phased build order (fleet: worker channel, scheduler, auth)   |
+| [docs/m2-build-plan.md](docs/m2-build-plan.md)                                                             | M2 phased build order (operate: metrics, backpressure, engines)  |
 | [docs/positioning.md](docs/positioning.md)                                                                 | Marketing differentiators and the proof each one requires        |
 | [docs/decisions/](docs/decisions/)                                                                         | Architecture decision records (ADRs)                             |
 | [docs/open-questions.md](docs/open-questions.md)                                                           | Unresolved decisions that need an owner call                     |

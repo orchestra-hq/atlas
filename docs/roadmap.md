@@ -44,32 +44,50 @@ SkyPilot is fenced to one CI workflow + one optional `examples/` recipe; the Atl
 - TLS for the server endpoint (ACME for public VPS, self-signed for private)
 - Cloud-fleet behaviors: non-interactive join (`ATLAS_SERVER_URL` + `ATLAS_JOIN_TOKEN`), graceful drain on SIGTERM, heartbeat-timeout removal ([deployment requirements](deployment-aws.md#product-requirements-this-topology-imposes))
 
-## M2 — Platform: "Private LLM service your team actually operates"
+## M2 — Operate: "Run a real fleet from the terminal"
 
-- Web console (workers, models, instances, keys, usage)
-- Replicas + load balancing across instances; basic queueing/backpressure with sane 429/529 behavior
-- SGLang + MLX adapters; engine version pinning/upgrade flow
-- Catalog expansion + published agent-capability test results per model
-- Packaging: compose file, systemd units, (k8s manifests as packaging only) — Docker images themselves land in M0.5
-- Reference IaC under `examples/` — AWS Terraform first (~100-line bar, see [deployment-aws.md](deployment-aws.md)); `s3://` model sources
-- Observability: Prometheus metrics endpoint, structured logs
+**Demo:** SSH to the gateway box and `atlas top` to watch the fleet live; push concurrent load past capacity and watch requests queue then shed with clean 429/529 instead of timing out; add an Apple-Silicon worker running MLX. Build order: [m2-build-plan.md](m2-build-plan.md).
+
+- Observability: Prometheus `/metrics` endpoint + structured logs
+- CLI inspection tool — `atlas status` (snapshot) + `atlas top` (live view), run over SSH on the gateway; the web console's stand-in (the console itself is its own later milestone, [M6](#m6--web-console))
+- Load balancing across replicas (least-in-flight) + bounded queueing/backpressure with retryable 429/529 ([ADR-0010](decisions/0010-load-balancing-and-backpressure.md))
+- MLX (Apple Silicon) then SGLang (NVIDIA) engine adapters; engine version pinning/upgrade flow
+- Catalog expansion + published agent-capability matrix per model; apply the catalog's recorded-but-unused per-model sampling + reasoning config
+
+Web console and packaging/IaC, which earlier drafts had in M2, are split out to their own milestones ([M6](#m6--web-console), [M5](#m5--packaging--deployment)): operating from the CLI defers the GUI, and packaging is a large independent body of ops work.
 
 ## M3 — Ecosystem & differentiation deepeners (pick by traction)
 
 - Embeddings + reranker model classes as first-class citizens
 - Prefix/session-affinity routing (agent conversations stick to a warm worker — SGLang synergy)
 - Cloud-fallback passthrough (route overflow to a real provider key, clearly labeled)
-- HA control plane; audit log; SSO for console
+- HA control plane; audit log
 - Hosted control plane offering (the open-core conversation — separate decision)
 
 ## M4 — Deliverability: "the frictionless install"
 
-**Demo:** a newcomer runs `brew install atlas` (or `curl get.atlas.dev | sh`) and is serving a model in one command. The deliberate last step: the polished, owned-channel public install — held until the project is worth installing that frictionlessly, and until the owner is ready to take on the domain + tap-repo upkeep these imply. Until then the binary is installed from GitHub Releases / the container image (M0.5, [ADR-0006](decisions/0006-packaging-and-deployment.md)).
+**Demo:** a newcomer runs `brew install atlas` (or `curl get.atlas.dev | sh`) and is serving a model in one command. The polished, owned-channel public install — held until the project is worth installing that frictionlessly, and until the owner is ready to take on the domain + tap-repo upkeep these imply. Until then the binary is installed from GitHub Releases / the container image (M0.5, [ADR-0006](decisions/0006-packaging-and-deployment.md)).
 
 - **One-line installer** at an owned domain (`get.atlas.dev | sh`): detects OS/arch, fetches the pinned signed release, verifies checksums, drops `atlas` on `PATH`. (Needs a domain the owner controls.)
 - **Homebrew tap** (`orchestra-hq/homebrew-tap`, GoReleaser-published formula). (Needs a separate tap repo.)
 - Install/upgrade UX polish: `atlas --version` self-update hint, scriptable non-interactive install, checksum/signature verification documented.
 - Optional Linux packaging (`.deb`/`.rpm`, GoReleaser nfpm) if there's demand.
+
+## M5 — Packaging & deployment
+
+A large, independent body of ops work, deliberately kept out of M2 so the runtime milestone stays focused. The Docker images themselves already ship in M0.5 ([ADR-0006](decisions/0006-packaging-and-deployment.md)); this milestone is the deploy-recipe and packaging surface on top of them, plus the docs that make a team deployment turnkey.
+
+- Packaging: compose file, systemd units, k8s manifests (packaging only — no first-party operator/CRDs, per [ADR-0006](decisions/0006-packaging-and-deployment.md))
+- Reference IaC under `examples/` — AWS Terraform first (~100-line bar, see [deployment-aws.md](deployment-aws.md)); `s3://` model sources
+- Deployment & operations docs: production topology, TLS/ACME on a real public deployment (resolves the remaining transport-security follow-ups in [follow-ups.md](follow-ups.md): self-signed cert host-change handling, ACME `:443` reconciliation)
+
+## M6 — Web console
+
+The graphical operate surface, held until the very end: M2's `atlas status`/`atlas top` CLI covers "see what the fleet is doing" from the terminal, so the console is a convenience layer, not a prerequisite. The SPA-vs-separate-service architecture decision is made when this milestone starts (it needs its own ADR then).
+
+- Web console (workers, models, instances, keys, usage) served by `atlas server`, gated by the existing admin-scoped API key
+- Read-only dashboards first (consuming M2's `/metrics` + admin read APIs), then write actions (deploy/scale/stop, key management) through the existing admin endpoints
+- SSO for the console (moved here from M3, since it presupposes the console exists)
 
 ## Standing tracks (every milestone)
 
