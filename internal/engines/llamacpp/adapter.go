@@ -23,8 +23,10 @@ type Adapter struct {
 // New builds an adapter targeting a llama-server at baseURL (e.g.
 // http://127.0.0.1:8080). model is the name echoed in the OpenAI payload;
 // llama-server serves whatever weights it was launched with regardless.
-func New(baseURL, model string, client *http.Client) *Adapter {
-	return &Adapter{Client: openaichat.NewClient("llamacpp", baseURL, model, client)}
+// reasoning is the model's catalog reasoning capability, which gates the
+// thinking kwarg (M2 phase 4b).
+func New(baseURL, model string, reasoning bool, client *http.Client) *Adapter {
+	return &Adapter{Client: openaichat.NewClient("llamacpp", baseURL, model, reasoning, client)}
 }
 
 // applyTemplateRequest asks llama-server to render the chat template for the
@@ -68,7 +70,7 @@ func (a *Adapter) CountTokens(ctx context.Context, req core.Request) (int, error
 	if err := a.PostJSON(ctx, "/apply-template", applyTemplateRequest{
 		Messages:           openaichat.Messages(req),
 		Tools:              openaichat.Tools(req.Tools),
-		ChatTemplateKwargs: openaichat.ThinkingKwargs(req),
+		ChatTemplateKwargs: a.ThinkingKwargs(req),
 	}, &rendered); err != nil {
 		return 0, err
 	}

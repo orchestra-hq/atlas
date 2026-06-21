@@ -48,8 +48,16 @@ func sseServer(t *testing.T, body string, capture *Request) *httptest.Server {
 
 func temp(f float64) *float64 { return &f }
 
+// client is a reasoning-capable client (the default for the thinking tests): the
+// enable_thinking kwarg is emitted, gated by request intent.
 func client(srv *httptest.Server) *Client {
-	return NewClient("test", srv.URL, "served-model", srv.Client())
+	return NewClient("test", srv.URL, "served-model", true, srv.Client())
+}
+
+// nonReasoningClient models a non-reasoning catalog model, which omits the
+// thinking kwarg entirely (M2 phase 4b).
+func nonReasoningClient(srv *httptest.Server) *Client {
+	return NewClient("test", srv.URL, "served-model", false, srv.Client())
 }
 
 func TestExecuteTranslatesAndMaps(t *testing.T) {
@@ -266,6 +274,30 @@ func TestExecuteDropsReasoningWhenThinkingOff(t *testing.T) {
 	}
 	if got.ChatTemplateKwargs["enable_thinking"] != false {
 		t.Errorf("enable_thinking = %v, want false", got.ChatTemplateKwargs["enable_thinking"])
+	}
+}
+
+// TestNonReasoningModelOmitsThinkingKwarg: a non-reasoning catalog model never
+// sends enable_thinking — the kwarg is absent from chat_template_kwargs (and the
+// map is nil/empty), even when the client requests thinking (M2 phase 4b).
+func TestNonReasoningModelOmitsThinkingKwarg(t *testing.T) {
+	var got Request
+	srv := fakeServer(t, http.StatusOK, `{
+		"choices":[{"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}],
+		"usage":{"prompt_tokens":1,"completion_tokens":1}
+	}`, &got)
+	defer srv.Close()
+
+	if _, err := nonReasoningClient(srv).Execute(context.Background(), core.Request{
+		Model:     "m",
+		MaxTokens: 64,
+		Thinking:  &core.ThinkingConfig{Enabled: true}, // client asks, but the model can't reason
+		Messages:  []core.Message{{Role: core.RoleUser, Blocks: []core.ContentBlock{core.TextBlock("q")}}},
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if _, present := got.ChatTemplateKwargs["enable_thinking"]; present {
+		t.Errorf("enable_thinking present for a non-reasoning model: %v", got.ChatTemplateKwargs)
 	}
 }
 

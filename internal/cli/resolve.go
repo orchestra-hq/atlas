@@ -23,6 +23,9 @@ type resolvedModel struct {
 	// sampling carries the catalog entry's sampling defaults (M2 phase 4a); the
 	// zero value (both nil) for a raw path/spec means "no defaults".
 	sampling catalog.Sampling
+	// reasoning is the catalog entry's reasoning capability (M2 phase 4b); false
+	// for a raw path/spec, which gates the thinking kwarg off.
+	reasoning bool
 }
 
 // resolveModel turns one --model value into a worker plan. A catalog name
@@ -59,6 +62,7 @@ func resolveModel(ctx context.Context, cmd *cobra.Command, engine worker.Engine,
 			engineArgs: entry.EngineArgs,
 			ctxHint:    entry.ContextWindow,
 			sampling:   entry.Sampling,
+			reasoning:  entry.Reasoning,
 		}, nil
 	case "hf":
 		// The engine resolves the repo from its own cache at boot; the store does
@@ -78,6 +82,7 @@ func resolveModel(ctx context.Context, cmd *cobra.Command, engine worker.Engine,
 			engineArgs: extra,
 			ctxHint:    entry.ContextWindow,
 			sampling:   entry.Sampling,
+			reasoning:  entry.Reasoning,
 		}, nil
 	default:
 		return resolvedModel{}, fmt.Errorf("model %q: unsupported source type %q", entry.Name, entry.Source.Type)

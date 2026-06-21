@@ -25,8 +25,8 @@ type Adapter struct {
 // http://127.0.0.1:8000). model is the name echoed in the OpenAI payload and
 // addressed on vLLM's per-model endpoints; vLLM serves whatever weights it was
 // launched with.
-func New(baseURL, model string, client *http.Client) *Adapter {
-	return &Adapter{Client: openaichat.NewClient("vllm", baseURL, model, client)}
+func New(baseURL, model string, reasoning bool, client *http.Client) *Adapter {
+	return &Adapter{Client: openaichat.NewClient("vllm", baseURL, model, reasoning, client)}
 }
 
 // tokenizeRequest is vLLM's POST /tokenize body in chat form: it applies the
@@ -66,7 +66,7 @@ func (a *Adapter) CountTokens(ctx context.Context, req core.Request) (int, error
 		Model:               a.Model(),
 		Messages:            openaichat.Messages(req),
 		Tools:               openaichat.Tools(req.Tools),
-		ChatTemplateKwargs:  openaichat.ThinkingKwargs(req),
+		ChatTemplateKwargs:  a.ThinkingKwargs(req),
 		AddGenerationPrompt: true,
 	}, &tok); err != nil {
 		return 0, err

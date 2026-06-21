@@ -38,7 +38,7 @@ func TestCountTokensViaProbe(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := New(srv.URL, "mlx-community/Some-Model-4bit", 8192, srv.Client())
+	a := New(srv.URL, "mlx-community/Some-Model-4bit", 8192, true, srv.Client())
 	n, err := a.CountTokens(context.Background(), core.Request{
 		Model:     "logical-name", // ignored: the adapter echoes the loaded repo id
 		System:    "be terse",
@@ -74,7 +74,7 @@ func TestContextWindowFromCatalog(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := New(srv.URL, "repo", 16384, srv.Client())
+	a := New(srv.URL, "repo", 16384, true, srv.Client())
 	n, err := a.ContextWindow(context.Background())
 	if err != nil {
 		t.Fatalf("ContextWindow: %v", err)
@@ -85,7 +85,7 @@ func TestContextWindowFromCatalog(t *testing.T) {
 }
 
 func TestContextWindowUnknownIsZero(t *testing.T) {
-	a := New("http://127.0.0.1:0", "repo", 0, http.DefaultClient)
+	a := New("http://127.0.0.1:0", "repo", 0, true, http.DefaultClient)
 	n, err := a.ContextWindow(context.Background())
 	if err != nil {
 		t.Fatalf("ContextWindow: %v", err)

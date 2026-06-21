@@ -28,10 +28,11 @@ type Adapter struct {
 // has no --served-model-name and loads exactly the id a request names, so the
 // caller passes the model's Hugging Face repo id, not Atlas's logical name.
 // contextWindow is the catalog's window for the model (0 = unknown, assertion
-// skipped).
-func New(baseURL, model string, contextWindow int, client *http.Client) *Adapter {
+// skipped). reasoning is the model's catalog reasoning capability, which gates
+// the thinking kwarg (M2 phase 4b).
+func New(baseURL, model string, contextWindow int, reasoning bool, client *http.Client) *Adapter {
 	return &Adapter{
-		Client:        openaichat.NewClient("mlx", baseURL, model, client),
+		Client:        openaichat.NewClient("mlx", baseURL, model, reasoning, client),
 		contextWindow: contextWindow,
 	}
 }

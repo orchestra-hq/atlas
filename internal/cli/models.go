@@ -92,6 +92,7 @@ func (r *engineRuntime) start(ctx context.Context, spec string) (startedModel, e
 		ContextWindow: rm.ctxHint,              // engines that cannot self-report (MLX) answer from this
 		Temperature:   rm.sampling.Temperature, // catalog sampling defaults (M2 phase 4a)
 		TopP:          rm.sampling.TopP,
+		Reasoning:     rm.reasoning, // gates the thinking kwarg (M2 phase 4b)
 		LogPath:       filepath.Join(r.stateDir, logFileName(r.engine, rm.served)),
 	})
 	if err != nil {

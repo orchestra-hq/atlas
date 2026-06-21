@@ -49,7 +49,7 @@ func TestCountTokens(t *testing.T) {
 	srv := tokenizeServer(t, "rendered prompt", 7, 0, &apply)
 	defer srv.Close()
 
-	a := New(srv.URL, "m", srv.Client())
+	a := New(srv.URL, "m", true, srv.Client())
 	n, err := a.CountTokens(context.Background(), core.Request{
 		Model:    "m",
 		System:   "be terse",
@@ -83,7 +83,7 @@ func TestContextWindow(t *testing.T) {
 	srv := tokenizeServer(t, "", 0, 32768, nil)
 	defer srv.Close()
 
-	a := New(srv.URL, "m", srv.Client())
+	a := New(srv.URL, "m", true, srv.Client())
 	n, err := a.ContextWindow(context.Background())
 	if err != nil {
 		t.Fatalf("ContextWindow: %v", err)
@@ -100,7 +100,7 @@ func TestCountTokensEngineErrorIsUnavailable(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := New(srv.URL, "m", srv.Client())
+	a := New(srv.URL, "m", true, srv.Client())
 	_, err := a.CountTokens(context.Background(), core.Request{
 		Model:    "m",
 		Messages: []core.Message{{Role: core.RoleUser, Blocks: []core.ContentBlock{core.TextBlock("hi")}}},
