@@ -21,9 +21,9 @@ import (
 //
 // The same registry backs the JSON snapshot `atlas status` renders (Snapshot),
 // so the CLI inspection tool and a Prometheus scrape report identical numbers —
-// one data path, two presentations (build plan decision 2). Queue-depth and shed
-// counters arrive with the backpressure work in phase 2, where they are populated
-// and tested alongside the logic that moves them.
+// one data path, two presentations (build plan decision 2). The admission
+// queue-depth gauge and shed counters (M2 phase 2b) are fed by the backpressure
+// layer (admission.go) alongside the logic that moves them.
 //
 // All methods are safe on a nil *Metrics (metering disabled), so the gateway can
 // call them unconditionally.
@@ -35,6 +35,8 @@ type Metrics struct {
 	inputTokens     *prometheus.CounterVec   // by model, worker
 	outputTokens    *prometheus.CounterVec   // by model, worker
 	inFlight        prometheus.Gauge
+	queueDepth      *prometheus.GaugeVec   // by model — admission queue (M2 phase 2b)
+	shed            *prometheus.CounterVec // by model, code (429/529) — backpressure sheds
 
 	// workerSource yields the current connected-worker count for the GaugeFunc.
 	// Stored as an atomic so the hub-backed source can be wired after construction
@@ -51,6 +53,8 @@ const (
 	metricOutputTokens    = "atlas_output_tokens_total"
 	metricInFlight        = "atlas_requests_in_flight"
 	metricWorkers         = "atlas_connected_workers"
+	metricQueueDepth      = "atlas_queue_depth"
+	metricShed            = "atlas_shed_total"
 )
 
 // NewMetrics builds the collectors and registers them on a private registry.
@@ -78,6 +82,14 @@ func NewMetrics() *Metrics {
 			Name: metricInFlight,
 			Help: "API requests currently being served.",
 		}),
+		queueDepth: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: metricQueueDepth,
+			Help: "Requests currently waiting in a model's admission queue.",
+		}, []string{"model"}),
+		shed: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: metricShed,
+			Help: "Total requests shed by backpressure, by model and HTTP status code (429/529).",
+		}, []string{"model", "code"}),
 	}
 	workers := prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Name: metricWorkers,
@@ -88,7 +100,7 @@ func NewMetrics() *Metrics {
 		}
 		return 0
 	})
-	m.reg.MustRegister(m.requests, m.requestDuration, m.inputTokens, m.outputTokens, m.inFlight, workers)
+	m.reg.MustRegister(m.requests, m.requestDuration, m.inputTokens, m.outputTokens, m.inFlight, m.queueDepth, m.shed, workers)
 	return m
 }
 
@@ -130,6 +142,21 @@ func (m *Metrics) addTokens(model, worker string, in, out int) {
 	}
 }
 
+// setQueueDepth records a model's current admission-queue depth (M2 phase 2b).
+func (m *Metrics) setQueueDepth(model string, depth int) {
+	if m != nil {
+		m.queueDepth.WithLabelValues(model).Set(float64(depth))
+	}
+}
+
+// incShed counts one backpressure shed for a model under an HTTP status code
+// ("429" momentarily full, "529" overloaded).
+func (m *Metrics) incShed(model, code string) {
+	if m != nil {
+		m.shed.WithLabelValues(model, code).Inc()
+	}
+}
+
 func (m *Metrics) incInFlight() {
 	if m != nil {
 		m.inFlight.Inc()
@@ -151,6 +178,8 @@ type MetricsSnapshot struct {
 	InFlight     int64 `json:"in_flight"`
 	InputTokens  int64 `json:"input_tokens"`
 	OutputTokens int64 `json:"output_tokens"`
+	QueueDepth   int64 `json:"queue_depth"`
+	Shed         int64 `json:"shed"`
 }
 
 // Snapshot summarizes the registry for the status endpoint. It gathers the live
@@ -184,6 +213,12 @@ func (m *Metrics) Snapshot() MetricsSnapshot {
 			snap.InputTokens += sumCounters(fam.GetMetric())
 		case metricOutputTokens:
 			snap.OutputTokens += sumCounters(fam.GetMetric())
+		case metricQueueDepth:
+			for _, mc := range fam.GetMetric() {
+				snap.QueueDepth += int64(mc.GetGauge().GetValue())
+			}
+		case metricShed:
+			snap.Shed += sumCounters(fam.GetMetric())
 		}
 	}
 	return snap

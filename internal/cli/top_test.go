@@ -20,7 +20,7 @@ func TestRenderTopRates(t *testing.T) {
 		Metrics: server.MetricsSnapshot{Requests: 0, Errors: 0, InputTokens: 0, OutputTokens: 0},
 	}}
 	second := &topSample{at: t0.Add(2 * time.Second), status: server.FleetStatus{
-		Metrics: server.MetricsSnapshot{Requests: 10, Errors: 2, InFlight: 1, InputTokens: 100, OutputTokens: 50},
+		Metrics: server.MetricsSnapshot{Requests: 10, Errors: 2, InFlight: 1, InputTokens: 100, OutputTokens: 50, QueueDepth: 3, Shed: 7},
 	}}
 
 	var firstFrame bytes.Buffer
@@ -33,7 +33,7 @@ func TestRenderTopRates(t *testing.T) {
 	renderTop(&nextFrame, second, first)
 	got := nextFrame.String()
 	// 10 requests over 2s = 5.0/s; 100 input tokens = 50/s; 50 output = 25/s; 2 errors = 1.0/s.
-	for _, want := range []string{"5.0/s", "50/s", "25/s", "1.0/s", "1 in flight"} {
+	for _, want := range []string{"5.0/s", "50/s", "25/s", "1.0/s", "1 in flight", "3 queued", "7 shed"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("next frame missing %q:\n%s", want, got)
 		}

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 )
 
 // ErrorType is the Anthropic error-envelope vocabulary. Status codes pair
@@ -20,15 +21,20 @@ const (
 	ErrAuthentication ErrorType = "authentication_error"
 	ErrPermission     ErrorType = "permission_error"
 	ErrNotFound       ErrorType = "not_found_error"
+	ErrRateLimit      ErrorType = "rate_limit_error"
 	ErrAPI            ErrorType = "api_error"
 	ErrOverloaded     ErrorType = "overloaded_error"
 )
 
 // Error is a request failure that maps onto the Anthropic error envelope.
+// RetryAfter, when > 0, is emitted as a Retry-After header (seconds) — set on the
+// retryable 429 rate_limit_error and 529 overloaded_error so SDK backoff has a hint
+// (ADR-0010).
 type Error struct {
-	Status int
-	Type   ErrorType
-	Msg    string
+	Status     int
+	Type       ErrorType
+	Msg        string
+	RetryAfter int
 }
 
 func (e *Error) Error() string {
@@ -51,8 +57,12 @@ type errorBody struct {
 }
 
 // WriteError writes e as an Anthropic error envelope:
-// {"type":"error","error":{"type":...,"message":...}}.
+// {"type":"error","error":{"type":...,"message":...}}. A positive RetryAfter is
+// emitted as a Retry-After header (seconds) before the body is written.
 func WriteError(w http.ResponseWriter, e *Error) {
+	if e.RetryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(e.RetryAfter))
+	}
 	WriteJSON(w, e.Status, errorEnvelope{Type: "error", Error: errorBody{Type: e.Type, Message: e.Msg}})
 }
 

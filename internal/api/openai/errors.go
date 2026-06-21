@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 )
 
 // ErrorType is the OpenAI error-envelope "type" vocabulary. The OpenAI SDKs key
@@ -17,16 +18,20 @@ const (
 	ErrAuthentication ErrorType = "authentication_error"
 	ErrPermission     ErrorType = "permission_error"
 	ErrNotFound       ErrorType = "not_found_error"
+	ErrRateLimit      ErrorType = "rate_limit_error"
 	ErrAPI            ErrorType = "api_error"
 	ErrOverloaded     ErrorType = "overloaded_error"
 )
 
-// Error is a request failure that maps onto the OpenAI error envelope.
+// Error is a request failure that maps onto the OpenAI error envelope. RetryAfter,
+// when > 0, is emitted as a Retry-After header (seconds), mirroring the Anthropic
+// surface's retryable 429/529 (ADR-0010).
 type Error struct {
-	Status int
-	Type   ErrorType
-	Code   string
-	Msg    string
+	Status     int
+	Type       ErrorType
+	Code       string
+	Msg        string
+	RetryAfter int
 }
 
 func (e *Error) Error() string {
@@ -52,6 +57,9 @@ type errorBody struct {
 
 // WriteError writes e as an OpenAI error envelope.
 func WriteError(w http.ResponseWriter, e *Error) {
+	if e.RetryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(e.RetryAfter))
+	}
 	body := errorBody{Message: e.Msg, Type: e.Type}
 	if e.Code != "" {
 		body.Code = &e.Code

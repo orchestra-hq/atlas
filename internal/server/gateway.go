@@ -132,6 +132,7 @@ type Gateway struct {
 	autostart Autostarter   // deploys+waits on a request for an unrouted model (nil = off)
 	usage     UsageRecorder // durable per-request usage ledger (phase 6, G13; nil = off)
 	metrics   *Metrics      // Prometheus instrumentation (M2 phase 1; nil = off)
+	admission *Admission    // per-model load balancing + backpressure (M2 phase 2b; nil = off)
 
 	// mu guards the route table, which is static in single-node mode but changes
 	// as remote workers register and drop their models in fleet mode. route and
@@ -191,6 +192,18 @@ func (g *Gateway) SetUsageRecorder(u UsageRecorder) { g.usage = u }
 // but records no series — the behavior in tests and any opt-out deployment.
 func (g *Gateway) SetMetrics(m *Metrics) { g.metrics = m }
 
+// SetAdmission attaches the load-balancing + backpressure controller (M2 phase 2b,
+// ADR-0010), wiring it to the live replica count and the metrics sink. Call once at
+// startup, after SetMetrics; nil (the default) or a controller with PerReplica <= 0
+// leaves admission off, so every request is forwarded — M1's behavior.
+func (g *Gateway) SetAdmission(a *Admission) {
+	g.admission = a
+	if a != nil {
+		a.replicas = g.routeCount
+		a.metrics = g.metrics
+	}
+}
+
 // canonical maps an alias to its target model name (identity if not an alias),
 // so auto-start deploys the served model a client's alias points at.
 func (g *Gateway) canonical(name string) string {
@@ -202,18 +215,16 @@ func (g *Gateway) canonical(name string) string {
 	return name
 }
 
-// resolveIntent selects how route resolves a model name, folding the old
-// resolveOrStart-vs-resolve split into one explicit parameter so a new handler
-// cannot silently get auto-start or in-flight accounting wrong (the copy-paste
-// hazard the M2 phase-2 follow-up retired).
+// resolveIntent selects how pickLocked treats a model's replicas, so the inference
+// and read-only paths can share one selection routine without a new handler
+// silently getting in-flight accounting wrong (the copy-paste hazard the M2 phase-2
+// follow-up retired):
 //
-//   - forDispatch is the inference path: it auto-starts an unrouted catalog model
-//     and blocks until ready (M1 phase 4b-2), records activity (Touch), picks the
-//     least-in-flight replica (ADR-0010), and increments that instance's in-flight
-//     counter — returning a release the caller must invoke once the request
-//     completes to decrement it.
-//   - forMetadata is the read-only path (model listing, count_tokens): it never
-//     auto-starts and never touches the counters, returning a no-op release.
+//   - forDispatch (the inference path, via pick) selects the least-in-flight replica
+//     (ADR-0010) and increments that instance's in-flight counter, returning a
+//     release the caller invokes once the request completes.
+//   - forMetadata (the read-only path, via resolveMeta) returns any live replica
+//     without touching the counters, with a no-op release.
 type resolveIntent int
 
 const (
@@ -225,31 +236,84 @@ const (
 // failed resolve), so callers can defer it unconditionally.
 var noopRelease = func() {}
 
-// route resolves a requested model name (alias or canonical) to its Model, the
-// stable name of the worker chosen to serve it (for usage attribution), and a
-// release the caller invokes once the request completes. ok is false when the
-// model cannot be served (and release is the no-op). See resolveIntent for how the
-// two intents differ; the release decrements the chosen instance's in-flight
-// counter exactly once and is a no-op for forMetadata.
-func (g *Gateway) route(ctx context.Context, name string, intent resolveIntent) (Model, string, func(), bool) {
-	g.mu.RLock()
-	m, workerName, release, ok := g.pickLocked(name, intent)
-	g.mu.RUnlock()
-	if ok {
-		if intent == forDispatch && g.autostart != nil {
-			g.autostart.Touch(g.canonical(name))
+// dispatchPrep resolves, admits, and selects a replica for an inference request —
+// the single entry point for the dispatch surfaces (POST /v1/messages and the
+// OpenAI mirror). It (1) ensures the model is servable, auto-starting an unrouted
+// catalog model; (2) acquires an admission slot, blocking in the bounded queue and
+// shedding a retryable 429/529 beyond capacity (ADR-0010); (3) picks the
+// least-in-flight replica. On success it returns the model, the serving worker's
+// stable name, and a release that frees both the admission slot and the replica's
+// in-flight slot. On failure it returns the *anthropic.Error the caller should
+// render (404 unknown model, 429 momentarily full, 529 overloaded) and a nil
+// release.
+func (g *Gateway) dispatchPrep(ctx context.Context, name string) (Model, string, func(), *anthropic.Error) {
+	canon, ok := g.ensure(ctx, name)
+	if !ok {
+		return Model{}, "", nil, modelNotFoundErr(name)
+	}
+	admitRelease, apiErr := g.admission.Acquire(ctx, canon)
+	if apiErr != nil {
+		return Model{}, "", nil, apiErr
+	}
+	model, workerName, pickRelease, ok := g.pick(canon)
+	if !ok {
+		// The model was servable a moment ago but no replica is live now (it dropped
+		// between admission and selection): overloaded, retryable.
+		admitRelease()
+		return Model{}, "", nil, overloadedErr(g.admission.retryAfterSecs())
+	}
+	return model, workerName, func() { pickRelease(); admitRelease() }, nil
+}
+
+// ensure makes a model servable for an inference request: it resolves an alias to
+// the canonical served name and, if no replica is live, auto-starts one and blocks
+// until ready (M1 phase 4b-2). On a live model it records activity (Touch) so a
+// steadily used auto-started model stays warm. ok is false when the model cannot be
+// served (unknown, auto-start disabled, or the wait timed out). It selects no
+// replica and counts no in-flight — pick does that, after admission.
+func (g *Gateway) ensure(ctx context.Context, name string) (string, bool) {
+	canon := g.canonical(name)
+	if g.routeCount(canon) > 0 {
+		if g.autostart != nil {
+			g.autostart.Touch(canon)
 		}
-		return m, workerName, release, true
+		return canon, true
 	}
-	if intent != forDispatch || g.autostart == nil {
-		return Model{}, "", noopRelease, false
+	if g.autostart == nil {
+		return "", false
 	}
-	if !g.autostart.EnsureModel(ctx, g.canonical(name)) {
-		return Model{}, "", noopRelease, false
+	if !g.autostart.EnsureModel(ctx, canon) {
+		return "", false
 	}
+	return canon, true
+}
+
+// pick selects the least-in-flight live replica of a canonical model name,
+// increments that instance's in-flight counter, and returns a single-shot release
+// that decrements it. ok is false if no replica is live (e.g. the only one dropped
+// between admission and selection).
+func (g *Gateway) pick(canon string) (Model, string, func(), bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return g.pickLocked(name, intent)
+	return g.pickLocked(canon, forDispatch)
+}
+
+// resolveMeta resolves a model name (alias or canonical) for a read-only request
+// (model listing, count_tokens): any live replica answers, with no auto-start and
+// no in-flight accounting. ok is false when no replica is live.
+func (g *Gateway) resolveMeta(name string) (Model, bool) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	m, _, _, ok := g.pickLocked(name, forMetadata)
+	return m, ok
+}
+
+// routeCount is the live replica count for a canonical model name — the admission
+// controller's capacity input (capacity = per-replica concurrency × this).
+func (g *Gateway) routeCount(canon string) int {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return len(g.routes[canon])
 }
 
 // pickLocked selects a live instance of name (resolving an alias first), for a
@@ -483,14 +547,14 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	model, workerName, release, ok := g.route(r.Context(), coreReq.Model, forDispatch)
-	if !ok {
-		writeModelNotFound(w, coreReq.Model)
+	model, workerName, release, apiErr := g.dispatchPrep(r.Context(), coreReq.Model)
+	if apiErr != nil {
+		anthropic.WriteError(w, apiErr)
 		return
 	}
-	// Hold the instance's in-flight slot until the request completes — every return
-	// below runs this, so a failed assertion, an Execute error, and a finished
-	// stream all decrement the counter least-in-flight selection ranks on.
+	// Hold the admission slot and the instance's in-flight slot until the request
+	// completes — every return below runs this, so a failed assertion, an Execute
+	// error, and a finished stream all free both.
 	defer release()
 
 	// Assert the prompt fits the model's window before dispatch, so an oversized
@@ -607,7 +671,7 @@ func (g *Gateway) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	model, _, _, ok := g.route(r.Context(), coreReq.Model, forMetadata)
+	model, ok := g.resolveMeta(coreReq.Model)
 	if !ok {
 		writeModelNotFound(w, coreReq.Model)
 		return
@@ -666,7 +730,7 @@ func (g *Gateway) handleGetModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := r.PathValue("id")
-	if _, _, _, ok := g.route(r.Context(), id, forMetadata); !ok {
+	if _, ok := g.resolveMeta(id); !ok {
 		writeModelNotFound(w, id)
 		return
 	}
@@ -963,12 +1027,41 @@ func readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	return io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBytes))
 }
 
-func writeModelNotFound(w http.ResponseWriter, model string) {
-	anthropic.WriteError(w, &anthropic.Error{
+// modelNotFoundErr is the 404 for an unknown or undeployed model — distinct from
+// the retryable 429/529 a known-but-saturated model sheds (ADR-0010).
+func modelNotFoundErr(model string) *anthropic.Error {
+	return &anthropic.Error{
 		Status: http.StatusNotFound,
 		Type:   anthropic.ErrNotFound,
 		Msg:    "model not found: " + model,
-	})
+	}
+}
+
+func writeModelNotFound(w http.ResponseWriter, model string) {
+	anthropic.WriteError(w, modelNotFoundErr(model))
+}
+
+// rateLimitedErr is the retryable 429: the model has live capacity but is
+// momentarily full (admission queue full, or the max wait elapsed). retryAfter is
+// the advertised Retry-After in seconds.
+func rateLimitedErr(retryAfter int) *anthropic.Error {
+	return &anthropic.Error{
+		Status:     http.StatusTooManyRequests,
+		Type:       anthropic.ErrRateLimit,
+		Msg:        "the model is momentarily at capacity; retry shortly",
+		RetryAfter: retryAfter,
+	}
+}
+
+// overloadedErr is the retryable 529: no live replica can serve the model right now
+// (none placed, or the only one dropped under load).
+func overloadedErr(retryAfter int) *anthropic.Error {
+	return &anthropic.Error{
+		Status:     statusOverloaded,
+		Type:       anthropic.ErrOverloaded,
+		Msg:        "the model is overloaded; retry shortly",
+		RetryAfter: retryAfter,
+	}
 }
 
 // writeErr renders an error as its Anthropic envelope. An *anthropic.Error

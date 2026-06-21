@@ -34,6 +34,15 @@ type UsageRecorder interface {
 	Record(ctx context.Context, u UsageRecord) error
 }
 
+// BatchUsageRecorder is a UsageRecorder that can persist many records in one call —
+// the bulk path the async usage writer (M2 phase 2b) prefers, so a flush is one
+// multi-row transaction rather than N inserts. A recorder that does not implement
+// it falls back to per-record Record.
+type BatchUsageRecorder interface {
+	UsageRecorder
+	RecordBatch(ctx context.Context, us []UsageRecord) error
+}
+
 // reqLog accumulates the loggable facts of one request as its handler runs.
 // The handler fills model and usage via recordUsage (log only) or
 // recordBillableUsage (log + durable ledger) once they are known; the
