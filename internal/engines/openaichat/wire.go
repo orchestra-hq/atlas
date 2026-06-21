@@ -113,12 +113,13 @@ type StreamChunk struct {
 	} `json:"usage"`
 }
 
-// BuildRequest translates a core request into the OpenAI chat request to send
-// model. Stop sequences are intentionally not forwarded: the gateway owns that
-// semantics (see server.Gateway).
-func BuildRequest(model string, req core.Request, stream bool) Request {
+// buildRequest translates a core request into the OpenAI chat request the client
+// sends. Stop sequences are intentionally not forwarded: the gateway owns that
+// semantics (see server.Gateway). It is a method so the thinking kwarg can
+// consult the model's reasoning capability (M2 phase 4b).
+func (c *Client) buildRequest(req core.Request, stream bool) Request {
 	r := Request{
-		Model:              model,
+		Model:              c.model,
 		Messages:           Messages(req),
 		MaxTokens:          req.MaxTokens,
 		Temperature:        req.Temperature,
@@ -126,7 +127,7 @@ func BuildRequest(model string, req core.Request, stream bool) Request {
 		TopK:               req.TopK,
 		Tools:              Tools(req.Tools),
 		ToolChoice:         MapToolChoice(req.ToolChoice),
-		ChatTemplateKwargs: ThinkingKwargs(req),
+		ChatTemplateKwargs: c.ThinkingKwargs(req),
 		Stream:             stream,
 	}
 	if stream {
@@ -306,10 +307,17 @@ func EmitThinking(req core.Request) bool {
 
 // ThinkingKwargs maps the request's thinking setting onto the engine's chat
 // template via the enable_thinking kwarg — the convention hybrid-thinking
-// models (Qwen3, …) expose through --jinja templating. Atlas always sets it so
-// a hybrid model defaulting to thinking-on does not emit reasoning the client
-// never requested; on a non-reasoning model the unused kwarg is harmless.
-// budget_tokens is advisory (ADR-0005) and not forwarded.
-func ThinkingKwargs(req core.Request) map[string]any {
+// models (Qwen3, …) expose through --jinja templating. It is gated on the
+// model's catalog reasoning capability (M2 phase 4b): a reasoning model gets
+// enable_thinking set so a hybrid model defaulting to thinking-on does not emit
+// reasoning the client never requested; a non-reasoning model has no thinking
+// mode, so Atlas omits the kwarg entirely rather than injecting a template var
+// the model does not understand. budget_tokens is advisory (ADR-0005) and not
+// forwarded. It is exported so the per-engine adapters (llama.cpp, vLLM) can
+// render the identical template when counting tokens.
+func (c *Client) ThinkingKwargs(req core.Request) map[string]any {
+	if !c.reasoning {
+		return nil
+	}
 	return map[string]any{"enable_thinking": EmitThinking(req)}
 }

@@ -23,6 +23,12 @@ type Client struct {
 	baseURL string
 	model   string
 	http    *http.Client
+	// reasoning is the model's catalog reasoning capability (M2 phase 4b). It
+	// gates the enable_thinking chat-template kwarg: only a reasoning model gets
+	// it (a non-reasoning model has no thinking mode, so Atlas omits the kwarg
+	// rather than injecting a template var the model does not use). See
+	// ThinkingKwargs and ADR-0005.
+	reasoning bool
 }
 
 // maxResponseBytes caps a buffered engine response so a misconfigured or
@@ -51,12 +57,14 @@ func readCapped(name, label string, r io.Reader) ([]byte, error) {
 
 // NewClient builds a client for engine name targeting baseURL (e.g.
 // http://127.0.0.1:8000). model is the name echoed in the OpenAI payload; the
-// engine serves whatever weights it was launched with regardless.
-func NewClient(name, baseURL, model string, hc *http.Client) *Client {
+// engine serves whatever weights it was launched with regardless. reasoning is
+// the model's catalog reasoning capability, which gates the thinking kwarg (M2
+// phase 4b; see ThinkingKwargs).
+func NewClient(name, baseURL, model string, reasoning bool, hc *http.Client) *Client {
 	if hc == nil {
 		hc = http.DefaultClient
 	}
-	return &Client{name: name, baseURL: baseURL, model: model, http: hc}
+	return &Client{name: name, baseURL: baseURL, model: model, reasoning: reasoning, http: hc}
 }
 
 // Model returns the served model name the client echoes to the engine.
@@ -65,7 +73,7 @@ func (c *Client) Model() string { return c.model }
 // Execute translates req to OpenAI chat form, calls the engine, and maps the
 // result back to core.
 func (c *Client) Execute(ctx context.Context, req core.Request) (core.Response, error) {
-	body, err := json.Marshal(BuildRequest(c.model, req, false))
+	body, err := json.Marshal(c.buildRequest(req, false))
 	if err != nil {
 		return core.Response{}, fmt.Errorf("%s: encode request: %w", c.name, err)
 	}
@@ -105,7 +113,7 @@ func (c *Client) Execute(ctx context.Context, req core.Request) (core.Response, 
 // gateway's signal that a stop sequence matched), generation is abandoned and
 // ExecuteStream returns nil — the stream is finalized by the gateway, not here.
 func (c *Client) ExecuteStream(ctx context.Context, req core.Request, sink core.StreamSink) error {
-	body, err := json.Marshal(BuildRequest(c.model, req, true))
+	body, err := json.Marshal(c.buildRequest(req, true))
 	if err != nil {
 		return fmt.Errorf("%s: encode request: %w", c.name, err)
 	}

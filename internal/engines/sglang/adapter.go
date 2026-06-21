@@ -24,9 +24,11 @@ type Adapter struct {
 // New builds an adapter targeting an SGLang server at baseURL (e.g.
 // http://127.0.0.1:30000). model is the name echoed in the OpenAI payload and
 // reported by /v1/models; SGLang accepts --served-model-name, so it answers to
-// Atlas's logical name (like vLLM) and the adapter echoes that.
-func New(baseURL, model string, client *http.Client) *Adapter {
-	return &Adapter{Client: openaichat.NewClient("sglang", baseURL, model, client)}
+// Atlas's logical name (like vLLM) and the adapter echoes that. reasoning is the
+// model's catalog reasoning capability, which gates the thinking kwarg (M2 phase
+// 4b).
+func New(baseURL, model string, reasoning bool, client *http.Client) *Adapter {
+	return &Adapter{Client: openaichat.NewClient("sglang", baseURL, model, reasoning, client)}
 }
 
 // modelsResponse is the subset of GET /v1/models Atlas reads. SGLang reports each

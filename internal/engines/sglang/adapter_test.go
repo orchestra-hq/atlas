@@ -33,7 +33,7 @@ func TestCountTokensViaProbe(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := New(srv.URL, "served-model", srv.Client())
+	a := New(srv.URL, "served-model", true, srv.Client())
 	n, err := a.CountTokens(context.Background(), core.Request{
 		Model:     "served-model",
 		Messages:  []core.Message{{Role: core.RoleUser, Blocks: []core.ContentBlock{core.TextBlock("hi")}}},
@@ -62,7 +62,7 @@ func TestContextWindowMatchesServedModel(t *testing.T) {
 	]}`)
 	defer srv.Close()
 
-	a := New(srv.URL, "served-model", srv.Client())
+	a := New(srv.URL, "served-model", true, srv.Client())
 	n, err := a.ContextWindow(context.Background())
 	if err != nil {
 		t.Fatalf("ContextWindow: %v", err)
@@ -78,7 +78,7 @@ func TestContextWindowFallsBackToFirst(t *testing.T) {
 	]}`)
 	defer srv.Close()
 
-	a := New(srv.URL, "name-the-server-does-not-report", srv.Client())
+	a := New(srv.URL, "name-the-server-does-not-report", true, srv.Client())
 	n, err := a.ContextWindow(context.Background())
 	if err != nil {
 		t.Fatalf("ContextWindow: %v", err)
@@ -92,7 +92,7 @@ func TestContextWindowNoModels(t *testing.T) {
 	srv := modelsServer(t, `{"object":"list","data":[]}`)
 	defer srv.Close()
 
-	a := New(srv.URL, "m", srv.Client())
+	a := New(srv.URL, "m", true, srv.Client())
 	if _, err := a.ContextWindow(context.Background()); err == nil {
 		t.Fatal("expected error when /v1/models returns no models")
 	}

@@ -68,6 +68,11 @@ type Config struct {
 	// request value always wins.
 	Temperature *float64
 	TopP        *float64
+	// Reasoning is the model's catalog reasoning capability (M2 phase 4b). It
+	// gates the enable_thinking chat-template kwarg the adapter sends: only a
+	// reasoning model gets it. False (the default for a raw path/spec, or a
+	// non-reasoning entry) omits the kwarg. See openaichat.Client.ThinkingKwargs.
+	Reasoning bool
 	// Host/Port is where llama-server listens (loopback in single-node mode).
 	// A zero Port asks the OS for a free one.
 	Host string
@@ -178,7 +183,7 @@ func engineSetup(cfg Config) (args []string, adapter engineAdapter, err error) {
 		}
 		args = append(args, cfg.ModelArgs...)
 		args = append(args, cfg.ExtraArgs...)
-		return args, llamacpp.New(baseURL, cfg.Model, &http.Client{}), nil
+		return args, llamacpp.New(baseURL, cfg.Model, cfg.Reasoning, &http.Client{}), nil
 	case EngineVLLM:
 		// `vllm serve <model> --host H --port P [extra]`: the model is positional
 		// (ModelArgs), tool/reasoning parser flags come from ExtraArgs.
@@ -186,7 +191,7 @@ func engineSetup(cfg Config) (args []string, adapter engineAdapter, err error) {
 		args = append(args, cfg.ModelArgs...)
 		args = append(args, "--host", cfg.Host, "--port", port)
 		args = append(args, cfg.ExtraArgs...)
-		return args, vllm.New(baseURL, cfg.Model, &http.Client{}), nil
+		return args, vllm.New(baseURL, cfg.Model, cfg.Reasoning, &http.Client{}), nil
 	case EngineMLX:
 		// `<python> -m mlx_lm.server --model <repo> --host H --port P [extra]`:
 		// BinPath is the venv python (mlx-lm ships the server as a module). The model
@@ -202,7 +207,7 @@ func engineSetup(cfg Config) (args []string, adapter engineAdapter, err error) {
 		args = append(args, cfg.ModelArgs...)
 		args = append(args, "--host", cfg.Host, "--port", port)
 		args = append(args, cfg.ExtraArgs...)
-		return args, mlx.New(baseURL, engineModel, cfg.ContextWindow, &http.Client{}), nil
+		return args, mlx.New(baseURL, engineModel, cfg.ContextWindow, cfg.Reasoning, &http.Client{}), nil
 	case EngineSGLang:
 		// `<python> -m sglang.launch_server --model-path <repo> --host H --port P
 		// [extra]`: BinPath is the venv python (sglang ships the server as a module).
@@ -212,7 +217,7 @@ func engineSetup(cfg Config) (args []string, adapter engineAdapter, err error) {
 		args = append(args, cfg.ModelArgs...)
 		args = append(args, "--host", cfg.Host, "--port", port)
 		args = append(args, cfg.ExtraArgs...)
-		return args, sglang.New(baseURL, cfg.Model, &http.Client{}), nil
+		return args, sglang.New(baseURL, cfg.Model, cfg.Reasoning, &http.Client{}), nil
 	default:
 		return nil, nil, fmt.Errorf("worker: unknown engine %q", cfg.Engine)
 	}
