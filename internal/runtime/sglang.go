@@ -2,8 +2,6 @@ package runtime
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"path/filepath"
 )
 
@@ -28,31 +26,11 @@ const sglangPython = "3.12"
 // so this path runs on NVIDIA-GPU hosts (like vLLM); the unit tests exercise the
 // orchestration with a fake runner rather than installing sglang.
 func (p *Provisioner) EnsureSGLang(ctx context.Context, goos, goarch string) (string, error) {
-	dest := filepath.Join(p.Dir, "sglang", SGLangVersion)
-	venv := filepath.Join(dest, "venv")
-	binPath := filepath.Join(venv, "bin", "python")
-	if _, err := os.Stat(binPath); err == nil {
-		return binPath, nil
-	}
-
-	uv, err := p.EnsureUv(ctx, goos, goarch)
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return "", fmt.Errorf("runtime: create sglang dir: %w", err)
-	}
-
-	// Create the venv, then install pinned sglang into it. uv resolves and caches
-	// wheels in the state dir; no host Python is touched.
-	if err := p.runCmd(ctx, uv, "venv", venv, "--python", sglangPython); err != nil {
-		return "", err
-	}
-	if err := p.runCmd(ctx, uv, "pip", "install", "--python", venv, "sglang[all]=="+SGLangVersion); err != nil {
-		return "", err
-	}
-	if _, err := os.Stat(binPath); err != nil {
-		return "", fmt.Errorf("runtime: sglang venv python missing after install (expected %s)", binPath)
-	}
-	return binPath, nil
+	return p.ensureVenv(ctx, goos, goarch, venvRuntime{
+		engine:     "sglang",
+		version:    SGLangVersion,
+		python:     sglangPython,
+		pkg:        "sglang[all]==" + SGLangVersion,
+		entrypoint: filepath.Join("venv", "bin", "python"),
+	})
 }

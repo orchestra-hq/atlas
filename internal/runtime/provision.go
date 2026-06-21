@@ -126,6 +126,131 @@ func (p *Provisioner) installRelease(ctx context.Context, base, tag string, a as
 	return nil
 }
 
+// venvRuntime describes a uv-managed engine venv to provision: the engine's
+// subdirectory under the runtime root, its pinned version, the interpreter uv
+// creates the venv with, the pip spec to install, and the entrypoint path within
+// the version directory whose presence means "fully provisioned".
+type venvRuntime struct {
+	engine     string
+	version    string
+	python     string
+	pkg        string
+	entrypoint string // relative to <Dir>/<engine>/<version>, e.g. venv/bin/vllm
+}
+
+// ensureVenv provisions a uv-managed engine venv atomically and returns its
+// entrypoint path. If the version is already fully provisioned it returns
+// immediately. Otherwise it creates a **relocatable** venv in a staging directory,
+// installs the pinned package, and swaps the staging directory into
+// <Dir>/<engine>/<version> with a single os.Rename — so an interrupted install
+// (a crash mid-`pip install`) never leaves a partial venv that the entrypoint
+// check would wrongly trust. The venv is created with `--relocatable` so console
+// scripts keep working after the swap moves the tree (M2 phase 3c). Stale staging
+// directories from a previously killed run are swept first.
+func (p *Provisioner) ensureVenv(ctx context.Context, goos, goarch string, r venvRuntime) (string, error) {
+	dest := filepath.Join(p.Dir, r.engine, r.version)
+	binPath := filepath.Join(dest, r.entrypoint)
+	if _, err := os.Stat(binPath); err == nil {
+		return binPath, nil
+	}
+
+	uv, err := p.EnsureUv(ctx, goos, goarch)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(p.Dir, 0o755); err != nil {
+		return "", fmt.Errorf("runtime: create dir: %w", err)
+	}
+	p.sweepStaging(r.engine)
+
+	staging, err := os.MkdirTemp(p.Dir, r.engine+stagePrefix)
+	if err != nil {
+		return "", fmt.Errorf("runtime: staging dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(staging) }() // no-op after a successful rename
+
+	venv := filepath.Join(staging, "venv")
+	if err := p.runCmd(ctx, uv, "venv", venv, "--python", r.python, "--relocatable"); err != nil {
+		return "", err
+	}
+	if err := p.runCmd(ctx, uv, "pip", "install", "--python", venv, r.pkg); err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(filepath.Join(staging, r.entrypoint)); err != nil {
+		return "", fmt.Errorf("runtime: %s entrypoint missing after install (expected %s)", r.engine, r.entrypoint)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return "", fmt.Errorf("runtime: create dest parent: %w", err)
+	}
+	_ = os.RemoveAll(dest) // replace any partial leftover at the final path
+	if err := os.Rename(staging, dest); err != nil {
+		return "", fmt.Errorf("runtime: install %s runtime: %w", r.engine, err)
+	}
+	return binPath, nil
+}
+
+// stagePrefix tags a venv staging directory so a sweep can recognize leftovers
+// from a killed run. The trailing dash separates it from the random suffix.
+const stagePrefix = "-stage-"
+
+// sweepStaging removes any leftover staging directories for an engine — debris a
+// hard-killed provision (no defer ran) would otherwise accumulate. Best-effort.
+func (p *Provisioner) sweepStaging(engine string) {
+	entries, err := os.ReadDir(p.Dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), engine+stagePrefix) {
+			_ = os.RemoveAll(filepath.Join(p.Dir, e.Name()))
+		}
+	}
+}
+
+// ProvisionedVersions lists the version subdirectories present for an engine under
+// the runtime root (the directories Ensure* create), newest-first-undefined order.
+// Returns nil with no error when the engine has nothing provisioned. Staging
+// leftovers are excluded.
+func (p *Provisioner) ProvisionedVersions(engine string) ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(p.Dir, engine))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("runtime: list %s versions: %w", engine, err)
+	}
+	var versions []string
+	for _, e := range entries {
+		if e.IsDir() {
+			versions = append(versions, e.Name())
+		}
+	}
+	return versions, nil
+}
+
+// Prune removes every provisioned version of an engine except keep, returning the
+// versions removed. It is how `atlas runtime upgrade --prune` reclaims disk after a
+// version bump leaves the superseded runtime behind. A missing engine dir is a
+// no-op.
+func (p *Provisioner) Prune(engine, keep string) ([]string, error) {
+	versions, err := p.ProvisionedVersions(engine)
+	if err != nil {
+		return nil, err
+	}
+	var removed []string
+	for _, v := range versions {
+		if v == keep {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(p.Dir, engine, v)); err != nil {
+			return removed, fmt.Errorf("runtime: prune %s %s: %w", engine, v, err)
+		}
+		removed = append(removed, v)
+	}
+	return removed, nil
+}
+
 // extractTarGz unpacks a gzipped tar into dest, flattening the archive's single
 // top-level directory so binaries and their shared libraries land directly in
 // dest (so a binary finds its dylibs/.so via rpath).

@@ -128,47 +128,18 @@ func TestEnsureVLLMIdempotent(t *testing.T) {
 
 func TestEnsureVLLMProvisions(t *testing.T) {
 	dir := t.TempDir()
-	// Pre-seed the uv binary so EnsureUv short-circuits (no download).
+	seedUv(t, dir)
 	uvBin := filepath.Join(dir, "uv", UvVersion, "uv")
-	if err := os.MkdirAll(filepath.Dir(uvBin), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(uvBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 
-	venv := filepath.Join(dir, "vllm", VLLMVersion, "venv")
-	binPath := filepath.Join(venv, "bin", "vllm")
 	var calls [][]string
-	p := &Provisioner{Dir: dir, run: func(_ context.Context, name string, args ...string) error {
-		calls = append(calls, append([]string{name}, args...))
-		// The pip install is what materializes the vllm entrypoint.
-		if len(args) > 0 && args[0] == "pip" {
-			if err := os.MkdirAll(filepath.Dir(binPath), 0o755); err != nil {
-				return err
-			}
-			return os.WriteFile(binPath, []byte("#!/bin/sh\n"), 0o755)
-		}
-		return nil
-	}}
-
+	p := &Provisioner{Dir: dir, run: venvFakeRunner(&calls)}
 	got, err := p.EnsureVLLM(context.Background(), "linux", "amd64")
 	if err != nil {
 		t.Fatalf("EnsureVLLM: %v", err)
 	}
-	if got != binPath {
-		t.Errorf("bin = %q, want %q", got, binPath)
+	wantBin := filepath.Join(dir, "vllm", VLLMVersion, "venv", "bin", "vllm")
+	if got != wantBin {
+		t.Errorf("bin = %q, want %q", got, wantBin)
 	}
-	if len(calls) != 2 {
-		t.Fatalf("uv invocations = %v, want venv then pip install", calls)
-	}
-	// uv venv <venv> --python 3.12
-	if c := calls[0]; c[0] != uvBin || c[1] != "venv" || c[2] != venv || c[3] != "--python" || c[4] != vllmPython {
-		t.Errorf("venv call = %v", c)
-	}
-	// uv pip install --python <venv> vllm==<version>
-	pip := calls[1]
-	if pip[0] != uvBin || pip[1] != "pip" || pip[2] != "install" || pip[len(pip)-1] != "vllm=="+VLLMVersion {
-		t.Errorf("install call = %v", pip)
-	}
+	venvCallAsserts(t, calls, dir, uvBin, "vllm", VLLMVersion, vllmPython, "vllm=="+VLLMVersion)
 }
