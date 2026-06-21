@@ -161,6 +161,87 @@ func TestAdmission_maxWaitSheds(t *testing.T) {
 	}
 }
 
+// TestAdmission_nonPositiveMaxWaitFloored: a zero or negative --max-queue-wait is
+// floored to the default rather than making every queued waiter shed instantly
+// (NewTimer(0) fires at once), which would silently disable the bounded queue.
+func TestAdmission_nonPositiveMaxWaitFloored(t *testing.T) {
+	for _, w := range []time.Duration{0, -time.Second} {
+		a := NewAdmission(AdmissionConfig{PerReplica: 1, QueueLen: 1, MaxWait: w})
+		if a.cfg.MaxWait != defaultMaxWait {
+			t.Fatalf("MaxWait %v: got %v, want it floored to %v", w, a.cfg.MaxWait, defaultMaxWait)
+		}
+	}
+
+	// Behaviorally: with MaxWait 0 (floored), a queued request still waits and is
+	// promoted on release instead of being shed immediately.
+	get, _ := fixedReplicas(1)
+	a := newTestAdmission(t, AdmissionConfig{PerReplica: 1, QueueLen: 4, MaxWait: 0}, get)
+	release, apiErr := a.Acquire(context.Background(), "m")
+	if apiErr != nil {
+		t.Fatalf("first request shed: %v", apiErr)
+	}
+	admitted := make(chan *anthropic.Error, 1)
+	go func() {
+		rel, err := a.Acquire(context.Background(), "m")
+		if err == nil {
+			rel()
+		}
+		admitted <- err
+	}()
+	time.Sleep(50 * time.Millisecond) // let it enqueue rather than shed
+	release()
+	select {
+	case err := <-admitted:
+		if err != nil {
+			t.Fatalf("queued request shed with floored MaxWait instead of being promoted: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued request was never promoted (floored MaxWait may have shed it)")
+	}
+}
+
+// TestAdmission_promotedOnCapacityGrowth: a waiter blocked because every slot is
+// held by a long-lived request is promoted when a new replica joins (capacity
+// grows), not made to wait out MaxWait for a slot that already exists.
+func TestAdmission_promotedOnCapacityGrowth(t *testing.T) {
+	get, set := fixedReplicas(1)
+	// Long MaxWait: the only way the waiter is admitted in time is a capacity-growth
+	// promotion, since the held slot below is never released before the assertion.
+	a := newTestAdmission(t, AdmissionConfig{PerReplica: 1, QueueLen: 4, MaxWait: 5 * time.Second}, get)
+
+	// Fill and hold the only slot.
+	held, apiErr := a.Acquire(context.Background(), "m")
+	if apiErr != nil {
+		t.Fatalf("first request shed: %v", apiErr)
+	}
+	defer held()
+
+	// A second request must queue (capacity 1, slot held).
+	admitted := make(chan *anthropic.Error, 1)
+	go func() {
+		rel, err := a.Acquire(context.Background(), "m")
+		if err == nil {
+			rel()
+		}
+		admitted <- err
+	}()
+	time.Sleep(50 * time.Millisecond) // let it enqueue
+
+	// A replica joins: capacity rises to 2. The waiter must be promoted into the
+	// freshly-available slot even though the first slot is still held.
+	set(2)
+	a.promoteForCapacity("m")
+
+	select {
+	case err := <-admitted:
+		if err != nil {
+			t.Fatalf("waiter shed instead of promoted on capacity growth: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waiter not promoted after a replica joined; it waited on the held slot")
+	}
+}
+
 // TestAdmission_capacityTracksReplicas: capacity follows the live replica count, so
 // a replica leaving lowers the ceiling and a replica joining raises it.
 func TestAdmission_capacityTracksReplicas(t *testing.T) {

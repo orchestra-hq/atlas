@@ -80,9 +80,10 @@ type UsageTotal struct {
 	OutputTokens int
 }
 
-// usageGroupedBy sums the ledger grouped by a single column, newest-activity
-// first then by the largest token spend, so the busiest group leads the table.
-// column is a trusted constant from the exported wrappers, never user input.
+// usageGroupedBy sums the ledger grouped by a single column, ordered by the
+// largest total token spend (ties broken by group name), so the busiest group
+// leads the table. column is a trusted constant from the exported wrappers, never
+// user input.
 func (d *DB) usageGroupedBy(ctx context.Context, column string) ([]UsageTotal, error) {
 	q := fmt.Sprintf(`
 SELECT %[1]s AS grp, COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0)

@@ -14,6 +14,11 @@ const (
 	asyncUsageBuffer = 4096                   // channel capacity before Record blocks
 	asyncUsageBatch  = 128                    // rows per flush before a forced flush
 	asyncUsageFlush  = 250 * time.Millisecond // max time a buffered row waits to flush
+	// asyncUsagePersist bounds a single batch write. A wedged store (locked WAL,
+	// stalled disk) must degrade to a logged dropped batch, not pin the sole Run
+	// goroutine forever — which would back up the buffer and hang Close on the
+	// final drain. Best-effort durability, same as the prior synchronous path.
+	asyncUsagePersist = 10 * time.Second
 )
 
 // AsyncUsageWriter is a UsageRecorder that enqueues each record onto a buffered
@@ -64,7 +69,12 @@ func (a *AsyncUsageWriter) Record(ctx context.Context, u UsageRecord) error {
 	case a.ch <- u:
 		return nil
 	case <-ctx.Done():
-		return a.persist(context.WithoutCancel(ctx), []UsageRecord{u})
+		// Buffer stayed full past the caller's deadline: persist inline rather than
+		// drop the row. Bound it on its own so a wedged store can't pin this
+		// goroutine indefinitely (the caller's ctx is already done).
+		pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), asyncUsagePersist)
+		defer cancel()
+		return a.persist(pctx, []UsageRecord{u})
 	}
 }
 
@@ -123,7 +133,9 @@ func (a *AsyncUsageWriter) flush(buf *[]UsageRecord) {
 	if len(*buf) == 0 {
 		return
 	}
-	if err := a.persist(context.Background(), *buf); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), asyncUsagePersist)
+	defer cancel()
+	if err := a.persist(ctx, *buf); err != nil {
 		a.log.Warn("usage ledger batch write failed", "error", err, "rows", len(*buf))
 	}
 	*buf = (*buf)[:0]

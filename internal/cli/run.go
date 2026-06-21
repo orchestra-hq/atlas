@@ -90,12 +90,16 @@ func runRun(ctx context.Context, cmd *cobra.Command, opts *runOptions, model str
 
 	cmd.Printf("Loading model %q (this can take a while on first run)…\n", rm.served)
 	w, err := worker.Start(ctx, worker.Config{
-		Engine:    engine,
-		BinPath:   binPath,
-		ModelArgs: rm.modelArgs,
-		ExtraArgs: rm.engineArgs,
-		Model:     rm.served,
-		LogPath:   filepath.Join(opts.stateDir, string(engine)+"-"+rm.served+".log"),
+		Engine:        engine,
+		BinPath:       binPath,
+		ModelArgs:     rm.modelArgs,
+		ExtraArgs:     rm.engineArgs,
+		Model:         rm.served,
+		ContextWindow: rm.ctxHint,              // engines that cannot self-report (MLX) answer from this
+		Temperature:   rm.sampling.Temperature, // catalog sampling defaults (M2 phase 4a)
+		TopP:          rm.sampling.TopP,
+		Reasoning:     rm.reasoning, // gates the thinking kwarg (M2 phase 4b)
+		LogPath:       filepath.Join(opts.stateDir, string(engine)+"-"+rm.served+".log"),
 	})
 	if err != nil {
 		return err
