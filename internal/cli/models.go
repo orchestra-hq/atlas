@@ -89,7 +89,9 @@ func (r *engineRuntime) start(ctx context.Context, spec string) (startedModel, e
 		ModelArgs:     rm.modelArgs,
 		ExtraArgs:     append(append([]string{}, r.engineArgs...), rm.engineArgs...),
 		Model:         rm.served,
-		ContextWindow: rm.ctxHint, // engines that cannot self-report (MLX) answer from this
+		ContextWindow: rm.ctxHint,              // engines that cannot self-report (MLX) answer from this
+		Temperature:   rm.sampling.Temperature, // catalog sampling defaults (M2 phase 4a)
+		TopP:          rm.sampling.TopP,
 		LogPath:       filepath.Join(r.stateDir, logFileName(r.engine, rm.served)),
 	})
 	if err != nil {

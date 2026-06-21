@@ -33,12 +33,13 @@ The harness is engine- and client-agnostic: the same `run.py` runs `--engine vll
 
 ## Catalog data the gateway records but does not yet apply (phase 9)
 
-The starter catalog (`/catalog`) carries two fields the build wires through to **storage** but not yet to **request handling**:
+The starter catalog (`/catalog`) carries fields the build wires through to **storage**; M2 phase 4 applies them to **request handling**:
 
-1. **Per-model sampling defaults** (`sampling.temperature` / `top_p`) — recorded per entry (wrong defaults visibly degrade tool calling, [model-catalog-m0.md](research/model-catalog-m0.md) finding 3) but not yet applied when a request omits the field. Applying them means threading the catalog entry into `server.Model` and defaulting in the adapter's request build.
-2. **Tier metadata** (`tier: haiku|sonnet|opus`) — recorded but does not auto-generate the `claude-*` aliases; `atlas up --alias` is still explicit.
+1. **Per-model sampling defaults** (`sampling.temperature` / `top_p`) — recorded per entry (wrong defaults visibly degrade tool calling, [model-catalog-m0.md](research/model-catalog-m0.md) finding 3). **Resolved (M2 phase 4a):** the worker applies them at its `Execute`/`ExecuteStream` choke point — a request that omits the field picks up the catalog value, an explicit value always wins, and a raw path/spec (no entry) leaves the field unset for the engine to default. Threaded via `worker.Config`, so both local (`atlas up`) and fleet workers get it with no wire/gateway change.
+2. **Per-model reasoning config** (`reasoning`) — recorded but llama.cpp still toggles thinking via the global `enable_thinking` convention. _Targeted by M2 phase 4b_ (see the reasoning-convention question above).
+3. **Tier metadata** (`tier: haiku|sonnet|opus`) — recorded but does not auto-generate the `claude-*` aliases; `atlas up --alias` is still explicit. Still open: leave to the operator via `--alias`, or auto-derive?
 
-**Open:** apply both, or leave sampling to the operator via `--engine-arg` and aliases to `--alias`? Neither blocks any M0 exit criterion. Phases 10–11 landed without picking these up (phase 10 focused on the ops minimum + `run`/`ps`; phase 11 on the G9 agent harness), so both remain deferred to a post-build pass. Also parked here: the larger gguf tiers (the research-doc 9B–35B models) are not in the shipped catalog because their exact quant digests are not yet pinned — add them as each is verified at build time (pinning is required: `internal/catalog` rejects a gguf entry without a 64-hex sha256).
+Also parked here: the larger gguf tiers (the research-doc 9B–35B models) are not in the shipped catalog because their exact quant digests are not yet pinned — add them as each is verified at build time (pinning is required: `internal/catalog` rejects a gguf entry without a 64-hex sha256). M2 phase 4c expands the catalog as digests are pinned.
 
 ## Readiness does not re-probe a live engine (phase 10)
 
