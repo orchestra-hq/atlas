@@ -13,6 +13,11 @@ import (
 // none is configured.
 const defaultRetryAfter = 1
 
+// defaultMaxWait is the queue wait applied when MaxWait is non-positive. A zero or
+// negative MaxWait would make every waiter's timer fire immediately, shedding
+// rather than queueing — so it is treated as "unset" and floored to this.
+const defaultMaxWait = 10 * time.Second
+
 // AdmissionConfig tunes the per-model admission controller (ADR-0010). PerReplica
 // is the concurrency each replica is assumed to handle, so a model's ceiling is
 // PerReplica × its live replica count. QueueLen bounds the FIFO of waiters past
@@ -62,6 +67,14 @@ type admitWaiter struct {
 // NewAdmission builds an admission controller from cfg. Attach it to a gateway with
 // SetAdmission, which wires the live replica-count source and the metrics sink.
 func NewAdmission(cfg AdmissionConfig) *Admission {
+	// A non-positive MaxWait makes time.NewTimer fire immediately, so every queued
+	// waiter would shed a 429 on the next tick instead of waiting — silently turning
+	// the bounded queue into instant-shed. Floor it to the default so a misconfigured
+	// --max-queue-wait can't disable queueing (operators wanting fail-fast set
+	// --queue-length 0). PerReplica/QueueLen <= 0 are meaningful (disable / no queue).
+	if cfg.MaxWait <= 0 {
+		cfg.MaxWait = defaultMaxWait
+	}
 	return &Admission{cfg: cfg, models: make(map[string]*modelAdmit)}
 }
 
@@ -167,6 +180,24 @@ func (a *Admission) releaseSlot(model string) func() {
 			ma.admitted--
 			a.promoteLocked(model, ma)
 		})
+	}
+}
+
+// promoteForCapacity grants newly-available capacity to queued waiters after a
+// model's replica count grew (a worker joined). Without it, promotion happens only
+// on slot release, so a model whose every slot is held by a long-lived request
+// would make queued waiters wait out MaxWait and shed 429s even though a fresh
+// replica's slots sit idle. The gateway calls it from RegisterInstance, after
+// releasing its own lock (lock order is a.mu → g.mu, via promoteLocked's capacity
+// re-read). Safe on a nil/disabled controller and an unknown/un-queued model.
+func (a *Admission) promoteForCapacity(model string) {
+	if !a.enabled() {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if ma := a.models[model]; ma != nil {
+		a.promoteLocked(model, ma)
 	}
 }
 

@@ -122,9 +122,13 @@ func (g *Gateway) withRequestLog(next http.Handler) http.Handler {
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		ctx := context.WithValue(r.Context(), reqLogKey{}, rec)
 
+		// Deferred so a panicking handler still decrements the gauge: net/http's
+		// per-connection recover keeps the process alive, but a plain post-call
+		// statement here would be skipped on the panic unwind, leaking +1 on
+		// atlas_requests_in_flight (and the atlas status/top snapshot) per panic.
 		g.metrics.incInFlight()
+		defer g.metrics.decInFlight()
 		next.ServeHTTP(sw, r.WithContext(ctx))
-		g.metrics.decInFlight()
 
 		dur := time.Since(start)
 		args := []any{

@@ -53,9 +53,15 @@ func newRuntimeCmd() *cobra.Command {
 // runtime and, with --prune, removes any older provisioned versions. The pinned
 // version is compiled in (build-time decision 5: explicit versions, explicit
 // upgrades), so the upgrade flow is: update Atlas (which bumps the pinned version),
-// then `atlas runtime upgrade --engine <e> --prune` to provision the new runtime
-// and reclaim the old one's disk. Provisioning stages atomically, so the running
-// engine keeps serving its current version until the swap completes.
+// then `atlas runtime upgrade --engine <e>` to provision the new runtime, then
+// restart the engine so it starts on the new version. Provisioning stages
+// atomically, so a crash never leaves a half-installed runtime.
+//
+// --prune deletes the other on-disk versions of the engine. A still-running engine
+// keeps the version it started with (its process holds that venv) and only adopts
+// the new one on restart, so prune is safe only once no engine is serving an older
+// version — otherwise it can pull modules out from under a live process that
+// imports lazily. Liveness-aware pruning is a follow-up (docs/follow-ups.md).
 func newRuntimeUpgradeCmd() *cobra.Command {
 	var (
 		engineFlag string
@@ -66,10 +72,13 @@ func newRuntimeUpgradeCmd() *cobra.Command {
 		Use:   "upgrade",
 		Short: "Provision the pinned version of an engine runtime, optionally pruning older ones",
 		Long: "upgrade provisions the engine runtime version currently pinned in this\n" +
-			"Atlas build (the same one `atlas up` resolves) and, with --prune, removes\n" +
-			"any older provisioned versions of that engine to reclaim disk. The install\n" +
-			"stages atomically and swaps into place, so a crash never leaves a\n" +
-			"half-upgraded runtime and a running engine keeps serving until the swap.",
+			"Atlas build (the same one `atlas up` resolves). The install stages\n" +
+			"atomically and swaps into place, so a crash never leaves a half-upgraded\n" +
+			"runtime. A running engine keeps serving the version it started with and\n" +
+			"picks up the new one only on restart.\n\n" +
+			"--prune then removes any OTHER provisioned versions to reclaim disk. Run it\n" +
+			"only when no engine is still serving an older version: it deletes that\n" +
+			"version's files, which a live engine may still import lazily.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			engine, err := parseEngine(engineFlag)
@@ -97,7 +106,7 @@ func newRuntimeUpgradeCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&engineFlag, "engine", string(worker.EngineLlamaCpp), "engine to upgrade (llamacpp, vllm, mlx, or sglang)")
-	cmd.Flags().BoolVar(&prune, "prune", false, "after provisioning the pinned version, remove any older provisioned versions of this engine")
+	cmd.Flags().BoolVar(&prune, "prune", false, "after provisioning, delete other provisioned versions of this engine (only safe when no engine is still serving one)")
 	cmd.Flags().StringVar(&stateDir, "state-dir", defaultStateDir(), "directory for runtimes")
 	return cmd
 }

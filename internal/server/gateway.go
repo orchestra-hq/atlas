@@ -258,8 +258,10 @@ func (g *Gateway) dispatchPrep(ctx context.Context, name string) (Model, string,
 	model, workerName, pickRelease, ok := g.pick(canon)
 	if !ok {
 		// The model was servable a moment ago but no replica is live now (it dropped
-		// between admission and selection): overloaded, retryable.
+		// between admission and selection): overloaded, retryable. Count it like every
+		// other shed so the shed metric doesn't under-report overload.
 		admitRelease()
+		g.metrics.incShed(canon, "529")
 		return Model{}, "", nil, overloadedErr(g.admission.retryAfterSecs())
 	}
 	return model, workerName, func() { pickRelease(); admitRelease() }, nil
@@ -389,7 +391,6 @@ func releaseOnce(c *atomic.Int64) func() {
 // group by a name that survives reconnects (M2 phase 1).
 func (g *Gateway) RegisterInstance(workerID, workerName string, m Model) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	rs := g.routes[m.Name]
 	next := route{workerID: workerID, workerName: workerName, exec: m.Exec, contextWindow: m.ContextWindow, inflight: new(atomic.Int64)}
 	// One route per (worker connection, model): a re-registration of the same pair
@@ -404,13 +405,21 @@ func (g *Gateway) RegisterInstance(workerID, workerName string, m Model) {
 			// in flight on this instance right now, and a fresh counter would lose it.
 			next.inflight = r.inflight
 			rs[i] = next
-			return
+			g.mu.Unlock()
+			return // in-place replace: capacity unchanged, nothing to promote
 		}
 	}
 	if len(rs) == 0 {
 		g.order = append(g.order, m.Name)
 	}
 	g.routes[m.Name] = append(rs, next)
+	g.mu.Unlock()
+
+	// A new replica raised this model's admission capacity. Promote any waiters
+	// blocked in the queue now, rather than making them wait out MaxWait for a slot
+	// that already exists — done after releasing g.mu, since promotion re-reads the
+	// replica count (lock order a.mu → g.mu). Safe when admission is nil/disabled.
+	g.admission.promoteForCapacity(m.Name)
 }
 
 // UnregisterInstance removes one worker's instance of a single model, called
