@@ -113,8 +113,11 @@ func (g *Gateway) withRequestLog(next http.Handler) http.Handler {
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		ctx := context.WithValue(r.Context(), reqLogKey{}, rec)
 
+		g.metrics.incInFlight()
 		next.ServeHTTP(sw, r.WithContext(ctx))
+		g.metrics.decInFlight()
 
+		dur := time.Since(start)
 		g.logger.Info("request",
 			"method", r.Method,
 			"path", r.URL.Path,
@@ -122,8 +125,18 @@ func (g *Gateway) withRequestLog(next http.Handler) http.Handler {
 			"model", rec.model,
 			"input_tokens", rec.inputTokens,
 			"output_tokens", rec.outputTokens,
-			"duration_ms", time.Since(start).Milliseconds(),
+			"duration_ms", dur.Milliseconds(),
 		)
+
+		// Mirror the request into Prometheus: rate/status/latency for every request,
+		// and per-model/worker token counters for billable inference (the same set
+		// the ledger records, so /metrics and the ledger agree). The path is
+		// collapsed to a bounded label set so a path parameter can't explode
+		// cardinality.
+		g.metrics.observeRequest(metricsPath(r.URL.Path), sw.status, dur)
+		if rec.billable {
+			g.metrics.addTokens(rec.model, rec.workerID, rec.inputTokens, rec.outputTokens)
+		}
 
 		// Durable usage ledger (G13): write one row per completed inference
 		// request. Use a cancel-immune context so an interrupted stream — the very

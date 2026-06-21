@@ -123,7 +123,11 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 	gw := server.NewGateway(authn, nil, aliases)
 	gw.SetLogger(logger)
 	gw.SetUsageRecorder(usageRecorder{db: store}) // durable usage ledger (G13)
+	metrics := server.NewMetrics()                // Prometheus instrumentation (G15)
+	gw.SetMetrics(metrics)
 	hub := server.NewHub(opts.token, gw)
+	// The connected-worker gauge reads the hub's live count at scrape time.
+	metrics.SetWorkerCountSource(func() int { return len(hub.Workers()) })
 	// The scheduler places catalog models onto workers on demand and reconciles
 	// deployments as workers join and leave (M1 phase 4b). The hub notifies it of
 	// worker/model events and sends its load/unload commands.
@@ -146,6 +150,11 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 	mux.HandleFunc("POST /admin/deployments", server.RequireAdmin(authn, sched.HandleSetDeployment))
 	mux.HandleFunc("GET /admin/deployments", server.RequireAdmin(authn, sched.HandleListDeployments))
 	mux.HandleFunc("DELETE /admin/deployments/{model}", server.RequireAdmin(authn, sched.HandleStopDeployment))
+	// Observability (M2 phase 1, G15): a Prometheus scrape and the one-shot
+	// snapshot `atlas status` renders, both admin-scoped and reading the same
+	// counters.
+	mux.Handle("GET /metrics", server.RequireAdmin(authn, metrics.Handler().ServeHTTP))
+	mux.HandleFunc("GET /admin/status", server.RequireAdmin(authn, server.StatusHandler(hub.Workers, sched.Deployments, metrics)))
 	// Gateway routes (/v1/*, /healthz, /readyz) handled by the gateway's mux
 	// as a catch-all; hub routes registered above take precedence.
 	mux.Handle("/", gw.Handler())

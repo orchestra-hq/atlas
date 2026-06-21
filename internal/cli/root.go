@@ -32,6 +32,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newScaleCmd())
 	root.AddCommand(newStopCmd())
 	root.AddCommand(newDeploymentsCmd())
+	root.AddCommand(newStatusCmd())
 	root.AddCommand(newKeysCmd())
 	root.AddCommand(newUsageCmd())
 	root.AddCommand(newPullCmd())

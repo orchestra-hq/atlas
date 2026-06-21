@@ -124,6 +124,7 @@ type Gateway struct {
 	logger    *slog.Logger  // one structured line per API request (G10)
 	autostart Autostarter   // deploys+waits on a request for an unrouted model (nil = off)
 	usage     UsageRecorder // durable per-request usage ledger (phase 6, G13; nil = off)
+	metrics   *Metrics      // Prometheus instrumentation (M2 phase 1; nil = off)
 
 	// mu guards the route table, which is static in single-node mode but changes
 	// as remote workers register and drop their models in fleet mode. resolve and
@@ -178,6 +179,11 @@ func (g *Gateway) SetAutostarter(a Autostarter) { g.autostart = a }
 // startup; nil (the default) leaves metering off, so requests serve normally but
 // write no usage rows — the behavior in tests and any opt-out deployment.
 func (g *Gateway) SetUsageRecorder(u UsageRecorder) { g.usage = u }
+
+// SetMetrics attaches the Prometheus instrumentation (M2 phase 1). Call once at
+// startup; nil (the default) leaves metering off, so the gateway serves normally
+// but records no series — the behavior in tests and any opt-out deployment.
+func (g *Gateway) SetMetrics(m *Metrics) { g.metrics = m }
 
 // canonical maps an alias to its target model name (identity if not an alias),
 // so auto-start deploys the served model a client's alias points at.
