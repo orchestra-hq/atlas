@@ -57,11 +57,17 @@ func resolveModel(ctx context.Context, cmd *cobra.Command, engine worker.Engine,
 			ctxHint:    entry.ContextWindow,
 		}, nil
 	case "hf":
-		// vLLM resolves the repo from its own cache at boot; the store does not
-		// hold multi-file HF repos in M0. Serve under the catalog's logical name
+		// The engine resolves the repo from its own cache at boot; the store does
+		// not hold multi-file HF repos in M0. Serve under the catalog's logical name
 		// so clients address it consistently regardless of the repo id.
 		extra := append([]string{}, entry.EngineArgs...)
-		extra = append(extra, "--served-model-name", entry.Name)
+		if engine == worker.EngineVLLM {
+			// vLLM accepts --served-model-name, so it answers to the logical name and
+			// the adapter echoes that. mlx_lm.server has no such flag and loads exactly
+			// the requested id, so MLX skips it — the worker's adapter echoes the repo
+			// id instead (see worker.engineSetup, EngineMLX).
+			extra = append(extra, "--served-model-name", entry.Name)
+		}
 		return resolvedModel{
 			served:     entry.Name,
 			modelArgs:  []string{entry.Source.Repo},

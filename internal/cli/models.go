@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -12,6 +13,16 @@ import (
 	"github.com/orchestra-hq/atlas/internal/store"
 	"github.com/orchestra-hq/atlas/internal/worker"
 )
+
+// logFileName builds the per-model engine-log filename. The served name can be a
+// raw Hugging Face repo id (e.g. mlx-community/Qwen2.5-0.5B-Instruct-4bit), whose
+// "/" would otherwise be read as a path separator and point the log at a
+// nonexistent subdirectory; replace path separators so the name stays a single
+// flat file in the state dir.
+func logFileName(engine worker.Engine, served string) string {
+	safe := strings.NewReplacer("/", "_", string(filepath.Separator), "_").Replace(served)
+	return string(engine) + "-" + safe + ".log"
+}
 
 // startedModel is one model loaded into a local engine subprocess: the logical
 // name clients address, the supervising worker, and the engine's context window.
@@ -73,12 +84,13 @@ func (r *engineRuntime) start(ctx context.Context, spec string) (startedModel, e
 	}
 	r.cmd.Printf("Loading model %q (this can take a while on first run)…\n", rm.served)
 	w, err := worker.Start(ctx, worker.Config{
-		Engine:    r.engine,
-		BinPath:   r.binPath,
-		ModelArgs: rm.modelArgs,
-		ExtraArgs: append(append([]string{}, r.engineArgs...), rm.engineArgs...),
-		Model:     rm.served,
-		LogPath:   filepath.Join(r.stateDir, string(r.engine)+"-"+rm.served+".log"),
+		Engine:        r.engine,
+		BinPath:       r.binPath,
+		ModelArgs:     rm.modelArgs,
+		ExtraArgs:     append(append([]string{}, r.engineArgs...), rm.engineArgs...),
+		Model:         rm.served,
+		ContextWindow: rm.ctxHint, // engines that cannot self-report (MLX) answer from this
+		LogPath:       filepath.Join(r.stateDir, logFileName(r.engine, rm.served)),
 	})
 	if err != nil {
 		return startedModel{}, err

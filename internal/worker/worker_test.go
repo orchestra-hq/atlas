@@ -127,9 +127,35 @@ func TestEngineSetupArgs(t *testing.T) {
 		}
 	})
 
+	t.Run("mlx", func(t *testing.T) {
+		cfg := base
+		cfg.Engine = EngineMLX
+		cfg.Model = "qwen-mlx" // logical served name
+		cfg.ModelArgs = []string{"mlx-community/Qwen2.5-1.5B-Instruct-4bit"}
+		cfg.ContextWindow = 32768
+		args, adapter, err := engineSetup(cfg)
+		if err != nil {
+			t.Fatalf("engineSetup: %v", err)
+		}
+		// `<python> -m mlx_lm.server --model <repo> --host H --port P [extra]`.
+		want := []string{"-m", "mlx_lm.server", "--model", "mlx-community/Qwen2.5-1.5B-Instruct-4bit", "--host", "127.0.0.1", "--port", "8000", "--flag"}
+		if !reflect.DeepEqual(args, want) {
+			t.Errorf("args = %v, want %v", args, want)
+		}
+		// The adapter must echo the loaded repo id (not the logical name), since
+		// mlx_lm.server loads exactly the id a request names.
+		named, ok := adapter.(interface{ Model() string })
+		if !ok {
+			t.Fatal("mlx adapter does not expose Model()")
+		}
+		if got := named.Model(); got != "mlx-community/Qwen2.5-1.5B-Instruct-4bit" {
+			t.Errorf("adapter model = %q, want the repo id", got)
+		}
+	})
+
 	t.Run("unknown", func(t *testing.T) {
 		cfg := base
-		cfg.Engine = Engine("sglang")
+		cfg.Engine = Engine("nonesuch")
 		if _, _, err := engineSetup(cfg); err == nil {
 			t.Fatal("expected error for unknown engine")
 		}

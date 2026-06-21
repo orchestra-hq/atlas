@@ -70,3 +70,31 @@ models:
       - glm47
       - --reasoning-parser
       - glm45
+
+  # --- MLX tiers (Apple Silicon; mlx-lm via Metal) ------------------------
+  # mlx_lm.server exposes no model-metadata endpoint, so context_window here is
+  # also what the gateway asserts against (worker.Config.ContextWindow). Cold-boot
+  # conformance is the Apple-Silicon nightly tier (docs/open-questions.md).
+  - name: qwen2.5-1.5b-instruct-mlx
+    engine: mlx
+    tier: haiku
+    reasoning: false
+    context_window: 32768
+    source:
+      type: hf
+      repo: mlx-community/Qwen2.5-1.5B-Instruct-4bit
+    sampling:
+      temperature: 0.7
+      top_p: 0.8
+
+  - name: qwen2.5-7b-instruct-mlx
+    engine: mlx
+    tier: sonnet
+    reasoning: false
+    context_window: 32768
+    source:
+      type: hf
+      repo: mlx-community/Qwen2.5-7B-Instruct-4bit
+    sampling:
+      temperature: 0.7
+      top_p: 0.8

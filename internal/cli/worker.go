@@ -50,7 +50,7 @@ func newWorkerCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&opts.models, "model", nil,
 		"model to serve: a .gguf path, a Hugging Face spec, or a catalog name; repeat to serve several")
 	cmd.Flags().StringVar(&opts.engine, "engine", string(worker.EngineLlamaCpp),
-		"inference engine: llamacpp (prebuilt binary) or vllm (uv-managed venv, GPU)")
+		"inference engine: llamacpp (prebuilt binary), vllm (uv venv, NVIDIA GPU), or mlx (uv venv, Apple Silicon)")
 	cmd.Flags().StringArrayVar(&opts.engineArgs, "engine-arg", nil,
 		"extra argument passed verbatim to every engine subprocess; repeat for several")
 	cmd.Flags().StringVar(&opts.stateDir, "state-dir", defaultStateDir(), "directory for runtimes, weights, and logs")
