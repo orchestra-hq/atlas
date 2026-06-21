@@ -169,11 +169,25 @@ jobs:
       - name: Stop Atlas
         if: always()
         run: kill "$(cat atlas.pid)" 2>/dev/null || true
+      # G18 capability-matrix tooling (M2 phase 4c). Unit-test the aggregation
+      # logic, then exercise the generator on the real matrix.json this job just
+      # produced (a single llama.cpp cell — the full model×engine matrix is the
+      # GPU/Apple-Silicon nightly tier, still blocked; see open-questions.md).
+      - name: Capability-matrix tooling
+        run: |
+          uv run --locked python -m pytest test_capability_matrix.py -q
+          uv run --locked python capability_matrix.py results/matrix.json \
+            --output results/capability-matrix.json \
+            --markdown results/CAPABILITY.md
+        working-directory: conformance
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: conformance-matrix
-          path: conformance/results/matrix.json
+          path: |
+            conformance/results/matrix.json
+            conformance/results/capability-matrix.json
+            conformance/results/CAPABILITY.md
 
   conformance-fleet:
     name: Conformance (two-process)
