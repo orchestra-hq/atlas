@@ -86,6 +86,7 @@ func renderStatus(cmd *cobra.Command, status server.FleetStatus) {
 	_, _ = fmt.Fprintf(out, "REQUESTS  %d total, %d errors, %d in flight\n", m.Requests, m.Errors, m.InFlight)
 	_, _ = fmt.Fprintf(out, "TOKENS    %d input, %d output\n", m.InputTokens, m.OutputTokens)
 	_, _ = fmt.Fprintf(out, "QUEUE     %d queued, %d shed\n", m.QueueDepth, m.Shed)
+	_, _ = fmt.Fprintf(out, "AFFINITY  %d hits, %d misses, %d warm keys\n", m.AffinityHits, m.AffinityMiss, m.WarmKeys)
 	_, _ = fmt.Fprintln(out)
 	renderWorkersTable(out, status.Workers)
 	_, _ = fmt.Fprintln(out)

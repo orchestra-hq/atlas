@@ -37,6 +37,8 @@ type Metrics struct {
 	inFlight        prometheus.Gauge
 	queueDepth      *prometheus.GaugeVec   // by model — admission queue (M2 phase 2b)
 	shed            *prometheus.CounterVec // by model, code (429/529) — backpressure sheds
+	affinity        *prometheus.CounterVec // by model, result (hit/miss) — affinity routing (M3 phase 1)
+	warmKeys        *prometheus.GaugeVec   // by model, worker — distinct warm affinity keys per replica
 
 	// workerSource yields the current connected-worker count for the GaugeFunc.
 	// Stored as an atomic so the hub-backed source can be wired after construction
@@ -55,6 +57,8 @@ const (
 	metricWorkers         = "atlas_connected_workers"
 	metricQueueDepth      = "atlas_queue_depth"
 	metricShed            = "atlas_shed_total"
+	metricAffinity        = "atlas_affinity_total"
+	metricWarmKeys        = "atlas_affinity_warm_keys"
 )
 
 // NewMetrics builds the collectors and registers them on a private registry.
@@ -90,6 +94,14 @@ func NewMetrics() *Metrics {
 			Name: metricShed,
 			Help: "Total requests shed by backpressure, by model and HTTP status code (429/529).",
 		}, []string{"model", "code"}),
+		affinity: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: metricAffinity,
+			Help: "Total affinity-routing decisions by model and result (hit = served by the affine replica, miss = fell back to least-in-flight under load).",
+		}, []string{"model", "result"}),
+		warmKeys: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: metricWarmKeys,
+			Help: "Distinct recently-warmed affinity keys routed to each replica, by model and serving worker.",
+		}, []string{"model", "worker"}),
 	}
 	workers := prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Name: metricWorkers,
@@ -100,7 +112,7 @@ func NewMetrics() *Metrics {
 		}
 		return 0
 	})
-	m.reg.MustRegister(m.requests, m.requestDuration, m.inputTokens, m.outputTokens, m.inFlight, m.queueDepth, m.shed, workers)
+	m.reg.MustRegister(m.requests, m.requestDuration, m.inputTokens, m.outputTokens, m.inFlight, m.queueDepth, m.shed, m.affinity, m.warmKeys, workers)
 	return m
 }
 
@@ -157,6 +169,31 @@ func (m *Metrics) incShed(model, code string) {
 	}
 }
 
+// incAffinity counts one affinity-routing decision for a model: a hit (the affine
+// replica was within load tolerance and chosen) or a miss (it was past tolerance, so
+// selection fell back to least-in-flight).
+func (m *Metrics) incAffinity(model string, hit bool) {
+	if m != nil {
+		m.affinity.WithLabelValues(model, affinityResult(hit)).Inc()
+	}
+}
+
+// affinityResult is the "result" label value for an affinity decision.
+func affinityResult(hit bool) string {
+	if hit {
+		return "hit"
+	}
+	return "miss"
+}
+
+// setWarmKeys records the count of distinct recently-warmed affinity keys routed to
+// one replica of a model (M3 phase 1).
+func (m *Metrics) setWarmKeys(model, worker string, count int) {
+	if m != nil {
+		m.warmKeys.WithLabelValues(model, worker).Set(float64(count))
+	}
+}
+
 func (m *Metrics) incInFlight() {
 	if m != nil {
 		m.inFlight.Inc()
@@ -180,6 +217,9 @@ type MetricsSnapshot struct {
 	OutputTokens int64 `json:"output_tokens"`
 	QueueDepth   int64 `json:"queue_depth"`
 	Shed         int64 `json:"shed"`
+	AffinityHits int64 `json:"affinity_hits"`
+	AffinityMiss int64 `json:"affinity_miss"`
+	WarmKeys     int64 `json:"warm_keys"`
 }
 
 // Snapshot summarizes the registry for the status endpoint. It gathers the live
@@ -219,6 +259,19 @@ func (m *Metrics) Snapshot() MetricsSnapshot {
 			}
 		case metricShed:
 			snap.Shed += sumCounters(fam.GetMetric())
+		case metricAffinity:
+			for _, mc := range fam.GetMetric() {
+				n := int64(mc.GetCounter().GetValue())
+				if isAffinityHit(mc.GetLabel()) {
+					snap.AffinityHits += n
+				} else {
+					snap.AffinityMiss += n
+				}
+			}
+		case metricWarmKeys:
+			for _, mc := range fam.GetMetric() {
+				snap.WarmKeys += int64(mc.GetGauge().GetValue())
+			}
 		}
 	}
 	return snap
@@ -232,6 +285,16 @@ func isErrorStatus(labels []*dto.LabelPair) bool {
 			if code, err := strconv.Atoi(l.GetValue()); err == nil {
 				return code >= 400
 			}
+		}
+	}
+	return false
+}
+
+// isAffinityHit reports whether an affinity_total sample's "result" label is a hit.
+func isAffinityHit(labels []*dto.LabelPair) bool {
+	for _, l := range labels {
+		if l.GetName() == "result" {
+			return l.GetValue() == "hit"
 		}
 	}
 	return false

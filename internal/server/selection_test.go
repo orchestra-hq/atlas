@@ -47,7 +47,7 @@ func TestRoute_dispatchPicksLeastInFlight(t *testing.T) {
 
 	bumpInflight(t, g, "w1", 3) // w1 is busy; w2 is idle
 
-	_, name, release, ok := g.pick("m")
+	_, name, release, ok := g.pick("m", "")
 	if !ok {
 		t.Fatal("pick returned ok=false for a live model")
 	}
@@ -72,7 +72,7 @@ func TestRoute_releaseIsIdempotent(t *testing.T) {
 	g := NewGateway(staticAuth(testKey), nil, nil)
 	g.RegisterInstance("w1", "w1", Model{Name: "m", Exec: &echoExecutor{}})
 
-	_, _, release, ok := g.pick("m")
+	_, _, release, ok := g.pick("m", "")
 	if !ok {
 		t.Fatal("pick returned ok=false")
 	}

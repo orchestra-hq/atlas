@@ -133,6 +133,7 @@ type Gateway struct {
 	usage     UsageRecorder // durable per-request usage ledger (phase 6, G13; nil = off)
 	metrics   *Metrics      // Prometheus instrumentation (M2 phase 1; nil = off)
 	admission *Admission    // per-model load balancing + backpressure (M2 phase 2b; nil = off)
+	affinity  *Affinity     // prefix/session-affinity replica selection (M3 phase 1; nil = off)
 
 	// mu guards the route table, which is static in single-node mode but changes
 	// as remote workers register and drop their models in fleet mode. route and
@@ -204,6 +205,17 @@ func (g *Gateway) SetAdmission(a *Admission) {
 	}
 }
 
+// SetAffinity attaches prefix/session-affinity routing (M3 phase 1, ADR-0011),
+// wiring it to the metrics sink. Call once at startup, after SetMetrics; nil (the
+// default) or a controller with a negative tolerance leaves affinity off, so every
+// request selects purely by least-in-flight — ADR-0010 behavior.
+func (g *Gateway) SetAffinity(a *Affinity) {
+	g.affinity = a
+	if a != nil {
+		a.metrics = g.metrics
+	}
+}
+
 // canonical maps an alias to its target model name (identity if not an alias),
 // so auto-start deploys the served model a client's alias points at.
 func (g *Gateway) canonical(name string) string {
@@ -240,13 +252,15 @@ var noopRelease = func() {}
 // the single entry point for the dispatch surfaces (POST /v1/messages and the
 // OpenAI mirror). It (1) ensures the model is servable, auto-starting an unrouted
 // catalog model; (2) acquires an admission slot, blocking in the bounded queue and
-// shedding a retryable 429/529 beyond capacity (ADR-0010); (3) picks the
-// least-in-flight replica. On success it returns the model, the serving worker's
-// stable name, and a release that frees both the admission slot and the replica's
-// in-flight slot. On failure it returns the *anthropic.Error the caller should
-// render (404 unknown model, 429 momentarily full, 529 overloaded) and a nil
-// release.
-func (g *Gateway) dispatchPrep(ctx context.Context, name string) (Model, string, func(), *anthropic.Error) {
+// shedding a retryable 429/529 beyond capacity (ADR-0010); (3) selects a replica,
+// preferring the request's affine replica when affinity is on and it is within load
+// tolerance, otherwise least-in-flight (ADR-0011). affinityKey is the request's
+// routing key ("" when affinity is disabled or no key derives). On success it
+// returns the model, the serving worker's stable name, and a release that frees both
+// the admission slot and the replica's in-flight slot. On failure it returns the
+// *anthropic.Error the caller should render (404 unknown model, 429 momentarily full,
+// 529 overloaded) and a nil release.
+func (g *Gateway) dispatchPrep(ctx context.Context, name, affinityKey string) (Model, string, func(), *anthropic.Error) {
 	canon, ok := g.ensure(ctx, name)
 	if !ok {
 		return Model{}, "", nil, modelNotFoundErr(name)
@@ -255,7 +269,7 @@ func (g *Gateway) dispatchPrep(ctx context.Context, name string) (Model, string,
 	if apiErr != nil {
 		return Model{}, "", nil, apiErr
 	}
-	model, workerName, pickRelease, ok := g.pick(canon)
+	model, workerName, pickRelease, ok := g.pick(canon, affinityKey)
 	if !ok {
 		// The model was servable a moment ago but no replica is live now (it dropped
 		// between admission and selection): overloaded, retryable. Count it like every
@@ -290,14 +304,16 @@ func (g *Gateway) ensure(ctx context.Context, name string) (string, bool) {
 	return canon, true
 }
 
-// pick selects the least-in-flight live replica of a canonical model name,
+// pick selects a live replica of a canonical model name — the affine replica when
+// affinity is on and within load tolerance, otherwise least-in-flight (ADR-0011) —
 // increments that instance's in-flight counter, and returns a single-shot release
-// that decrements it. ok is false if no replica is live (e.g. the only one dropped
-// between admission and selection).
-func (g *Gateway) pick(canon string) (Model, string, func(), bool) {
+// that decrements it. affinityKey is the request's routing key ("" disables
+// affinity for this pick). ok is false if no replica is live (e.g. the only one
+// dropped between admission and selection).
+func (g *Gateway) pick(canon, affinityKey string) (Model, string, func(), bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return g.pickLocked(canon, forDispatch)
+	return g.pickLocked(canon, forDispatch, affinityKey)
 }
 
 // resolveMeta resolves a model name (alias or canonical) for a read-only request
@@ -306,7 +322,7 @@ func (g *Gateway) pick(canon string) (Model, string, func(), bool) {
 func (g *Gateway) resolveMeta(name string) (Model, bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	m, _, _, ok := g.pickLocked(name, forMetadata)
+	m, _, _, ok := g.pickLocked(name, forMetadata, "")
 	return m, ok
 }
 
@@ -319,13 +335,15 @@ func (g *Gateway) routeCount(canon string) int {
 }
 
 // pickLocked selects a live instance of name (resolving an alias first), for a
-// caller already holding mu. For forDispatch it picks the least-in-flight replica,
-// increments that instance's counter, and returns a single-shot release that
-// decrements it; for forMetadata it returns any live instance (replicas are
-// homogeneous, so any answers metadata) without touching the counters. The second
-// result is the chosen instance's stable worker name (not its ephemeral connection
-// id), so usage attribution survives the worker's reconnects (M2 phase 1).
-func (g *Gateway) pickLocked(name string, intent resolveIntent) (Model, string, func(), bool) {
+// caller already holding mu. For forDispatch it selects a replica — the affinityKey's
+// affine replica when affinity is on and within load tolerance, otherwise
+// least-in-flight (ADR-0010/0011) — increments that instance's counter, and returns a
+// single-shot release that decrements it; for forMetadata it returns any live
+// instance (replicas are homogeneous, so any answers metadata) without touching the
+// counters and ignores affinityKey. The second result is the chosen instance's stable
+// worker name (not its ephemeral connection id), so usage attribution survives the
+// worker's reconnects (M2 phase 1).
+func (g *Gateway) pickLocked(name string, intent resolveIntent, affinityKey string) (Model, string, func(), bool) {
 	if canon, ok := g.aliases[name]; ok {
 		name = canon
 	}
@@ -336,9 +354,7 @@ func (g *Gateway) pickLocked(name string, intent resolveIntent) (Model, string, 
 	r := rs[0]
 	release := noopRelease
 	if intent == forDispatch {
-		if len(rs) > 1 {
-			r = leastInFlight(rs)
-		}
+		r = g.affinity.selectReplica(name, affinityKey, rs)
 		r.inflight.Add(1)
 		release = releaseOnce(r.inflight)
 	}
@@ -556,7 +572,8 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	model, workerName, release, apiErr := g.dispatchPrep(r.Context(), coreReq.Model)
+	affinityKey := g.affinity.routingKey(r, coreReq)
+	model, workerName, release, apiErr := g.dispatchPrep(r.Context(), coreReq.Model, affinityKey)
 	if apiErr != nil {
 		anthropic.WriteError(w, apiErr)
 		return
@@ -758,7 +775,7 @@ func (g *Gateway) modelInfo(id string) anthropic.ModelInfo {
 
 // modelInfoLocked is modelInfo without locking, for callers already holding mu.
 func (g *Gateway) modelInfoLocked(id string) anthropic.ModelInfo {
-	model, _, _, _ := g.pickLocked(id, forMetadata)
+	model, _, _, _ := g.pickLocked(id, forMetadata, "")
 	return anthropic.NewModelInfo(id, model.Name, g.createdAt, model.ContextWindow)
 }
 

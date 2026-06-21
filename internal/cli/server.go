@@ -29,6 +29,8 @@ type serverOptions struct {
 	queueLen         int
 	maxQueueWait     time.Duration
 	retryAfter       int
+	affinityTol      int
+	affinityPrefix   int
 	tls              tlsOptions
 }
 
@@ -64,6 +66,12 @@ func newServerCmd() *cobra.Command {
 		"how long a request waits in the admission queue for a slot before shedding a retryable 429")
 	cmd.Flags().IntVar(&opts.retryAfter, "retry-after", 1,
 		"Retry-After seconds advertised on a shed 429/529")
+	// Prefix/session-affinity routing (M3 phase 1, ADR-0011). On by default as a
+	// load-bounded hint over least-in-flight; --affinity-load-tolerance -1 disables it.
+	cmd.Flags().IntVar(&opts.affinityTol, "affinity-load-tolerance", 8,
+		"how many more in-flight requests a conversation's warm replica may carry than the least-loaded one before affinity yields to load balancing (-1 disables affinity)")
+	cmd.Flags().IntVar(&opts.affinityPrefix, "affinity-prefix-messages", 2,
+		"leading conversation messages hashed with the system prompt into the affinity routing key (when no x-atlas-session header is set)")
 	// TLS (M1 phase 7, ADR-0009): mutually exclusive modes; default is plaintext
 	// (ws://, the dev/internal default per ADR-0007).
 	cmd.Flags().StringVar(&opts.tls.certFile, "tls-cert", "", "PEM certificate to serve TLS with (requires --tls-key)")
@@ -154,6 +162,13 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 		QueueLen:   opts.queueLen,
 		MaxWait:    opts.maxQueueWait,
 		RetryAfter: opts.retryAfter,
+	}))
+	// Prefix/session-affinity routing (M3 phase 1, ADR-0011): steer a conversation to
+	// the replica holding its warm prefix cache, bounded by load so it never defeats
+	// the backpressure above. Wires to the metrics sink, so it follows SetMetrics.
+	gw.SetAffinity(server.NewAffinity(server.AffinityConfig{
+		Tolerance:      opts.affinityTol,
+		PrefixMessages: opts.affinityPrefix,
 	}))
 	hub := server.NewHub(opts.token, gw)
 	// The connected-worker gauge reads the hub's live count at scrape time.
