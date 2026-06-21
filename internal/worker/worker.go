@@ -59,6 +59,15 @@ type Config struct {
 	// so the catalog value is threaded here). Zero means "ask the engine" — the
 	// llama.cpp and vLLM adapters query it live and ignore this.
 	ContextWindow int
+	// Temperature/TopP are the model's catalog sampling defaults (M2 phase 4a):
+	// applied to a request that omits the field, so a client that sends no sampling
+	// params gets the model author's recommended values rather than the engine's
+	// generic default (wrong defaults visibly degrade tool calling — research finding
+	// 3). Nil means "no catalog default" (a raw path/spec, or an entry without
+	// sampling), leaving the field unset for the engine to default. An explicit
+	// request value always wins.
+	Temperature *float64
+	TopP        *float64
 	// Host/Port is where llama-server listens (loopback in single-node mode).
 	// A zero Port asks the OS for a free one.
 	Host string
@@ -216,13 +225,27 @@ func (w *Worker) Endpoint() string {
 
 // Execute runs one inference request against the supervised engine.
 func (w *Worker) Execute(ctx context.Context, req core.Request) (core.Response, error) {
-	return w.adapter.Execute(ctx, req)
+	return w.adapter.Execute(ctx, w.withSamplingDefaults(req))
 }
 
 // ExecuteStream runs one streaming inference request against the supervised
 // engine, forwarding deltas to sink. It satisfies server.StreamExecutor.
 func (w *Worker) ExecuteStream(ctx context.Context, req core.Request, sink core.StreamSink) error {
-	return w.adapter.ExecuteStream(ctx, req, sink)
+	return w.adapter.ExecuteStream(ctx, w.withSamplingDefaults(req), sink)
+}
+
+// withSamplingDefaults fills any sampling field the request omitted with the
+// model's catalog default (M2 phase 4a). req is taken by value, so this mutates a
+// local copy only; an explicit request value is left untouched. Tokenization does
+// not sample, so CountTokens deliberately skips this.
+func (w *Worker) withSamplingDefaults(req core.Request) core.Request {
+	if req.Temperature == nil {
+		req.Temperature = w.cfg.Temperature
+	}
+	if req.TopP == nil {
+		req.TopP = w.cfg.TopP
+	}
+	return req
 }
 
 // CountTokens returns the prompt's token count from the engine's tokenizer. It
