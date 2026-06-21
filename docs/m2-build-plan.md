@@ -35,6 +35,8 @@ Phase 1 shipped as four focused PRs: stable-worker-identity and admin-cert-pinni
 
 Phase 2 lands in two PRs: **2a** — least-in-flight selection + the resolve-with-intent refactor + the readiness signal; **2b** — the admission queue, backpressure, `429`/`529` semantics, and the async usage writer. G16 is verified through phase 1's surface: the queue-depth and shed counters light up in `/metrics` and `atlas top` under a beyond-capacity load test.
 
+Two phase-2 defaults are fixed here so they aren't re-litigated mid-build: per-replica admission concurrency **defaults to 4** (admission is on by default so G16 exercises the real backpressure path out of the box; `0` restores M1's forward-everything behavior per [ADR-0010](decisions/0010-load-balancing-and-backpressure.md) §5), and the async usage writer is **block-don't-drop** (its bounded buffer blocks the request goroutine briefly when full rather than dropping a billing row — usage stays complete under load, the only backpressure onto the hot path being load the admission queue is already shedding).
+
 **Phase 3 — engine breadth and version pinning.** Atlas wraps engines, it does not build them ([ADR-0001](decisions/0001-orchestrate-engines-not-build-one.md)); M0/M1 shipped llama.cpp (everywhere) and vLLM (NVIDIA). M2 adds two more, both OpenAI-compatible so both reuse `internal/engines/openaichat`:
 
 - **3a — MLX** (`mlx_lm.server`) makes Apple-Silicon Mac workers first-class. This is the higher-value addition: the M1 fleet demo already includes a Mac, but a Mac worker today can only run llama.cpp. MLX is provisioned as a managed `uv` venv in the state dir, the same pattern as vLLM.

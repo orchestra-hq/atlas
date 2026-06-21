@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	mrand "math/rand/v2"
 	"net/http"
 	"sort"
 	"strings"
@@ -103,11 +104,17 @@ type Model struct {
 // reconnects. resolve returns the name for usage attribution so a machine's
 // ledger totals don't fragment across the many connection ids it cycles through
 // over its lifetime (M2 phase 1; docs/follow-ups.md).
+// inflight is this instance's live request count, the key least-in-flight
+// selection ranks on (ADR-0010): incremented when a request is dispatched to this
+// route and decremented once it completes (every path — success, error, cancel).
+// It is a pointer so the counter survives a route value being replaced in place on
+// re-registration (RegisterInstance), which would otherwise zero a live count.
 type route struct {
 	workerID      string
 	workerName    string
 	exec          Executor
 	contextWindow int
+	inflight      *atomic.Int64
 }
 
 // localWorkerID tags the in-process models registered at construction (atlas up
@@ -127,15 +134,14 @@ type Gateway struct {
 	metrics   *Metrics      // Prometheus instrumentation (M2 phase 1; nil = off)
 
 	// mu guards the route table, which is static in single-node mode but changes
-	// as remote workers register and drop their models in fleet mode. resolve and
+	// as remote workers register and drop their models in fleet mode. route and
 	// the model handlers read it under RLock; RegisterInstance/UnregisterWorker
-	// mutate it under Lock. rr is a separate atomic so replica selection needs no
-	// write lock.
+	// mutate it under Lock. Replica selection ranks on each route's own atomic
+	// in-flight counter, so it needs only the RLock the read already holds.
 	mu      sync.RWMutex
 	routes  map[string][]route // canonical name -> live instances (one per worker connection)
 	aliases map[string]string  // alias -> canonical name
 	order   []string           // canonical names, first-seen order (listing); present iff ≥1 route
-	rr      atomic.Uint64      // round-robin cursor for selecting among a model's replicas
 }
 
 // NewGateway builds a gateway that authenticates requests with auth, serves each
@@ -196,55 +202,112 @@ func (g *Gateway) canonical(name string) string {
 	return name
 }
 
-// resolveOrStart resolves a model, auto-starting it if it has no live route and
-// auto-start is enabled (M1 phase 4b-2). On a hit it records activity (Touch) so
-// a steadily used auto-started model stays up; on a miss it asks the autostarter
-// to deploy and waits, then resolves again. A model that still does not resolve
-// (auto-start off, unknown model, or the wait timed out) returns false, and the
-// caller writes the not-found error.
-func (g *Gateway) resolveOrStart(ctx context.Context, name string) (Model, string, bool) {
-	if m, workerName, ok := g.resolve(name); ok {
-		if g.autostart != nil {
+// resolveIntent selects how route resolves a model name, folding the old
+// resolveOrStart-vs-resolve split into one explicit parameter so a new handler
+// cannot silently get auto-start or in-flight accounting wrong (the copy-paste
+// hazard the M2 phase-2 follow-up retired).
+//
+//   - forDispatch is the inference path: it auto-starts an unrouted catalog model
+//     and blocks until ready (M1 phase 4b-2), records activity (Touch), picks the
+//     least-in-flight replica (ADR-0010), and increments that instance's in-flight
+//     counter — returning a release the caller must invoke once the request
+//     completes to decrement it.
+//   - forMetadata is the read-only path (model listing, count_tokens): it never
+//     auto-starts and never touches the counters, returning a no-op release.
+type resolveIntent int
+
+const (
+	forMetadata resolveIntent = iota
+	forDispatch
+)
+
+// noopRelease is the release returned when nothing was counted (forMetadata, or a
+// failed resolve), so callers can defer it unconditionally.
+var noopRelease = func() {}
+
+// route resolves a requested model name (alias or canonical) to its Model, the
+// stable name of the worker chosen to serve it (for usage attribution), and a
+// release the caller invokes once the request completes. ok is false when the
+// model cannot be served (and release is the no-op). See resolveIntent for how the
+// two intents differ; the release decrements the chosen instance's in-flight
+// counter exactly once and is a no-op for forMetadata.
+func (g *Gateway) route(ctx context.Context, name string, intent resolveIntent) (Model, string, func(), bool) {
+	g.mu.RLock()
+	m, workerName, release, ok := g.pickLocked(name, intent)
+	g.mu.RUnlock()
+	if ok {
+		if intent == forDispatch && g.autostart != nil {
 			g.autostart.Touch(g.canonical(name))
 		}
-		return m, workerName, true
+		return m, workerName, release, true
 	}
-	if g.autostart == nil {
-		return Model{}, "", false
+	if intent != forDispatch || g.autostart == nil {
+		return Model{}, "", noopRelease, false
 	}
 	if !g.autostart.EnsureModel(ctx, g.canonical(name)) {
-		return Model{}, "", false
+		return Model{}, "", noopRelease, false
 	}
-	return g.resolve(name)
-}
-
-// resolve maps a requested model name (alias or canonical) to its Model and the
-// stable name of the worker chosen to serve it (for usage attribution).
-func (g *Gateway) resolve(name string) (Model, string, bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return g.resolveLocked(name)
+	return g.pickLocked(name, intent)
 }
 
-// resolveLocked is resolve without locking, for callers already holding mu. When
-// a model has several live instances (replicas across workers) it round-robins
-// across them, so load spreads over the fleet; the returned Model carries the
-// chosen instance's executor and the second result is that instance's stable
-// worker name (not its ephemeral connection id), so usage attribution survives
-// the worker's reconnects (M2 phase 1).
-func (g *Gateway) resolveLocked(name string) (Model, string, bool) {
+// pickLocked selects a live instance of name (resolving an alias first), for a
+// caller already holding mu. For forDispatch it picks the least-in-flight replica,
+// increments that instance's counter, and returns a single-shot release that
+// decrements it; for forMetadata it returns any live instance (replicas are
+// homogeneous, so any answers metadata) without touching the counters. The second
+// result is the chosen instance's stable worker name (not its ephemeral connection
+// id), so usage attribution survives the worker's reconnects (M2 phase 1).
+func (g *Gateway) pickLocked(name string, intent resolveIntent) (Model, string, func(), bool) {
 	if canon, ok := g.aliases[name]; ok {
 		name = canon
 	}
 	rs := g.routes[name]
 	if len(rs) == 0 {
-		return Model{}, "", false
+		return Model{}, "", noopRelease, false
 	}
 	r := rs[0]
-	if len(rs) > 1 {
-		r = rs[g.rr.Add(1)%uint64(len(rs))]
+	release := noopRelease
+	if intent == forDispatch {
+		if len(rs) > 1 {
+			r = leastInFlight(rs)
+		}
+		r.inflight.Add(1)
+		release = releaseOnce(r.inflight)
 	}
-	return Model{Name: name, Exec: r.exec, ContextWindow: r.contextWindow}, r.workerName, true
+	return Model{Name: name, Exec: r.exec, ContextWindow: r.contextWindow}, r.workerName, release, true
+}
+
+// leastInFlight returns the route with the fewest live in-flight requests, ties
+// broken uniformly at random (reservoir sampling over the running minimum). rs
+// must be non-empty. Each counter is read once; a concurrent change between reads
+// is acceptable — selection is best-effort load spreading and self-corrects on the
+// next request (ADR-0010).
+func leastInFlight(rs []route) route {
+	best := rs[0]
+	bestN := best.inflight.Load()
+	ties := 1
+	for i := 1; i < len(rs); i++ {
+		switch n := rs[i].inflight.Load(); {
+		case n < bestN:
+			best, bestN, ties = rs[i], n, 1
+		case n == bestN:
+			ties++
+			if mrand.IntN(ties) == 0 {
+				best = rs[i]
+			}
+		}
+	}
+	return best
+}
+
+// releaseOnce returns a function that decrements c exactly once however many times
+// it is called, so a caller can defer it without double-counting on overlapping
+// completion paths (e.g. an error return that also runs a deferred cleanup).
+func releaseOnce(c *atomic.Int64) func() {
+	var once sync.Once
+	return func() { once.Do(func() { c.Add(-1) }) }
 }
 
 // RegisterInstance adds one live instance of a model, owned by the given worker
@@ -264,15 +327,18 @@ func (g *Gateway) RegisterInstance(workerID, workerName string, m Model) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	rs := g.routes[m.Name]
-	next := route{workerID: workerID, workerName: workerName, exec: m.Exec, contextWindow: m.ContextWindow}
+	next := route{workerID: workerID, workerName: workerName, exec: m.Exec, contextWindow: m.ContextWindow, inflight: new(atomic.Int64)}
 	// One route per (worker connection, model): a re-registration of the same pair
 	// replaces in place rather than appending a duplicate — e.g. a worker re-emits
 	// model_ready for a model it already serves. Duplicates would double-weight
-	// that connection in resolveLocked's round-robin and inflate replica counts,
-	// and UnregisterWorker removes all of a worker's routes at once, so they would
-	// only self-heal on disconnect.
+	// that connection in replica selection and inflate replica counts, and
+	// UnregisterWorker removes all of a worker's routes at once, so they would only
+	// self-heal on disconnect.
 	for i, r := range rs {
 		if r.workerID == workerID {
+			// Preserve the live in-flight counter across the re-emit: a request may be
+			// in flight on this instance right now, and a fresh counter would lose it.
+			next.inflight = r.inflight
 			rs[i] = next
 			return
 		}
@@ -417,11 +483,15 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	model, workerName, ok := g.resolveOrStart(r.Context(), coreReq.Model)
+	model, workerName, release, ok := g.route(r.Context(), coreReq.Model, forDispatch)
 	if !ok {
 		writeModelNotFound(w, coreReq.Model)
 		return
 	}
+	// Hold the instance's in-flight slot until the request completes — every return
+	// below runs this, so a failed assertion, an Execute error, and a finished
+	// stream all decrement the counter least-in-flight selection ranks on.
+	defer release()
 
 	// Assert the prompt fits the model's window before dispatch, so an oversized
 	// request fails with a clean 400 rather than a garbled engine overflow
@@ -537,7 +607,7 @@ func (g *Gateway) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	model, _, ok := g.resolve(coreReq.Model)
+	model, _, _, ok := g.route(r.Context(), coreReq.Model, forMetadata)
 	if !ok {
 		writeModelNotFound(w, coreReq.Model)
 		return
@@ -596,7 +666,7 @@ func (g *Gateway) handleGetModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := r.PathValue("id")
-	if _, _, ok := g.resolve(id); !ok {
+	if _, _, _, ok := g.route(r.Context(), id, forMetadata); !ok {
 		writeModelNotFound(w, id)
 		return
 	}
@@ -615,7 +685,7 @@ func (g *Gateway) modelInfo(id string) anthropic.ModelInfo {
 
 // modelInfoLocked is modelInfo without locking, for callers already holding mu.
 func (g *Gateway) modelInfoLocked(id string) anthropic.ModelInfo {
-	model, _, _ := g.resolveLocked(id)
+	model, _, _, _ := g.pickLocked(id, forMetadata)
 	return anthropic.NewModelInfo(id, model.Name, g.createdAt, model.ContextWindow)
 }
 

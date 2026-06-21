@@ -131,12 +131,13 @@ func TestEnsureModel_reconcilesUnroutedDeployment(t *testing.T) {
 // TestEnsureModel_keepsDeploymentAliveWhileWaiting covers a review finding: while a
 // request is actively waiting for an auto-started model to come online, the idle
 // reaper must not unload it out from under the waiter — even when the cold boot
-// outlasts the idle timeout. EnsureModel refreshes the idle clock each poll.
+// outlasts the idle timeout. EnsureModel registers as a waiter, and the reaper
+// skips any deployment with an active waiter.
 func TestEnsureModel_keepsDeploymentAliveWhileWaiting(t *testing.T) {
 	cmd := newFakeCommander()
 	s := newTestScheduler(t, cmd)
-	// Idle timeout (200ms) comfortably exceeds the 50ms poll but is far shorter
-	// than the simulated boot below, so only the in-wait Touch keeps it alive.
+	// Idle timeout (200ms) is far shorter than the simulated boot below, so only the
+	// waiter registration keeps the deployment alive across the sweeps.
 	s.SetLifecycle(2*time.Second, 200*time.Millisecond)
 	s.WorkerJoined(WorkerSnapshot{ID: "a", Engine: "llamacpp", Hardware: ramWorker(16)})
 

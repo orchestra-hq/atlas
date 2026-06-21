@@ -47,11 +47,14 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	model, workerName, ok := g.resolveOrStart(r.Context(), coreReq.Model)
+	model, workerName, release, ok := g.route(r.Context(), coreReq.Model, forDispatch)
 	if !ok {
 		writeOpenAIModelNotFound(w, coreReq.Model)
 		return
 	}
+	// Hold the instance's in-flight slot until the request completes (every return
+	// below runs it), so least-in-flight selection sees an accurate count.
+	defer release()
 
 	promptTokens, err := g.assertContextFits(r.Context(), model, coreReq)
 	if err != nil {
