@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 )
 
@@ -32,31 +31,11 @@ func (p *Provisioner) EnsureMLX(ctx context.Context, goos, goarch string) (strin
 	if goos != "darwin" || goarch != "arm64" {
 		return "", fmt.Errorf("runtime: MLX requires Apple Silicon (darwin/arm64); this host is %s/%s", goos, goarch)
 	}
-	dest := filepath.Join(p.Dir, "mlx", MLXVersion)
-	venv := filepath.Join(dest, "venv")
-	binPath := filepath.Join(venv, "bin", "python")
-	if _, err := os.Stat(binPath); err == nil {
-		return binPath, nil
-	}
-
-	uv, err := p.EnsureUv(ctx, goos, goarch)
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return "", fmt.Errorf("runtime: create mlx dir: %w", err)
-	}
-
-	// Create the venv, then install pinned mlx-lm into it. uv resolves and caches
-	// wheels in the state dir; no host Python is touched.
-	if err := p.runCmd(ctx, uv, "venv", venv, "--python", mlxPython); err != nil {
-		return "", err
-	}
-	if err := p.runCmd(ctx, uv, "pip", "install", "--python", venv, "mlx-lm=="+MLXVersion); err != nil {
-		return "", err
-	}
-	if _, err := os.Stat(binPath); err != nil {
-		return "", fmt.Errorf("runtime: mlx venv python missing after install (expected %s)", binPath)
-	}
-	return binPath, nil
+	return p.ensureVenv(ctx, goos, goarch, venvRuntime{
+		engine:     "mlx",
+		version:    MLXVersion,
+		python:     mlxPython,
+		pkg:        "mlx-lm==" + MLXVersion,
+		entrypoint: filepath.Join("venv", "bin", "python"),
+	})
 }

@@ -68,31 +68,11 @@ func (p *Provisioner) EnsureUv(ctx context.Context, goos, goarch string) (string
 // path runs on GPU hosts; the unit tests exercise the orchestration with a fake
 // runner rather than installing vLLM.
 func (p *Provisioner) EnsureVLLM(ctx context.Context, goos, goarch string) (string, error) {
-	dest := filepath.Join(p.Dir, "vllm", VLLMVersion)
-	venv := filepath.Join(dest, "venv")
-	binPath := filepath.Join(venv, "bin", "vllm")
-	if _, err := os.Stat(binPath); err == nil {
-		return binPath, nil
-	}
-
-	uv, err := p.EnsureUv(ctx, goos, goarch)
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return "", fmt.Errorf("runtime: create vllm dir: %w", err)
-	}
-
-	// Create the venv, then install the pinned vLLM into it. uv resolves and
-	// caches wheels in the state dir; no host Python is touched.
-	if err := p.runCmd(ctx, uv, "venv", venv, "--python", vllmPython); err != nil {
-		return "", err
-	}
-	if err := p.runCmd(ctx, uv, "pip", "install", "--python", venv, "vllm=="+VLLMVersion); err != nil {
-		return "", err
-	}
-	if _, err := os.Stat(binPath); err != nil {
-		return "", fmt.Errorf("runtime: vllm entrypoint missing after install (expected %s)", binPath)
-	}
-	return binPath, nil
+	return p.ensureVenv(ctx, goos, goarch, venvRuntime{
+		engine:     "vllm",
+		version:    VLLMVersion,
+		python:     vllmPython,
+		pkg:        "vllm==" + VLLMVersion,
+		entrypoint: filepath.Join("venv", "bin", "vllm"),
+	})
 }
