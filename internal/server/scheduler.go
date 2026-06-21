@@ -75,6 +75,14 @@ type Scheduler struct {
 	mu          sync.Mutex
 	workers     map[string]*schedWorker
 	deployments map[string]*deployment // model -> desired state
+
+	// placementChanged is closed (and replaced) every time a load resolves —
+	// ModelReady or LoadFailed — to wake EnsureModel waiters so they re-check
+	// placement on an event instead of busy-polling. A close-and-replace broadcast
+	// (rather than a per-model channel map) keeps the signalling trivial: a waiter
+	// captures the current channel before checking state, so it cannot miss a
+	// change that races its check. Guarded by mu.
+	placementChanged chan struct{}
 }
 
 // deployment is the scheduler's desired state for one model. auto marks a
@@ -85,6 +93,12 @@ type deployment struct {
 	replicas int
 	auto     bool
 	lastUsed time.Time
+	// waiters is the number of EnsureModel calls currently blocked waiting for this
+	// model to come online. The reaper skips a deployment with waiters > 0, so a
+	// cold boot that outlasts the idle timeout is never unloaded out from under the
+	// request waiting on it — this replaces the old per-poll idle-clock refresh,
+	// which the event-driven wait (sparse wakes) can no longer rely on.
+	waiters int
 }
 
 // schedWorker is the scheduler's accounting for one connected worker.
@@ -107,11 +121,12 @@ func NewScheduler(cmd Commander, cat *catalog.Catalog, log *slog.Logger) *Schedu
 		log = slog.Default()
 	}
 	s := &Scheduler{
-		cmd:         cmd,
-		cat:         cat,
-		log:         log,
-		workers:     make(map[string]*schedWorker),
-		deployments: make(map[string]*deployment),
+		cmd:              cmd,
+		cat:              cat,
+		log:              log,
+		workers:          make(map[string]*schedWorker),
+		deployments:      make(map[string]*deployment),
+		placementChanged: make(chan struct{}),
 	}
 	s.SetLifecycle(defaultAutostartTimeout, defaultIdleTimeout)
 	return s
@@ -228,8 +243,18 @@ func (s *Scheduler) ModelReady(workerID, model string, _ int) {
 		delete(w.pending, model)
 		w.loaded[model] = true
 	}
+	s.signalPlacementLocked()
 	s.mu.Unlock()
 	s.reconcile(model)
+}
+
+// signalPlacementLocked wakes every EnsureModel waiter by closing the current
+// broadcast channel and installing a fresh one, so a waiter re-checks placement on
+// a load event instead of busy-polling. The caller holds mu; close is non-blocking,
+// so signalling under the lock cannot stall the load callbacks that hold it.
+func (s *Scheduler) signalPlacementLocked() {
+	close(s.placementChanged)
+	s.placementChanged = make(chan struct{})
 }
 
 // ModelUnloaded clears a model from a worker's state. No reconcile-up: an unload
@@ -252,6 +277,7 @@ func (s *Scheduler) LoadFailed(workerID, model, reason string) {
 		delete(w.pending, model)
 		w.failed[model] = true
 	}
+	s.signalPlacementLocked()
 	s.mu.Unlock()
 	s.reconcile(model)
 }
@@ -338,10 +364,21 @@ func (s *Scheduler) EnsureModel(ctx context.Context, model string) bool {
 	if deployed {
 		d.lastUsed = time.Now()
 	} else {
-		s.deployments[model] = &deployment{replicas: 1, auto: true, lastUsed: time.Now()}
+		d = &deployment{replicas: 1, auto: true, lastUsed: time.Now()}
+		s.deployments[model] = d
 		s.log.Info("auto-start: deploying model on first request", "model", model)
 	}
+	// Register as a waiter so the reaper leaves this deployment alone for the whole
+	// wait, then release on exit with a fresh idle clock so it gets a full idle
+	// window before it can be reaped.
+	d.waiters++
 	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		d.waiters--
+		d.lastUsed = time.Now()
+		s.mu.Unlock()
+	}()
 	// Reconcile whether the deployment is new or pre-existing: a deployment that
 	// lost its only replica (a failed or evicted load) is under-replicated, so a
 	// request for it must drive a fresh placement rather than poll a model nothing
@@ -350,10 +387,20 @@ func (s *Scheduler) EnsureModel(ctx context.Context, model string) bool {
 
 	ctx, cancel := context.WithTimeout(ctx, s.autostartTimeout)
 	defer cancel()
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
+	// fallback bounds how long a waiter sleeps if a placement signal is somehow
+	// missed, so a dropped wake degrades to a slow re-check rather than hanging to
+	// the full autostart timeout. The common case is woken by signalPlacementLocked.
+	const fallback = time.Second
+	timer := time.NewTimer(fallback)
+	defer timer.Stop()
 	for {
-		ready, pending, placeable := s.placementState(model, entry.Engine)
+		// Capture the broadcast channel under the same lock as the state read, so a
+		// signal that fires between the check and the wait cannot be missed (the
+		// closed channel we captured returns immediately from the select).
+		s.mu.Lock()
+		ready, pending, placeable := s.placementStateLocked(model, entry.Engine)
+		changed := s.placementChanged
+		s.mu.Unlock()
 		switch {
 		case ready:
 			return true
@@ -362,27 +409,32 @@ func (s *Scheduler) EnsureModel(ctx context.Context, model string) bool {
 			// block the request for the full timeout on an unsatisfiable placement.
 			return false
 		}
-		// A load is in flight (or a worker can still take it): keep this
-		// deployment's idle clock fresh so the reaper does not unload it out from
-		// under a request that is actively waiting on it (a cold boot can outlast
-		// the idle timeout).
-		s.Touch(model)
+		// A load is in flight (or a worker can still take it): wait for the next
+		// placement event. The waiter count registered above already keeps the
+		// reaper off this deployment, so no per-poll idle-clock refresh is needed.
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(fallback)
 		select {
 		case <-ctx.Done():
 			return false
-		case <-ticker.C:
+		case <-changed:
+		case <-timer.C:
 		}
 	}
 }
 
-// placementState reports, for one model, whether some worker has it loaded
+// placementStateLocked reports, for one model, whether some worker has it loaded
 // (ready), has a load in flight (pending), and whether any further worker could
-// still accept it (placeable) — the fit check reconcile uses. EnsureModel polls
-// it: ready ends the wait, while !pending && !placeable means giving up.
-func (s *Scheduler) placementState(model, engine string) (ready, pending, placeable bool) {
+// still accept it (placeable) — the fit check reconcile uses. EnsureModel reads it
+// under the lock alongside the placement-change channel: ready ends the wait, while
+// !pending && !placeable means giving up. The caller holds s.mu.
+func (s *Scheduler) placementStateLocked(model, engine string) (ready, pending, placeable bool) {
 	est := s.estimate(model)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, w := range s.workers {
 		if w.loaded[model] {
 			ready = true
@@ -446,18 +498,19 @@ func (s *Scheduler) Run(ctx context.Context) {
 }
 
 // reapIdle stops every auto-started deployment whose last request is older than
-// the idle timeout. Operator deployments (auto == false) are never reaped. The
-// staleness check and the delete happen under one lock hold — guarding the same
-// lastUsed/auto fields that Touch, Deploy, and Scale mutate — so a request that
-// touches a model, or an operator that takes ownership of it, in the same instant
-// is not clobbered by a stop decided a moment earlier (the unload runs only for
-// deployments actually removed here).
+// the idle timeout and that has no waiter actively blocked on it. Operator
+// deployments (auto == false) are never reaped. The staleness check and the delete
+// happen under one lock hold — guarding the same lastUsed/auto/waiters fields that
+// Touch, EnsureModel, Deploy, and Scale mutate — so a request that touches a model,
+// starts waiting on it, or an operator that takes ownership of it, in the same
+// instant is not clobbered by a stop decided a moment earlier (the unload runs only
+// for deployments actually removed here).
 func (s *Scheduler) reapIdle() {
 	now := time.Now()
 	s.mu.Lock()
 	var stale []string
 	for model, d := range s.deployments {
-		if d.auto && now.Sub(d.lastUsed) > s.idleTimeout {
+		if d.auto && d.waiters == 0 && now.Sub(d.lastUsed) > s.idleTimeout {
 			delete(s.deployments, model)
 			stale = append(stale, model)
 		}
