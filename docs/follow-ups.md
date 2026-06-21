@@ -18,12 +18,6 @@ Scope rules:
 
 ## TLS / transport security
 
-### Admin CLI cannot pin a self-signed / private cert
-
-**Suggested:** [M2 phase 1](m2-build-plan.md) (the CLI inspection tool must reach a self-signed-TLS gateway). **Surfaced:** post-phases-6–7 review.
-
-`atlas worker` has full `--tls-pin` plumbing, but the admin clients (`atlas deploy`/`scale`/`stop`/`workers`, all using `http.DefaultClient` in `internal/cli/deploy.go` and `internal/cli/workers.go`) validate against the system trust store with no pin or insecure option. So the `https://` deploy command the `--tls-self-signed` banner prints fails with `x509: certificate signed by unknown authority` unless the operator installs the cert into the OS trust store. The server banner currently states this caveat explicitly. The real fix: a shared `--tls-pin` (+ `ATLAS_TLS_PIN`) flag and a pinned `*http.Client` (reusing `tlsx.PinnedVerifier`) across the ~6 admin call sites.
-
 ### Self-signed cert cache ignores changed `--tls` hosts
 
 **Suggested:** M5 (packaging & deployment — bites on real public deploys). **Surfaced:** post-phases-6–7 review.
