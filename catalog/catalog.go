@@ -24,7 +24,7 @@ var starterYAML []byte
 var nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
 var (
-	validEngines = map[string]bool{"llamacpp": true, "vllm": true, "mlx": true}
+	validEngines = map[string]bool{"llamacpp": true, "vllm": true, "mlx": true, "sglang": true}
 	validTiers   = map[string]bool{"haiku": true, "sonnet": true, "opus": true}
 	validSources = map[string]bool{"gguf": true, "hf": true}
 	sha256RE     = regexp.MustCompile(`^[a-f0-9]{64}$`)

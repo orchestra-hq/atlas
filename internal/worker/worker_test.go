@@ -153,6 +153,30 @@ func TestEngineSetupArgs(t *testing.T) {
 		}
 	})
 
+	t.Run("sglang", func(t *testing.T) {
+		cfg := base
+		cfg.Engine = EngineSGLang
+		cfg.Model = "qwen3-8b-sglang" // logical served name (SGLang uses --served-model-name)
+		cfg.ModelArgs = []string{"Qwen/Qwen3-8B"}
+		args, adapter, err := engineSetup(cfg)
+		if err != nil {
+			t.Fatalf("engineSetup: %v", err)
+		}
+		// `<python> -m sglang.launch_server --model-path <repo> --host H --port P [extra]`.
+		want := []string{"-m", "sglang.launch_server", "--model-path", "Qwen/Qwen3-8B", "--host", "127.0.0.1", "--port", "8000", "--flag"}
+		if !reflect.DeepEqual(args, want) {
+			t.Errorf("args = %v, want %v", args, want)
+		}
+		// SGLang answers to the logical name, so the adapter echoes cfg.Model.
+		named, ok := adapter.(interface{ Model() string })
+		if !ok {
+			t.Fatal("sglang adapter does not expose Model()")
+		}
+		if got := named.Model(); got != "qwen3-8b-sglang" {
+			t.Errorf("adapter model = %q, want the logical served name", got)
+		}
+	})
+
 	t.Run("unknown", func(t *testing.T) {
 		cfg := base
 		cfg.Engine = Engine("nonesuch")

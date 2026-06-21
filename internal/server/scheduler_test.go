@@ -158,6 +158,28 @@ func TestScheduler_gpuModelRequiresGpuWorker(t *testing.T) {
 	}
 }
 
+// TestScheduler_sglangModelRequiresGpuWorker mirrors the vLLM gate for SGLang: a
+// CUDA engine, kept off a CPU worker and placed only on a matching GPU worker.
+func TestScheduler_sglangModelRequiresGpuWorker(t *testing.T) {
+	const sglangModel = "qwen3-8b-sglang" // sglang catalog entry, needs a GPU
+	cmd := newFakeCommander()
+	s := newTestScheduler(t, cmd)
+	s.WorkerJoined(WorkerSnapshot{ID: "cpu", Engine: "llamacpp", Hardware: ramWorker(64)})
+
+	if err := s.Deploy(sglangModel, 1, ""); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	if got := cmd.loadTargets(sglangModel); len(got) != 0 {
+		t.Fatalf("load targets = %v, want none on a CPU/llamacpp worker", got)
+	}
+
+	// A matching SGLang GPU worker joining triggers placement.
+	s.WorkerJoined(WorkerSnapshot{ID: "gpu", Engine: "sglang", Hardware: gpuWorker(80)})
+	if got := cmd.loadTargets(sglangModel); len(got) != 1 || got[0] != "gpu" {
+		t.Errorf("load targets = %v, want [gpu]", got)
+	}
+}
+
 // TestScheduler_rePlacesOnWorkerLeave re-loads a deployment's replica onto
 // another worker when the one serving it disconnects.
 func TestScheduler_rePlacesOnWorkerLeave(t *testing.T) {

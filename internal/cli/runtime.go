@@ -52,7 +52,7 @@ func newRuntimeProvisionCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&engineFlag, "engine", string(worker.EngineLlamaCpp), "engine to provision (llamacpp, vllm, or mlx)")
+	cmd.Flags().StringVar(&engineFlag, "engine", string(worker.EngineLlamaCpp), "engine to provision (llamacpp, vllm, mlx, or sglang)")
 	cmd.Flags().StringVar(&stateDir, "state-dir", defaultStateDir(), "directory for runtimes, weights, and logs")
 	return cmd
 }

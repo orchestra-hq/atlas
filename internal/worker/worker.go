@@ -15,6 +15,7 @@ import (
 	"github.com/orchestra-hq/atlas/internal/core"
 	"github.com/orchestra-hq/atlas/internal/engines/llamacpp"
 	"github.com/orchestra-hq/atlas/internal/engines/mlx"
+	"github.com/orchestra-hq/atlas/internal/engines/sglang"
 	"github.com/orchestra-hq/atlas/internal/engines/vllm"
 )
 
@@ -29,6 +30,7 @@ const (
 	EngineLlamaCpp Engine = "llamacpp"
 	EngineVLLM     Engine = "vllm"
 	EngineMLX      Engine = "mlx"
+	EngineSGLang   Engine = "sglang"
 )
 
 // engineAdapter is the gateway-facing capability set both adapters provide.
@@ -192,6 +194,16 @@ func engineSetup(cfg Config) (args []string, adapter engineAdapter, err error) {
 		args = append(args, "--host", cfg.Host, "--port", port)
 		args = append(args, cfg.ExtraArgs...)
 		return args, mlx.New(baseURL, engineModel, cfg.ContextWindow, &http.Client{}), nil
+	case EngineSGLang:
+		// `<python> -m sglang.launch_server --model-path <repo> --host H --port P
+		// [extra]`: BinPath is the venv python (sglang ships the server as a module).
+		// SGLang accepts --served-model-name (added in resolve.go), so it answers to
+		// the logical name and the adapter echoes cfg.Model — like vLLM, unlike MLX.
+		args = []string{"-m", "sglang.launch_server", "--model-path"}
+		args = append(args, cfg.ModelArgs...)
+		args = append(args, "--host", cfg.Host, "--port", port)
+		args = append(args, cfg.ExtraArgs...)
+		return args, sglang.New(baseURL, cfg.Model, &http.Client{}), nil
 	default:
 		return nil, nil, fmt.Errorf("worker: unknown engine %q", cfg.Engine)
 	}
