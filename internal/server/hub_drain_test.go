@@ -30,7 +30,7 @@ func newDrainRegistry() *drainRegistry {
 	return &drainRegistry{models: map[string]Model{}, owner: map[string]string{}}
 }
 
-func (r *drainRegistry) RegisterInstance(workerID string, m Model) {
+func (r *drainRegistry) RegisterInstance(workerID, _ string, m Model) {
 	r.mu.Lock()
 	r.models[m.Name] = m
 	r.owner[m.Name] = workerID

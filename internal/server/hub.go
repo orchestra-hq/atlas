@@ -31,7 +31,7 @@ var heartbeatTimeout = 30 * time.Second
 // routable as long as any worker still serves it (connection-identified routing,
 // M1 phase 4).
 type ModelRegistry interface {
-	RegisterInstance(workerID string, m Model)
+	RegisterInstance(workerID, workerName string, m Model)
 	UnregisterInstance(workerID, name string)
 	UnregisterWorker(workerID string)
 }
@@ -187,7 +187,7 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 	// routes, so a reconnecting worker or a second worker serving the same model
 	// never loses a live route.
 	for _, sm := range join.Models {
-		h.registerInstance(wid, Model{Name: sm.Name, Exec: rw, ContextWindow: sm.ContextWindow})
+		h.registerInstance(wid, join.Name, Model{Name: sm.Name, Exec: rw, ContextWindow: sm.ContextWindow})
 	}
 	defer h.unregisterWorker(hw)
 
@@ -251,7 +251,7 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 			if draining {
 				continue
 			}
-			h.registerInstance(wid, Model{Name: p.Model, Exec: rw, ContextWindow: p.ContextWindow})
+			h.registerInstance(wid, hw.info.Name, Model{Name: p.Model, Exec: rw, ContextWindow: p.ContextWindow})
 			h.addWorkerModel(wid, p.Model)
 			if h.sched != nil {
 				h.sched.ModelReady(wid, p.Model, p.ContextWindow)
@@ -283,10 +283,11 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 }
 
 // registerInstance adds one served-model instance to the gateway, tagged with
-// the worker connection's id, if a registry is set.
-func (h *Hub) registerInstance(workerID string, m Model) {
+// the worker connection's id (the routing/teardown key) and the worker's stable
+// name (the usage-attribution identity), if a registry is set.
+func (h *Hub) registerInstance(workerID, workerName string, m Model) {
 	if h.registry != nil {
-		h.registry.RegisterInstance(workerID, m)
+		h.registry.RegisterInstance(workerID, workerName, m)
 	}
 }
 

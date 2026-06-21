@@ -97,8 +97,15 @@ type Model struct {
 // reconnecting worker briefly overlapping its old connection. contextWindow is
 // the instance's window; replicas of a model are assumed homogeneous, so any
 // instance answers metadata.
+//
+// workerID is the ephemeral per-connection id (the routing and teardown key);
+// workerName is the worker's stable operator-supplied --name, which survives
+// reconnects. resolve returns the name for usage attribution so a machine's
+// ledger totals don't fragment across the many connection ids it cycles through
+// over its lifetime (M2 phase 1; docs/follow-ups.md).
 type route struct {
 	workerID      string
+	workerName    string
 	exec          Executor
 	contextWindow int
 }
@@ -147,9 +154,10 @@ func NewGateway(auth Authenticator, models []Model, aliases map[string]string) *
 		createdAt: time.Now().UTC().Format(time.RFC3339),
 		logger:    slog.Default(),
 	}
-	// Initial single-node models never disconnect, so they share a fixed worker id.
+	// Initial single-node models never disconnect, so they share a fixed worker id
+	// and name (both "local").
 	for _, m := range models {
-		g.RegisterInstance(localWorkerID, m)
+		g.RegisterInstance(localWorkerID, localWorkerID, m)
 	}
 	return g
 }
@@ -189,11 +197,11 @@ func (g *Gateway) canonical(name string) string {
 // (auto-start off, unknown model, or the wait timed out) returns false, and the
 // caller writes the not-found error.
 func (g *Gateway) resolveOrStart(ctx context.Context, name string) (Model, string, bool) {
-	if m, worker, ok := g.resolve(name); ok {
+	if m, workerName, ok := g.resolve(name); ok {
 		if g.autostart != nil {
 			g.autostart.Touch(g.canonical(name))
 		}
-		return m, worker, true
+		return m, workerName, true
 	}
 	if g.autostart == nil {
 		return Model{}, "", false
@@ -205,7 +213,7 @@ func (g *Gateway) resolveOrStart(ctx context.Context, name string) (Model, strin
 }
 
 // resolve maps a requested model name (alias or canonical) to its Model and the
-// id of the worker connection chosen to serve it (for usage attribution).
+// stable name of the worker chosen to serve it (for usage attribution).
 func (g *Gateway) resolve(name string) (Model, string, bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
@@ -215,7 +223,9 @@ func (g *Gateway) resolve(name string) (Model, string, bool) {
 // resolveLocked is resolve without locking, for callers already holding mu. When
 // a model has several live instances (replicas across workers) it round-robins
 // across them, so load spreads over the fleet; the returned Model carries the
-// chosen instance's executor and the second result is that instance's worker id.
+// chosen instance's executor and the second result is that instance's stable
+// worker name (not its ephemeral connection id), so usage attribution survives
+// the worker's reconnects (M2 phase 1).
 func (g *Gateway) resolveLocked(name string) (Model, string, bool) {
 	if canon, ok := g.aliases[name]; ok {
 		name = canon
@@ -228,7 +238,7 @@ func (g *Gateway) resolveLocked(name string) (Model, string, bool) {
 	if len(rs) > 1 {
 		r = rs[g.rr.Add(1)%uint64(len(rs))]
 	}
-	return Model{Name: name, Exec: r.exec, ContextWindow: r.contextWindow}, r.workerID, true
+	return Model{Name: name, Exec: r.exec, ContextWindow: r.contextWindow}, r.workerName, true
 }
 
 // RegisterInstance adds one live instance of a model, owned by the given worker
@@ -240,11 +250,15 @@ func (g *Gateway) resolveLocked(name string) (Model, string, bool) {
 // is live. Routes are connection-identified so one worker's teardown
 // (UnregisterWorker) removes only its own instances, never a route a different
 // live connection installed (M1 phase 4).
-func (g *Gateway) RegisterInstance(workerID string, m Model) {
+//
+// workerID is the ephemeral connection id (the routing/teardown key); workerName
+// is the worker's stable --name, recorded on the route so usage attribution can
+// group by a name that survives reconnects (M2 phase 1).
+func (g *Gateway) RegisterInstance(workerID, workerName string, m Model) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	rs := g.routes[m.Name]
-	next := route{workerID: workerID, exec: m.Exec, contextWindow: m.ContextWindow}
+	next := route{workerID: workerID, workerName: workerName, exec: m.Exec, contextWindow: m.ContextWindow}
 	// One route per (worker connection, model): a re-registration of the same pair
 	// replaces in place rather than appending a duplicate — e.g. a worker re-emits
 	// model_ready for a model it already serves. Duplicates would double-weight
@@ -397,7 +411,7 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	model, worker, ok := g.resolveOrStart(r.Context(), coreReq.Model)
+	model, workerName, ok := g.resolveOrStart(r.Context(), coreReq.Model)
 	if !ok {
 		writeModelNotFound(w, coreReq.Model)
 		return
@@ -425,7 +439,7 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 	dispatch := coreReq
 	dispatch.Model = model.Name
 
-	tags := usageTags{keyID: id.KeyID, workerID: worker, model: model.Name, inputTokens: promptTokens}
+	tags := usageTags{keyID: id.KeyID, workerID: workerName, model: model.Name, inputTokens: promptTokens}
 
 	if req.Stream {
 		g.streamMessages(w, r, model.Exec, dispatch, requested, stops, tags)

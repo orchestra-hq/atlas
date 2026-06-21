@@ -240,6 +240,60 @@ func TestUsageRecordsCanonicalModelName(t *testing.T) {
 	}
 }
 
+// TestUsageAttributedToStableWorkerName is the unit-level M2-phase-1 worker
+// identity case: usage is billed to the worker's stable --name, not the ephemeral
+// per-connection id, and that attribution survives a reconnect (a fresh
+// connection id for the same machine). Otherwise `atlas usage --by-worker` would
+// fragment one machine's totals across every connection id it ever held
+// (docs/follow-ups.md).
+func TestUsageAttributedToStableWorkerName(t *testing.T) {
+	rec := &recordingUsage{}
+	g := NewGateway(staticAuth(testKey), nil, nil)
+	g.SetUsageRecorder(rec)
+	srv := httptest.NewServer(g.Handler())
+	t.Cleanup(srv.Close)
+
+	// First connection: the machine "gpu-box" joins under connection id "w_conn1".
+	g.RegisterInstance("w_conn1", "gpu-box", Model{Name: testModel, Exec: &echoExecutor{reply: "hi", outToken: 4}, ContextWindow: 4096})
+
+	resp, _ := post(t, srv, testKey, `{"model":"test-model","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	got := rec.waitForRecord(t)
+	if got[0].WorkerID != "gpu-box" {
+		t.Errorf("usage attributed to %q, want the stable worker name %q (not the connection id)", got[0].WorkerID, "gpu-box")
+	}
+
+	// The machine reconnects: its old connection tears down and it rejoins under a
+	// fresh connection id "w_conn2" with the same name.
+	g.UnregisterWorker("w_conn1")
+	g.RegisterInstance("w_conn2", "gpu-box", Model{Name: testModel, Exec: &echoExecutor{reply: "hi", outToken: 4}, ContextWindow: 4096})
+
+	resp, _ = post(t, srv, testKey, `{"model":"test-model","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status after reconnect = %d", resp.StatusCode)
+	}
+	// Both requests must attribute to the same stable name despite the new
+	// connection id — no fragmentation across reconnects.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		records := rec.snapshot()
+		if len(records) >= 2 {
+			for _, r := range records {
+				if r.WorkerID != "gpu-box" {
+					t.Errorf("usage attributed to %q across reconnect, want %q for every record", r.WorkerID, "gpu-box")
+				}
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("got %d usage records after timeout, want 2 (one per request)", len(records))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestEstimateTokens(t *testing.T) {
 	cases := []struct {
 		bytes int

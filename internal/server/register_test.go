@@ -59,7 +59,7 @@ func TestRegisterUnregisterModel(t *testing.T) {
 		t.Errorf("models with none registered = %v, want empty", ids)
 	}
 
-	g.RegisterInstance("w1", Model{Name: "remote-a", Exec: &echoExecutor{reply: "hi"}, ContextWindow: 4096})
+	g.RegisterInstance("w1", "w1", Model{Name: "remote-a", Exec: &echoExecutor{reply: "hi"}, ContextWindow: 4096})
 
 	if got := readyStatus(t, srv); got != http.StatusOK {
 		t.Errorf("readyz after register = %d, want 200", got)
@@ -74,7 +74,7 @@ func TestRegisterUnregisterModel(t *testing.T) {
 	}
 
 	// A second worker serving the same name adds a replica, not a second listing entry.
-	g.RegisterInstance("w2", Model{Name: "remote-a", Exec: &echoExecutor{reply: "hi"}, ContextWindow: 4096})
+	g.RegisterInstance("w2", "w2", Model{Name: "remote-a", Exec: &echoExecutor{reply: "hi"}, ContextWindow: 4096})
 	if ids := modelIDs(t, srv); len(ids) != 1 {
 		t.Errorf("models after second instance = %v, want one entry", ids)
 	}
@@ -105,8 +105,8 @@ func TestRegisterUnregisterModel(t *testing.T) {
 func TestRegisterInstance_replacesSameWorkerModelInPlace(t *testing.T) {
 	g := NewGateway(staticAuth(testKey), nil, nil)
 
-	g.RegisterInstance("w1", Model{Name: "m", Exec: &echoExecutor{reply: "v1"}, ContextWindow: 100})
-	g.RegisterInstance("w1", Model{Name: "m", Exec: &echoExecutor{reply: "v2"}, ContextWindow: 200})
+	g.RegisterInstance("w1", "w1", Model{Name: "m", Exec: &echoExecutor{reply: "v1"}, ContextWindow: 100})
+	g.RegisterInstance("w1", "w1", Model{Name: "m", Exec: &echoExecutor{reply: "v2"}, ContextWindow: 200})
 
 	g.mu.RLock()
 	rs := g.routes["m"]
@@ -118,7 +118,7 @@ func TestRegisterInstance_replacesSameWorkerModelInPlace(t *testing.T) {
 		t.Errorf("contextWindow = %d, want 200 (the latest registration wins)", rs[0].contextWindow)
 	}
 
-	g.RegisterInstance("w2", Model{Name: "m", Exec: &echoExecutor{reply: "v3"}, ContextWindow: 200})
+	g.RegisterInstance("w2", "w2", Model{Name: "m", Exec: &echoExecutor{reply: "v3"}, ContextWindow: 200})
 	g.mu.RLock()
 	n := len(g.routes["m"])
 	g.mu.RUnlock()
@@ -140,8 +140,8 @@ func TestReconnectOverlapKeepsLiveRoute(t *testing.T) {
 
 	// Old connection registers the model, then the reconnect's new connection
 	// registers the same name under a fresh worker id (the overlap window).
-	g.RegisterInstance("w_old", Model{Name: "m", Exec: &echoExecutor{reply: "old"}, ContextWindow: 4096})
-	g.RegisterInstance("w_new", Model{Name: "m", Exec: &echoExecutor{reply: "new"}, ContextWindow: 4096})
+	g.RegisterInstance("w_old", "w_old", Model{Name: "m", Exec: &echoExecutor{reply: "old"}, ContextWindow: 4096})
+	g.RegisterInstance("w_new", "w_new", Model{Name: "m", Exec: &echoExecutor{reply: "new"}, ContextWindow: 4096})
 
 	// The old connection's deferred teardown now fires.
 	g.UnregisterWorker("w_old")
@@ -171,8 +171,8 @@ func TestSameModelTwoWorkersKeepsRoute(t *testing.T) {
 	srv := httptest.NewServer(g.Handler())
 	defer srv.Close()
 
-	g.RegisterInstance("w1", Model{Name: "shared", Exec: &echoExecutor{reply: "a"}, ContextWindow: 4096})
-	g.RegisterInstance("w2", Model{Name: "shared", Exec: &echoExecutor{reply: "b"}, ContextWindow: 4096})
+	g.RegisterInstance("w1", "w1", Model{Name: "shared", Exec: &echoExecutor{reply: "a"}, ContextWindow: 4096})
+	g.RegisterInstance("w2", "w2", Model{Name: "shared", Exec: &echoExecutor{reply: "b"}, ContextWindow: 4096})
 
 	// One worker drops; the model stays routable via the other.
 	g.UnregisterWorker("w1")
@@ -198,9 +198,9 @@ func TestSameModelTwoWorkersKeepsRoute(t *testing.T) {
 func TestUnregisterInstanceRemovesOneWorkersModel(t *testing.T) {
 	g := NewGateway(staticAuth(testKey), nil, nil)
 
-	g.RegisterInstance("w1", Model{Name: "a", Exec: &echoExecutor{reply: "x"}, ContextWindow: 4096})
-	g.RegisterInstance("w1", Model{Name: "b", Exec: &echoExecutor{reply: "x"}, ContextWindow: 4096})
-	g.RegisterInstance("w2", Model{Name: "a", Exec: &echoExecutor{reply: "x"}, ContextWindow: 4096})
+	g.RegisterInstance("w1", "w1", Model{Name: "a", Exec: &echoExecutor{reply: "x"}, ContextWindow: 4096})
+	g.RegisterInstance("w1", "w1", Model{Name: "b", Exec: &echoExecutor{reply: "x"}, ContextWindow: 4096})
+	g.RegisterInstance("w2", "w2", Model{Name: "a", Exec: &echoExecutor{reply: "x"}, ContextWindow: 4096})
 
 	// Unload model "a" from w1 only: w2 still serves "a", and w1 still serves "b".
 	g.UnregisterInstance("w1", "a")
