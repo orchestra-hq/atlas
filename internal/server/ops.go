@@ -118,7 +118,7 @@ func (g *Gateway) withRequestLog(next http.Handler) http.Handler {
 		g.metrics.decInFlight()
 
 		dur := time.Since(start)
-		g.logger.Info("request",
+		args := []any{
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", sw.status,
@@ -126,7 +126,15 @@ func (g *Gateway) withRequestLog(next http.Handler) http.Handler {
 			"input_tokens", rec.inputTokens,
 			"output_tokens", rec.outputTokens,
 			"duration_ms", dur.Milliseconds(),
-		)
+		}
+		// For a billable inference request, log the serving worker and calling key
+		// too, so a log line correlates with the per-worker/key metrics labels and
+		// the usage ledger (grep the log by worker or key). Omitted for the
+		// non-inference paths (count_tokens, model listing), which have neither.
+		if rec.billable {
+			args = append(args, "worker", rec.workerID, "key_id", rec.keyID)
+		}
+		g.logger.Info("request", args...)
 
 		// Mirror the request into Prometheus: rate/status/latency for every request,
 		// and per-model/worker token counters for billable inference (the same set

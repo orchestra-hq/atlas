@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"text/tabwriter"
@@ -42,22 +44,31 @@ func newStatusCmd() *cobra.Command {
 	return cmd
 }
 
-func runStatus(cmd *cobra.Command, client *adminClient, asJSON bool) error {
-	resp, err := client.do(cmd.Context(), http.MethodGet, "/admin/status", nil)
+// fetchFleetStatus GETs and decodes the /admin/status snapshot. Shared by
+// `atlas status` (one-shot) and `atlas top` (polled).
+func fetchFleetStatus(ctx context.Context, client *adminClient) (server.FleetStatus, error) {
+	resp, err := client.do(ctx, http.MethodGet, "/admin/status", nil)
 	if err != nil {
-		return err
+		return server.FleetStatus{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if err := adminStatusError(resp); err != nil {
-		return err
+		return server.FleetStatus{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned %s", resp.Status)
+		return server.FleetStatus{}, fmt.Errorf("server returned %s", resp.Status)
 	}
-
 	var status server.FleetStatus
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
-		return fmt.Errorf("decode response: %w", err)
+		return server.FleetStatus{}, fmt.Errorf("decode response: %w", err)
+	}
+	return status, nil
+}
+
+func runStatus(cmd *cobra.Command, client *adminClient, asJSON bool) error {
+	status, err := fetchFleetStatus(cmd.Context(), client)
+	if err != nil {
+		return err
 	}
 
 	if asJSON {
@@ -70,38 +81,47 @@ func runStatus(cmd *cobra.Command, client *adminClient, asJSON bool) error {
 }
 
 func renderStatus(cmd *cobra.Command, status server.FleetStatus) {
+	out := cmd.OutOrStdout()
 	m := status.Metrics
-	cmd.Printf("REQUESTS  %d total, %d errors, %d in flight\n", m.Requests, m.Errors, m.InFlight)
-	cmd.Printf("TOKENS    %d input, %d output\n", m.InputTokens, m.OutputTokens)
+	_, _ = fmt.Fprintf(out, "REQUESTS  %d total, %d errors, %d in flight\n", m.Requests, m.Errors, m.InFlight)
+	_, _ = fmt.Fprintf(out, "TOKENS    %d input, %d output\n", m.InputTokens, m.OutputTokens)
+	_, _ = fmt.Fprintln(out)
+	renderWorkersTable(out, status.Workers)
+	_, _ = fmt.Fprintln(out)
+	renderDeploymentsTable(out, status.Deployments)
+}
 
-	cmd.Println()
-	cmd.Printf("WORKERS (%d)\n", len(status.Workers))
-	if len(status.Workers) == 0 {
-		cmd.Println("  none connected")
-	} else {
-		tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-		_, _ = fmt.Fprintln(tw, "WORKER ID\tNAME\tPLATFORM\tRAM\tCONNECTED\tSTATUS\tMODELS")
-		for _, w := range status.Workers {
-			s := "ready"
-			if w.Draining {
-				s = "draining"
-			}
-			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				w.ID, w.Name, w.Hardware.Platform, formatBytes(w.Hardware.RAMBytes),
-				formatAgo(w.ConnectedAt), s, strings.Join(w.Models, ","))
-		}
-		_ = tw.Flush()
-	}
-
-	cmd.Println()
-	cmd.Printf("DEPLOYMENTS (%d)\n", len(status.Deployments))
-	if len(status.Deployments) == 0 {
-		cmd.Println("  none")
+// renderWorkersTable writes the connected-worker table (shared by status and top).
+func renderWorkersTable(out io.Writer, workers []server.WorkerInfo) {
+	_, _ = fmt.Fprintf(out, "WORKERS (%d)\n", len(workers))
+	if len(workers) == 0 {
+		_, _ = fmt.Fprintln(out, "  none connected")
 		return
 	}
-	tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "WORKER ID\tNAME\tPLATFORM\tRAM\tCONNECTED\tSTATUS\tMODELS")
+	for _, w := range workers {
+		s := "ready"
+		if w.Draining {
+			s = "draining"
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			w.ID, w.Name, w.Hardware.Platform, formatBytes(w.Hardware.RAMBytes),
+			formatAgo(w.ConnectedAt), s, strings.Join(w.Models, ","))
+	}
+	_ = tw.Flush()
+}
+
+// renderDeploymentsTable writes the deployment table (shared by status and top).
+func renderDeploymentsTable(out io.Writer, deps []server.DeploymentInfo) {
+	_, _ = fmt.Fprintf(out, "DEPLOYMENTS (%d)\n", len(deps))
+	if len(deps) == 0 {
+		_, _ = fmt.Fprintln(out, "  none")
+		return
+	}
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(tw, "MODEL\tREPLICAS\tREADY\tPENDING")
-	for _, d := range status.Deployments {
+	for _, d := range deps {
 		_, _ = fmt.Fprintf(tw, "%s\t%d\t%d\t%d\n", d.Model, d.Replicas, d.Ready, d.Pending)
 	}
 	_ = tw.Flush()
