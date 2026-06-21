@@ -141,6 +141,25 @@ for engine in $ENGINES; do
   fi
 done
 
+# Aggregate the per-engine runs into the published agent-capability matrix (G18,
+# M2 phase 4c). Each engine wrote results/matrix-<engine>.json above; the
+# generator turns them into one capability-matrix.json + a Markdown table. This
+# is best-effort reporting — a missing input (an engine that never produced a
+# matrix) does not change the acceptance verdict, which $overall already holds.
+matrices=()
+for engine in $ENGINES; do
+  # Paths are relative to conformance/, where the generator runs.
+  [[ -f "$REPO/conformance/results/matrix-${engine}.json" ]] && matrices+=("results/matrix-${engine}.json")
+done
+if (( ${#matrices[@]} > 0 )); then
+  echo
+  echo "==> Generating agent-capability matrix (G18)"
+  ( cd conformance && uv run --locked python capability_matrix.py \
+      "${matrices[@]}" \
+      --output results/capability-matrix.json \
+      --markdown results/CAPABILITY.md ) || true
+fi
+
 if (( overall == 0 )); then
   echo
   echo "==> Acceptance GREEN on: $ENGINES"

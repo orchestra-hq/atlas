@@ -5,11 +5,13 @@ The executable spec of Atlas's compat promise. What it tests and why lives in [d
 ## Layout
 
 ```text
-run.py        # harness runner: starts the target, runs both suites, writes matrix.json
-stubgw/       # deliberately partial stub gateway (phase-1 target; see its docstring)
-py/           # pytest suite: Anthropic Python SDK, OpenAI SDK, wire-level SSE capture
-ts/           # vitest suite: Anthropic TypeScript SDK subset
-results/      # output (gitignored): matrix.json + raw per-suite results
+run.py                     # harness runner: starts the target, runs both suites, writes matrix.json
+capability_matrix.py       # G18: aggregate per-run matrices into the agent-capability matrix
+test_capability_matrix.py  # unit tests for the aggregator (not a conformance group; run.py skips it)
+stubgw/                    # deliberately partial stub gateway (phase-1 target; see its docstring)
+py/                        # pytest suite: Anthropic Python SDK, OpenAI SDK, wire-level SSE capture
+ts/                        # vitest suite: Anthropic TypeScript SDK subset
+results/                   # output (gitignored): matrix.json + raw per-suite results
 ```
 
 ## Running
@@ -123,6 +125,25 @@ One structured record per test, merged across pytest and vitest — this artifac
 Group status: `fail` if any cell fails, else `pass` if any passes, else `skip`. A group with no cells at all is a harness error — every group in docs/conformance-suite.md must keep at least one (possibly placeholder) test, so the criterion mapping stays bidirectional. `flakes`/`retries` are reserved: the one-retry flake policy starts mattering when real engines join the matrix.
 
 Every pytest test carries `group` / `criterion` / `client` markers; vitest tests carry the same coordinates in their title as `[Gx][cN][client]`.
+
+## Capability matrix (G18)
+
+`run.py` writes one `matrix.json` per (engine, model) run. `capability_matrix.py` aggregates a fleet's worth of those into the published **agent-capability matrix** — the "works for agents" badge ([roadmap.md](../docs/roadmap.md)), earned by the suite rather than asserted:
+
+```sh
+# Aggregate every per-engine run from an acceptance pass into one matrix + table.
+uv run python capability_matrix.py results/matrix-vllm.json results/matrix-llamacpp.json \
+  --output results/capability-matrix.json --markdown results/CAPABILITY.md
+```
+
+Each output row is one (model, engine) with an **agent-readiness verdict** plus the per-group detail:
+
+- `ready` — the agent-critical groups (G3 tool use, G9 the streamed ≥3-call agent loop) pass and no core group failed.
+- `partial` — agent-critical pass, but a non-critical compat group failed.
+- `incomplete` — an agent-critical group was not exercised (skipped/absent), so the run can't vouch for it.
+- `unsupported` — an agent-critical group failed: an SDK agent cannot rely on this model×engine.
+
+`--require-ready` exits non-zero unless every cell is `ready`, for gating a release. The aggregator is stdlib-only (no conformance deps) and unit-tested by `test_capability_matrix.py` — harness tooling, not a conformance group, so `run.py`'s `pytest py/` never collects it; run it with `uv run python -m pytest test_capability_matrix.py`. The per-PR CI job runs the unit tests and generates a single-cell matrix from its llama.cpp run; the **full** model×engine matrix is produced on the nightly capable tier (MLX + CUDA runners — still dormant, see [open-questions.md](../docs/open-questions.md)).
 
 ## Status
 

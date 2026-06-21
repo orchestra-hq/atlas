@@ -132,4 +132,6 @@ G1–G8+G10 pass on MLX (Apple Silicon) and on SGLang (NVIDIA GPU), on the capab
 
 ### G18 — Catalog + capability matrix (M2 phase 4)
 
-The agent-capability matrix is generated from real per-model×engine runs and reflects suite results. A request that omits sampling fields uses the model's catalog defaults; a reasoning model's thinking behavior follows its catalog config rather than the global convention.
+The agent-capability matrix is generated from real per-model×engine runs and reflects suite results. A request that omits sampling fields uses the model's catalog defaults (phase 4a); a reasoning model's thinking behavior follows its catalog config rather than the global convention (phase 4b).
+
+The matrix is produced by [`conformance/capability_matrix.py`](../conformance/README.md) (phase 4c): it aggregates the per-run `matrix-<engine>.json` files into one published matrix — a row per (model, engine) with an **agent-readiness verdict** (`ready` / `partial` / `incomplete` / `unsupported`) turning on the agent-critical groups (G3 tool use, G9 the streamed multi-call agent loop), plus the per-group detail. The generator and its verdict logic are unit-tested on the CPU per-PR tier, and the per-PR conformance job runs it on the single llama.cpp cell it produces; the **full** model×engine matrix is generated on the nightly capable tier, which needs the MLX (Apple-Silicon) and CUDA runners still dormant in [open-questions.md](open-questions.md) — the same blocker as G17.
