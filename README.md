@@ -36,6 +36,7 @@ Teams building on LLMs increasingly want control over where the model runs and w
 | [docs/positioning.md](docs/positioning.md)                                                                 | Marketing differentiators and the proof each one requires        |
 | [docs/decisions/](docs/decisions/)                                                                         | Architecture decision records (ADRs)                             |
 | [docs/open-questions.md](docs/open-questions.md)                                                           | Unresolved decisions that need an owner call                     |
+| [docs/follow-ups.md](docs/follow-ups.md)                                                                   | Deferred, non-blocking refinements surfaced by code reviews      |
 
 ## Contributing (humans and agents)
 
