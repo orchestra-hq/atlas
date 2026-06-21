@@ -135,3 +135,25 @@ G1–G8+G10 pass on MLX (Apple Silicon) and on SGLang (NVIDIA GPU), on the capab
 The agent-capability matrix is generated from real per-model×engine runs and reflects suite results. A request that omits sampling fields uses the model's catalog defaults (phase 4a); a reasoning model's thinking behavior follows its catalog config rather than the global convention (phase 4b).
 
 The matrix is produced by [`conformance/capability_matrix.py`](../conformance/README.md) (phase 4c): it aggregates the per-run `matrix-<engine>.json` files into one published matrix — a row per (model, engine) with an **agent-readiness verdict** (`ready` / `partial` / `incomplete` / `unsupported`) turning on the agent-critical groups (G3 tool use, G9 the streamed multi-call agent loop), plus the per-group detail. The generator and its verdict logic are unit-tested on the CPU per-PR tier, and the per-PR conformance job runs it on the single llama.cpp cell it produces; the **full** model×engine matrix is generated on the nightly capable tier, which needs the MLX (Apple-Silicon) and CUDA runners still dormant in [open-questions.md](open-questions.md) — the same blocker as G17.
+
+---
+
+## M3 test groups
+
+These extend the matrix and the pass policy when M3 ships. See [m3-build-plan.md](m3-build-plan.md) for the phase that introduces each group.
+
+### G19 — Prefix/session-affinity routing (M3 phase 1)
+
+A conversation sent repeatedly across turns lands on the same replica while that replica has capacity, so a prefix-caching engine reuses its warm cache (affinity hit). Under load that pushes the affine replica past the configured tolerance, the request falls back to least-in-flight rather than queueing behind a busy replica — never a hang or a 5xx, and the G16 backpressure semantics still hold. Affinity hit/miss and per-replica warm-key counts appear in `/metrics` and `atlas top`.
+
+### G20 — Embeddings + reranker model classes (M3 phase 2)
+
+A deployed embedding model serves `POST /v1/embeddings` with correct-dimension vectors for the OpenAI SDK drop-in; a deployed reranker serves `POST /v1/rerank` and orders documents by relevance. A request sent to the wrong class (embeddings against a chat model, or vice versa) returns a clean, well-formed error, not a 5xx. Class-aware scheduling places embedding/reranker models on capable workers by the same VRAM-fit policy as chat models.
+
+### G21 — Audit log (M3 phase 3)
+
+Every control-plane mutation — key create/revoke, model deploy/scale/stop, worker drain/remove, runtime upgrade — produces an audit record carrying the acting admin key id, the action, the target, a timestamp, and the result. Records are append-only (no API mutates or deletes them) and durable across a control-plane restart. `atlas audit` lists them and filters by actor, action, target, and time window.
+
+### G22 — Cloud-fallback passthrough (M3 phase 4)
+
+With fallback enabled for a model, load beyond local capacity that G16 would shed is instead served by the configured upstream provider, and the response is labeled `x-atlas-served-by: cloud` with its tokens attributed to the cloud ledger class — the response body itself is a normal Atlas response, so the SDK is unaffected. With fallback disabled (the default), the identical overflow sheds with the ADR-0010 429/529 envelope, unchanged. Usage reporting separates cloud-served from locally-served tokens.

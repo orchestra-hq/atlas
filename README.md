@@ -15,29 +15,30 @@ Teams building on LLMs increasingly want control over where the model runs and w
 
 ## Documentation map
 
-| Doc                                                                                                        | What it covers                                                   |
-| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| [docs/vision.md](docs/vision.md)                                                                           | What we're building, for whom, and how we differentiate          |
-| [docs/research/landscape.md](docs/research/landscape.md)                                                   | Survey of existing projects and what we take from each           |
-| [docs/research/model-catalog-m0.md](docs/research/model-catalog-m0.md)                                     | Starter catalog candidates: models, tiers, per-engine config     |
-| [docs/research/distribution-deployment-and-gpu-ci.md](docs/research/distribution-deployment-and-gpu-ci.md) | How Atlas is packaged, deployed, and proven on GPUs (M0.5)       |
-| [docs/architecture.md](docs/architecture.md)                                                               | How Atlas runs: control plane, workers, request flow, scheduling |
-| [docs/api-surface.md](docs/api-surface.md)                                                                 | The APIs Atlas exposes (Anthropic-compat, OpenAI-compat, admin)  |
-| [docs/usage-scenarios.md](docs/usage-scenarios.md)                                                         | Which path fits you: laptop / single cloud GPU / fleet           |
-| [docs/docker.md](docs/docker.md)                                                                           | Running Atlas from the published container images (slim + CUDA)  |
-| [examples/serve/](examples/serve/README.md)                                                                | Serve on a cloud GPU: SkyPilot one-command + single-box+tunnel   |
-| [docs/deployment-aws.md](docs/deployment-aws.md)                                                           | Reference topology for deploying in your own AWS account         |
-| [docs/roadmap.md](docs/roadmap.md)                                                                         | Phased milestones from single-node MVP to fleet                  |
-| [docs/m0-acceptance.md](docs/m0-acceptance.md)                                                             | Definition of done for M0's API surface                          |
-| [docs/conformance-suite.md](docs/conformance-suite.md)                                                     | Executable spec of the compat promise: harness, test groups      |
-| [examples/acceptance/](examples/acceptance/README.md)                                                      | GPU acceptance run that flips M0 to done (M0.5) + AWS setup      |
-| [docs/m0-build-plan.md](docs/m0-build-plan.md)                                                             | M0 phased build order, repo layout, and build-time decisions     |
-| [docs/m1-build-plan.md](docs/m1-build-plan.md)                                                             | M1 phased build order (fleet: worker channel, scheduler, auth)   |
-| [docs/m2-build-plan.md](docs/m2-build-plan.md)                                                             | M2 phased build order (operate: metrics, backpressure, engines)  |
-| [docs/positioning.md](docs/positioning.md)                                                                 | Marketing differentiators and the proof each one requires        |
-| [docs/decisions/](docs/decisions/)                                                                         | Architecture decision records (ADRs)                             |
-| [docs/open-questions.md](docs/open-questions.md)                                                           | Unresolved decisions that need an owner call                     |
-| [docs/follow-ups.md](docs/follow-ups.md)                                                                   | Deferred, non-blocking refinements surfaced by code reviews      |
+| Doc                                                                                                        | What it covers                                                    |
+| ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| [docs/vision.md](docs/vision.md)                                                                           | What we're building, for whom, and how we differentiate           |
+| [docs/research/landscape.md](docs/research/landscape.md)                                                   | Survey of existing projects and what we take from each            |
+| [docs/research/model-catalog-m0.md](docs/research/model-catalog-m0.md)                                     | Starter catalog candidates: models, tiers, per-engine config      |
+| [docs/research/distribution-deployment-and-gpu-ci.md](docs/research/distribution-deployment-and-gpu-ci.md) | How Atlas is packaged, deployed, and proven on GPUs (M0.5)        |
+| [docs/architecture.md](docs/architecture.md)                                                               | How Atlas runs: control plane, workers, request flow, scheduling  |
+| [docs/api-surface.md](docs/api-surface.md)                                                                 | The APIs Atlas exposes (Anthropic-compat, OpenAI-compat, admin)   |
+| [docs/usage-scenarios.md](docs/usage-scenarios.md)                                                         | Which path fits you: laptop / single cloud GPU / fleet            |
+| [docs/docker.md](docs/docker.md)                                                                           | Running Atlas from the published container images (slim + CUDA)   |
+| [examples/serve/](examples/serve/README.md)                                                                | Serve on a cloud GPU: SkyPilot one-command + single-box+tunnel    |
+| [docs/deployment-aws.md](docs/deployment-aws.md)                                                           | Reference topology for deploying in your own AWS account          |
+| [docs/roadmap.md](docs/roadmap.md)                                                                         | Phased milestones from single-node MVP to fleet                   |
+| [docs/m0-acceptance.md](docs/m0-acceptance.md)                                                             | Definition of done for M0's API surface                           |
+| [docs/conformance-suite.md](docs/conformance-suite.md)                                                     | Executable spec of the compat promise: harness, test groups       |
+| [examples/acceptance/](examples/acceptance/README.md)                                                      | GPU acceptance run that flips M0 to done (M0.5) + AWS setup       |
+| [docs/m0-build-plan.md](docs/m0-build-plan.md)                                                             | M0 phased build order, repo layout, and build-time decisions      |
+| [docs/m1-build-plan.md](docs/m1-build-plan.md)                                                             | M1 phased build order (fleet: worker channel, scheduler, auth)    |
+| [docs/m2-build-plan.md](docs/m2-build-plan.md)                                                             | M2 phased build order (operate: metrics, backpressure, engines)   |
+| [docs/m3-build-plan.md](docs/m3-build-plan.md)                                                             | M3 phased build order (affinity, embeddings/rerank, audit, spill) |
+| [docs/positioning.md](docs/positioning.md)                                                                 | Marketing differentiators and the proof each one requires         |
+| [docs/decisions/](docs/decisions/)                                                                         | Architecture decision records (ADRs)                              |
+| [docs/open-questions.md](docs/open-questions.md)                                                           | Unresolved decisions that need an owner call                      |
+| [docs/follow-ups.md](docs/follow-ups.md)                                                                   | Deferred, non-blocking refinements surfaced by code reviews       |
 
 ## Contributing (humans and agents)
 

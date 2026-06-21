@@ -58,11 +58,19 @@ Web console and packaging/IaC, which earlier drafts had in M2, are split out to 
 
 ## M3 — Ecosystem & differentiation deepeners (pick by traction)
 
-- Embeddings + reranker model classes as first-class citizens
-- Prefix/session-affinity routing (agent conversations stick to a warm worker — SGLang synergy)
-- Cloud-fallback passthrough (route overflow to a real provider key, clearly labeled)
-- HA control plane; audit log
-- Hosted control plane offering (the open-core conversation — separate decision)
+**Demo:** run a multi-turn agent against the fleet and watch each turn stick to its warm replica; deploy an embedding + a reranker model and point a RAG stack's OpenAI client at the same endpoint; flip on cloud-fallback and watch a capacity spike spill to a provider, clearly labeled, instead of shedding. Build order: [m3-build-plan.md](m3-build-plan.md).
+
+Of the candidate threads below, M3 takes the four that compound M2's runtime depth and serve the self-hosted-agent thesis, and defers the two heaviest (full HA, and the hosted offering):
+
+- **Prefix/session-affinity routing** (agent conversations stick to a warm worker — SGLang prefix-cache synergy). Extends [ADR-0010](decisions/0010-load-balancing-and-backpressure.md) as a load-bounded hint; [ADR-0011](decisions/0011-prefix-session-affinity-routing.md).
+- **Embeddings + reranker model classes** as first-class citizens (`/v1/embeddings`, `/v1/rerank`); a model-`class` abstraction; [ADR-0012](decisions/0012-embeddings-and-reranker-model-classes.md).
+- **Audit log** of control-plane mutations (split out of the HA bundle — light, independent, high trust value); reuses the [ADR-0008](decisions/0008-control-plane-persistence-and-api-keys.md) store.
+- **Cloud-fallback passthrough** (route overflow to a real provider key, clearly labeled, separately billed, off by default); [ADR-0013](decisions/0013-cloud-fallback-passthrough.md).
+
+Deferred from M3 (revisit by traction):
+
+- **HA control plane** (Postgres, durable admission queue, multi-replica) — heavy ops infra; ADR-0008/ADR-0010 left the doors open, so it becomes its own future milestone when demand appears.
+- **Hosted control-plane offering** (the open-core conversation) — a business decision, not a build task.
 
 ## M4 — Deliverability: "the frictionless install"
 
