@@ -100,7 +100,7 @@ type capturingRegistry struct {
 	models map[string]server.Model
 }
 
-func (r *capturingRegistry) RegisterInstance(_ string, m server.Model) {
+func (r *capturingRegistry) RegisterInstance(_, _ string, m server.Model) {
 	r.mu.Lock()
 	r.models[m.Name] = m
 	r.mu.Unlock()

@@ -12,9 +12,12 @@ import (
 
 // UsageRecord is one completed inference request's token accounting, handed to
 // a UsageRecorder for durable storage (phase 6, G13). KeyID is the calling API
-// key, Model the served model, WorkerID the worker that ran it. This is a
-// consumer-defined type so the server package needs no dependency on the storage
-// layer; the CLI bridges it to the SQLite ledger (internal/db).
+// key, Model the served model, WorkerID the stable identity of the worker that
+// ran it — its operator-supplied --name ("local" for the in-process worker), not
+// the ephemeral per-connection id, so a machine's totals don't fragment across
+// reconnects (M2 phase 1). This is a consumer-defined type so the server package
+// needs no dependency on the storage layer; the CLI bridges it to the SQLite
+// ledger (internal/db).
 type UsageRecord struct {
 	KeyID        string
 	Model        string
@@ -40,7 +43,7 @@ type reqLog struct {
 	inputTokens  int
 	outputTokens int
 	keyID        string // set for a billable request: the calling API key
-	workerID     string // set for a billable request: the worker that ran it
+	workerID     string // set for a billable request: the stable name of the worker that ran it
 	billable     bool   // true once recordBillableUsage ran: write a ledger row
 }
 
@@ -87,7 +90,7 @@ func recordBillableUsage(ctx context.Context, tags usageTags, in, out int) {
 // reports its own count.
 type usageTags struct {
 	keyID       string
-	workerID    string
+	workerID    string // the serving worker's stable name (resolve's second return), not its connection id
 	model       string
 	inputTokens int
 }

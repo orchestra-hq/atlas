@@ -10,16 +10,6 @@ Scope rules:
 
 ## Usage metering
 
-### Usage `worker_id` is the ephemeral connection id, not the stable worker name
-
-**Suggested:** [M2 phase 1](m2-build-plan.md) (observability/CLI — `atlas usage --by-worker` and the per-worker views in `atlas status`/`atlas top` become user-facing). **Surfaced:** post-phases-6–7 review.
-
-The ledger's `WorkerID` is the per-connection hub id (`newHubWorkerID`, `w_<hex>` in `internal/server/hub.go`), regenerated on every join. So `atlas usage --by-worker` fragments one physical machine's totals across many ids over its reconnects, and none matches the `Name` shown by `atlas workers list`. Per-worker accounting is unusable for any worker that ever reconnects.
-
-The plumbing fix: thread the worker's stable `--name` (`hubWorker.Name`) through `InstanceRegistry.RegisterInstance` into the `route`, and have `resolve` return it for usage attribution (the connection id stays the routing/teardown key and the `atlas workers` / `deploy --worker` handle).
-
-**Decision needed:** what is the ledger's worker identity? (a) the operator-supplied `--name`, accepting that two workers sharing a name merge in `--by-worker` totals (a name _is_ the operator's stable identity for a box) — recommended; (b) require names unique per server and reject a colliding join; or (c) a server-assigned stable id persisted in the store and reused across reconnects (most robust, most machinery). The choice determines whether `--name` must be validated for uniqueness at join time.
-
 ### Per-request usage write is a synchronous SQLite `INSERT` on the hot path
 
 **Suggested:** [M2 phase 2](m2-build-plan.md) (load balancing + backpressure — moved off the hot path under the load that phase introduces). **Surfaced:** post-phases-6–7 review.

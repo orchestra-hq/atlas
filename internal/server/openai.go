@@ -47,7 +47,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	model, worker, ok := g.resolveOrStart(r.Context(), coreReq.Model)
+	model, workerName, ok := g.resolveOrStart(r.Context(), coreReq.Model)
 	if !ok {
 		writeOpenAIModelNotFound(w, coreReq.Model)
 		return
@@ -68,7 +68,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	requested := coreReq.Model
 	coreReq.Model = model.Name
 
-	tags := usageTags{keyID: id.KeyID, workerID: worker, model: model.Name, inputTokens: promptTokens}
+	tags := usageTags{keyID: id.KeyID, workerID: workerName, model: model.Name, inputTokens: promptTokens}
 
 	if req.Stream {
 		includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage

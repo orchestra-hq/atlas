@@ -27,7 +27,7 @@ func (f *fakeAutostarter) EnsureModel(_ context.Context, model string) bool {
 	ok := f.succeed
 	f.mu.Unlock()
 	if ok {
-		f.g.RegisterInstance("auto", Model{Name: model, Exec: f.exec})
+		f.g.RegisterInstance("auto", "auto", Model{Name: model, Exec: f.exec})
 	}
 	return ok
 }

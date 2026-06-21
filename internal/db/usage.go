@@ -8,8 +8,10 @@ import (
 
 // UsageRecord is one completed inference request's token accounting, written to
 // the ledger as the request finishes (phase 6). KeyID is the API key that made
-// the call, Model the served (canonical) model name, WorkerID the worker that
-// ran it ("local" for the in-process worker). Token counts are the engine's for
+// the call, Model the served (canonical) model name, WorkerID the stable
+// identity of the worker that ran it — its operator-supplied --name ("local" for
+// the in-process worker), so per-worker totals survive reconnects rather than
+// fragmenting across ephemeral connection ids (M2 phase 1). Token counts are the engine's for
 // a clean completion; for a stream cut off partway, OutputTokens is an estimate
 // of what was emitted (the gateway's running count), so the ledger is not
 // systematically short on interrupted requests.
