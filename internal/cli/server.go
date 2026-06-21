@@ -25,6 +25,10 @@ type serverOptions struct {
 	stateDir         string
 	autostartTimeout time.Duration
 	idleTimeout      time.Duration
+	perReplicaConc   int
+	queueLen         int
+	maxQueueWait     time.Duration
+	retryAfter       int
 	tls              tlsOptions
 }
 
@@ -50,6 +54,16 @@ func newServerCmd() *cobra.Command {
 		"how long a request waits for a model to auto-start on first use (0 disables auto-start)")
 	cmd.Flags().DurationVar(&opts.idleTimeout, "idle-timeout", 15*time.Minute,
 		"unload an auto-started model after this long with no requests (0 disables idle-stop)")
+	// Load balancing + backpressure (M2 phase 2b, ADR-0010). Admission is on by
+	// default; --max-concurrency-per-replica 0 restores M1's forward-everything path.
+	cmd.Flags().IntVar(&opts.perReplicaConc, "max-concurrency-per-replica", 4,
+		"max concurrent requests per replica; a model's ceiling is this × its replica count (0 disables admission)")
+	cmd.Flags().IntVar(&opts.queueLen, "queue-length", 256,
+		"max requests queued per model once every replica slot is busy, before shedding a retryable 429")
+	cmd.Flags().DurationVar(&opts.maxQueueWait, "max-queue-wait", 10*time.Second,
+		"how long a request waits in the admission queue for a slot before shedding a retryable 429")
+	cmd.Flags().IntVar(&opts.retryAfter, "retry-after", 1,
+		"Retry-After seconds advertised on a shed 429/529")
 	// TLS (M1 phase 7, ADR-0009): mutually exclusive modes; default is plaintext
 	// (ws://, the dev/internal default per ADR-0007).
 	cmd.Flags().StringVar(&opts.tls.certFile, "tls-cert", "", "PEM certificate to serve TLS with (requires --tls-key)")
@@ -122,9 +136,25 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 	authn := keyAuth{db: store}
 	gw := server.NewGateway(authn, nil, aliases)
 	gw.SetLogger(logger)
-	gw.SetUsageRecorder(usageRecorder{db: store}) // durable usage ledger (G13)
-	metrics := server.NewMetrics()                // Prometheus instrumentation (G15)
+	// Durable usage ledger (G13), written through an async batched writer so the
+	// per-request INSERT stays off the hot path under load (M2 phase 2b). The writer
+	// is stopped (drained + flushed) on shutdown, before the store closes.
+	asyncUsage := server.NewAsyncUsageWriter(usageRecorder{db: store}, logger)
+	go asyncUsage.Run()
+	defer asyncUsage.Close()
+	gw.SetUsageRecorder(asyncUsage)
+	metrics := server.NewMetrics() // Prometheus instrumentation (G15)
 	gw.SetMetrics(metrics)
+	// Load balancing + backpressure (M2 phase 2b, ADR-0010): least-in-flight
+	// selection plus a bounded per-model admission queue that sheds a retryable
+	// 429/529 beyond capacity. SetAdmission wires it to the live replica count and
+	// the metrics sink, so it must follow SetMetrics.
+	gw.SetAdmission(server.NewAdmission(server.AdmissionConfig{
+		PerReplica: opts.perReplicaConc,
+		QueueLen:   opts.queueLen,
+		MaxWait:    opts.maxQueueWait,
+		RetryAfter: opts.retryAfter,
+	}))
 	hub := server.NewHub(opts.token, gw)
 	// The connected-worker gauge reads the hub's live count at scrape time.
 	metrics.SetWorkerCountSource(func() int { return len(hub.Workers()) })

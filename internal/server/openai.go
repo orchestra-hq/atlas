@@ -47,13 +47,17 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	model, workerName, release, ok := g.route(r.Context(), coreReq.Model, forDispatch)
-	if !ok {
-		writeOpenAIModelNotFound(w, coreReq.Model)
+	model, workerName, release, apiErr := g.dispatchPrep(r.Context(), coreReq.Model)
+	if apiErr != nil {
+		if apiErr.Type == anthropic.ErrNotFound {
+			writeOpenAIModelNotFound(w, coreReq.Model) // preserve the model_not_found code
+			return
+		}
+		writeOpenAIErr(w, apiErr) // 429/529 re-shaped onto the OpenAI envelope
 		return
 	}
-	// Hold the instance's in-flight slot until the request completes (every return
-	// below runs it), so least-in-flight selection sees an accurate count.
+	// Hold the admission slot and the instance's in-flight slot until the request
+	// completes (every return below runs it), so accounting stays accurate.
 	defer release()
 
 	promptTokens, err := g.assertContextFits(r.Context(), model, coreReq)
@@ -220,9 +224,10 @@ func writeOpenAIErr(w http.ResponseWriter, err error) {
 	var anthErr *anthropic.Error
 	if errors.As(err, &anthErr) {
 		openai.WriteError(w, &openai.Error{
-			Status: anthErr.Status,
-			Type:   openaiErrType(anthErr.Type),
-			Msg:    anthErr.Msg,
+			Status:     anthErr.Status,
+			Type:       openaiErrType(anthErr.Type),
+			Msg:        anthErr.Msg,
+			RetryAfter: anthErr.RetryAfter,
 		})
 		return
 	}
@@ -253,6 +258,8 @@ func openaiErrType(t anthropic.ErrorType) openai.ErrorType {
 		return openai.ErrPermission
 	case anthropic.ErrNotFound:
 		return openai.ErrNotFound
+	case anthropic.ErrRateLimit:
+		return openai.ErrRateLimit
 	case anthropic.ErrOverloaded:
 		return openai.ErrOverloaded
 	default:

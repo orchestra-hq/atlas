@@ -333,14 +333,14 @@ func TestHub_sameModelTwoConnectionsKeepsRoute(t *testing.T) {
 	// One connection drops; its teardown must remove only its own instance.
 	_ = conn1.Close()
 	waitForCond(t, func() bool { return routes() == 1 }, "dropped worker's instance removed")
-	if _, _, _, ok := gw.route(t.Context(), "m", forMetadata); !ok {
+	if _, ok := gw.resolveMeta("m"); !ok {
 		t.Fatal("model stopped resolving after one of two workers dropped")
 	}
 
 	// The remaining connection drops; now the model is gone.
 	_ = conn2.Close()
 	waitForCond(t, func() bool { return routes() == 0 }, "last instance removed")
-	if _, _, _, ok := gw.route(t.Context(), "m", forMetadata); ok {
+	if _, ok := gw.resolveMeta("m"); ok {
 		t.Error("model still resolving after both workers dropped")
 	}
 }

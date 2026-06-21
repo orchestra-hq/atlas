@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"sync/atomic"
 	"testing"
 )
@@ -48,9 +47,9 @@ func TestRoute_dispatchPicksLeastInFlight(t *testing.T) {
 
 	bumpInflight(t, g, "w1", 3) // w1 is busy; w2 is idle
 
-	_, name, release, ok := g.route(context.Background(), "m", forDispatch)
+	_, name, release, ok := g.pick("m")
 	if !ok {
-		t.Fatal("route returned ok=false for a live model")
+		t.Fatal("pick returned ok=false for a live model")
 	}
 	if name != "w2" {
 		t.Fatalf("least-in-flight picked %q, want the idle replica w2", name)
@@ -73,9 +72,9 @@ func TestRoute_releaseIsIdempotent(t *testing.T) {
 	g := NewGateway(staticAuth(testKey), nil, nil)
 	g.RegisterInstance("w1", "w1", Model{Name: "m", Exec: &echoExecutor{}})
 
-	_, _, release, ok := g.route(context.Background(), "m", forDispatch)
+	_, _, release, ok := g.pick("m")
 	if !ok {
-		t.Fatal("route returned ok=false")
+		t.Fatal("pick returned ok=false")
 	}
 	if got := inflightOf(t, g, "w1"); got != 1 {
 		t.Fatalf("in-flight after dispatch = %d, want 1", got)
@@ -88,38 +87,33 @@ func TestRoute_releaseIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestRoute_metadataDoesNotCount: the read-only intent resolves a model without
-// touching any in-flight counter and hands back a no-op release.
-func TestRoute_metadataDoesNotCount(t *testing.T) {
+// TestResolveMeta_doesNotCount: the read-only path resolves a model without
+// touching any in-flight counter.
+func TestResolveMeta_doesNotCount(t *testing.T) {
 	g := NewGateway(staticAuth(testKey), nil, nil)
 	g.RegisterInstance("w1", "w1", Model{Name: "m", Exec: &echoExecutor{}})
 
-	_, _, release, ok := g.route(context.Background(), "m", forMetadata)
-	if !ok {
-		t.Fatal("route(forMetadata) returned ok=false for a live model")
+	if _, ok := g.resolveMeta("m"); !ok {
+		t.Fatal("resolveMeta returned ok=false for a live model")
 	}
 	if got := inflightOf(t, g, "w1"); got != 0 {
 		t.Fatalf("metadata resolve moved in-flight to %d, want 0", got)
 	}
-	release() // must be safe even though nothing was counted
-	if got := inflightOf(t, g, "w1"); got != 0 {
-		t.Fatalf("metadata release changed in-flight to %d, want 0", got)
-	}
 }
 
-// TestRoute_metadataNeverAutostarts: forMetadata must not auto-start an unrouted
-// model — only the inference path does. A miss returns false without ever calling
-// EnsureModel.
-func TestRoute_metadataNeverAutostarts(t *testing.T) {
+// TestResolveMeta_neverAutostarts: the read-only path must not auto-start an
+// unrouted model — only the inference path (ensure) does. A miss returns false
+// without ever calling EnsureModel.
+func TestResolveMeta_neverAutostarts(t *testing.T) {
 	g := NewGateway(staticAuth(testKey), nil, nil)
 	fa := &fakeAutostarter{g: g, exec: &echoExecutor{}, succeed: true}
 	g.SetAutostarter(fa)
 
-	if _, _, _, ok := g.route(context.Background(), "absent", forMetadata); ok {
-		t.Fatal("forMetadata resolved an unrouted model; want ok=false")
+	if _, ok := g.resolveMeta("absent"); ok {
+		t.Fatal("resolveMeta resolved an unrouted model; want ok=false")
 	}
 	if ensured := fa.ensuredModels(); len(ensured) != 0 {
-		t.Fatalf("forMetadata triggered auto-start %v; want none", ensured)
+		t.Fatalf("resolveMeta triggered auto-start %v; want none", ensured)
 	}
 }
 

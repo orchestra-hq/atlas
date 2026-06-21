@@ -18,7 +18,7 @@ func TestStatusRenders(t *testing.T) {
 	status := server.FleetStatus{
 		Workers:     []server.WorkerInfo{{ID: "w_aaa", Name: "alpha", Models: []string{"qwen"}}},
 		Deployments: []server.DeploymentInfo{{Model: "qwen", Replicas: 2, Ready: 1, Pending: 1}},
-		Metrics:     server.MetricsSnapshot{Requests: 10, Errors: 2, InFlight: 1, InputTokens: 100, OutputTokens: 50},
+		Metrics:     server.MetricsSnapshot{Requests: 10, Errors: 2, InFlight: 1, InputTokens: 100, OutputTokens: 50, QueueDepth: 4, Shed: 9},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("content-type", "application/json")
@@ -38,7 +38,7 @@ func TestStatusRenders(t *testing.T) {
 		t.Fatalf("runStatus: %v", err)
 	}
 	got := out.String()
-	for _, want := range []string{"10 total", "2 errors", "1 in flight", "100 input", "alpha", "qwen", "DEPLOYMENTS"} {
+	for _, want := range []string{"10 total", "2 errors", "1 in flight", "100 input", "4 queued", "9 shed", "alpha", "qwen", "DEPLOYMENTS"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("status output missing %q:\n%s", want, got)
 		}

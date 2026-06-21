@@ -55,13 +55,27 @@ func (a keyAuth) Authenticate(ctx context.Context, secret string) (server.Identi
 type usageRecorder struct{ db *db.DB }
 
 func (u usageRecorder) Record(ctx context.Context, rec server.UsageRecord) error {
-	return u.db.RecordUsage(ctx, db.UsageRecord{
+	return u.db.RecordUsage(ctx, toDBUsage(rec))
+}
+
+// RecordBatch implements server.BatchUsageRecorder, so the async usage writer
+// flushes a whole batch in one transaction (M2 phase 2b).
+func (u usageRecorder) RecordBatch(ctx context.Context, recs []server.UsageRecord) error {
+	rows := make([]db.UsageRecord, len(recs))
+	for i, rec := range recs {
+		rows[i] = toDBUsage(rec)
+	}
+	return u.db.RecordUsageBatch(ctx, rows)
+}
+
+func toDBUsage(rec server.UsageRecord) db.UsageRecord {
+	return db.UsageRecord{
 		KeyID:        rec.KeyID,
 		Model:        rec.Model,
 		WorkerID:     rec.WorkerID,
 		InputTokens:  rec.InputTokens,
 		OutputTokens: rec.OutputTokens,
-	})
+	}
 }
 
 // bootstrapDefaultKey mints a default full-access admin key when the store has

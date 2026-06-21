@@ -36,6 +36,40 @@ func (d *DB) RecordUsage(ctx context.Context, u UsageRecord) error {
 	return nil
 }
 
+// RecordUsageBatch appends many rows in a single transaction — the bulk path the
+// async usage writer flushes to, so per-request inserts stay off the request hot
+// path (M2 phase 2b). All rows share one wall-clock stamp (the flush time); the
+// per-request ordering they were enqueued in is not otherwise preserved, which the
+// ledger's aggregate summaries do not depend on. An empty batch is a no-op.
+func (d *DB) RecordUsageBatch(ctx context.Context, us []UsageRecord) error {
+	if len(us) == 0 {
+		return nil
+	}
+	tx, err := d.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("db: record usage batch: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
+
+	stmt, err := tx.PrepareContext(ctx,
+		`INSERT INTO usage (ts, key_id, model, worker_id, input_tokens, output_tokens) VALUES (?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("db: record usage batch: prepare: %w", err)
+	}
+	defer func() { _ = stmt.Close() }()
+
+	ts := time.Now().UTC().Format(time.RFC3339)
+	for _, u := range us {
+		if _, err := stmt.ExecContext(ctx, ts, u.KeyID, u.Model, u.WorkerID, u.InputTokens, u.OutputTokens); err != nil {
+			return fmt.Errorf("db: record usage batch: exec: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("db: record usage batch: commit: %w", err)
+	}
+	return nil
+}
+
 // UsageTotal is an aggregated slice of the ledger: all rows sharing one group
 // value (a key id, a model, or a worker id, depending on the query), with their
 // request count and summed token usage. Group is the shared value.
