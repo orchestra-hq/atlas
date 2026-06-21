@@ -47,7 +47,8 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	model, workerName, release, apiErr := g.dispatchPrep(r.Context(), coreReq.Model)
+	affinityKey := g.affinity.routingKey(r, coreReq)
+	model, workerName, release, apiErr := g.dispatchPrep(r.Context(), coreReq.Model, affinityKey)
 	if apiErr != nil {
 		if apiErr.Type == anthropic.ErrNotFound {
 			writeOpenAIModelNotFound(w, coreReq.Model) // preserve the model_not_found code

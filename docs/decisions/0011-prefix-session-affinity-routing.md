@@ -2,7 +2,7 @@
 
 ## Status
 
-proposed
+accepted
 
 ## Context
 
@@ -20,7 +20,7 @@ Constraints from prior decisions:
 
 1. **Derive a routing key from the conversation prefix, honoring an explicit session header when present.** The default key is a stable hash of the request's leading prefix (system prompt + the earliest messages, which are what a prefix cache actually shares across turns), so the same conversation produces the same key as it grows. If a client supplies an explicit affinity header (e.g. `x-atlas-session`), that value is the key instead — giving agent frameworks that track a session id a precise hook without requiring one.
 
-2. **Consistent-hash the key to a replica.** The routing key maps to one of the model's replicas by consistent hashing, so adding or removing a replica reshuffles only a fraction of keys rather than remapping every conversation.
+2. **Consistent-hash the key to a replica.** The routing key maps to one of the model's replicas by consistent hashing, so adding or removing a replica reshuffles only a fraction of keys rather than remapping every conversation. The implementation uses **rendezvous (highest-random-weight) hashing** keyed on each replica's stable worker id: it delivers the same minimal-reshuffle property without standing up a hash ring or virtual nodes, which suits the small per-model replica sets Atlas selects over, and keying on the stable worker id (not the ephemeral connection id) means a worker cycling its connection does not move keys off it.
 
 3. **Affinity is a hint bounded by load tolerance, never a hard pin.** The affine replica is chosen **only while its in-flight count stays within a configurable tolerance of the least-loaded replica's**. Past the tolerance, selection falls back to plain least-in-flight ([ADR-0010](0010-load-balancing-and-backpressure.md) §1). So affinity wins the warm-cache reuse when capacity is comfortable and yields to load balancing when it is not; it never queues a request behind a busy replica that backpressure would otherwise have spread or shed.
 

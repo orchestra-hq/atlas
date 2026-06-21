@@ -112,6 +112,7 @@ func renderTop(out io.Writer, cur, prev *topSample) {
 		m.Requests, reqRate, m.Errors, errRate, m.InFlight)
 	_, _ = fmt.Fprintf(out, "TOKENS    %d in (%s)   %d out (%s)\n", m.InputTokens, inRate, m.OutputTokens, outRate)
 	_, _ = fmt.Fprintf(out, "QUEUE     %d queued   %d shed\n", m.QueueDepth, m.Shed)
+	_, _ = fmt.Fprintf(out, "AFFINITY  %d hits   %d misses   %d warm keys\n", m.AffinityHits, m.AffinityMiss, m.WarmKeys)
 
 	_, _ = fmt.Fprintln(out)
 	renderWorkersTable(out, cur.status.Workers)
