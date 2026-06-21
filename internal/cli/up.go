@@ -51,7 +51,7 @@ func newUpCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&opts.aliases, "alias", nil,
 		"model alias as name=target, e.g. claude-sonnet-4-6=qwen2.5-1.5b-instruct-q4_k_m; repeat for several (docs/api-surface.md)")
 	cmd.Flags().StringVar(&opts.engine, "engine", string(worker.EngineLlamaCpp),
-		"inference engine: llamacpp (prebuilt binary), vllm (uv venv, NVIDIA GPU), or mlx (uv venv, Apple Silicon)")
+		"inference engine: llamacpp (prebuilt binary), vllm or sglang (uv venv, NVIDIA GPU), or mlx (uv venv, Apple Silicon)")
 	cmd.Flags().StringArrayVar(&opts.engineArgs, "engine-arg", nil,
 		"extra argument passed verbatim to every engine subprocess; repeat for several (e.g. --engine-arg=--reasoning-parser --engine-arg=qwen3)")
 	cmd.Flags().StringVar(&opts.addr, "addr", "127.0.0.1:8080", "address the gateway listens on")
@@ -159,8 +159,10 @@ func parseEngine(s string) (worker.Engine, error) {
 		return worker.EngineVLLM, nil
 	case worker.EngineMLX:
 		return worker.EngineMLX, nil
+	case worker.EngineSGLang:
+		return worker.EngineSGLang, nil
 	default:
-		return "", fmt.Errorf("invalid --engine %q: want llamacpp, vllm, or mlx", s)
+		return "", fmt.Errorf("invalid --engine %q: want llamacpp, vllm, mlx, or sglang", s)
 	}
 }
 
@@ -177,6 +179,10 @@ func provisionEngine(ctx context.Context, cmd *cobra.Command, prov *atlasruntime
 		cmd.Printf("Provisioning MLX runtime (uv %s, mlx-lm %s) for %s/%s — this can take a while on first run…\n",
 			atlasruntime.UvVersion, atlasruntime.MLXVersion, runtime.GOOS, runtime.GOARCH)
 		return prov.EnsureMLX(ctx, runtime.GOOS, runtime.GOARCH)
+	case worker.EngineSGLang:
+		cmd.Printf("Provisioning SGLang runtime (uv %s, sglang %s) for %s/%s — this can take a while on first run…\n",
+			atlasruntime.UvVersion, atlasruntime.SGLangVersion, runtime.GOOS, runtime.GOARCH)
+		return prov.EnsureSGLang(ctx, runtime.GOOS, runtime.GOARCH)
 	default:
 		cmd.Printf("Provisioning llama.cpp runtime (%s) for %s/%s…\n", atlasruntime.LlamaCppTag, runtime.GOOS, runtime.GOARCH)
 		return prov.EnsureLlamaServer(ctx, runtime.GOOS, runtime.GOARCH)
@@ -189,9 +195,9 @@ func provisionEngine(ctx context.Context, cmd *cobra.Command, prov *atlasruntime
 // existing file (or anything ending in .gguf) is loaded with -m; otherwise the
 // value is a Hugging Face spec passed to -hf, which downloads and caches it.
 func modelArgs(engine worker.Engine, model string) []string {
-	if engine == worker.EngineVLLM || engine == worker.EngineMLX {
-		// Both take the model as a bare positional ref (an HF repo id or a local
-		// path); for MLX the worker prepends `--model`.
+	if engine == worker.EngineVLLM || engine == worker.EngineMLX || engine == worker.EngineSGLang {
+		// All three take the model as a bare ref (an HF repo id or a local path);
+		// the worker prepends the engine's flag (MLX `--model`, SGLang `--model-path`).
 		return []string{model}
 	}
 	if strings.HasSuffix(model, ".gguf") || fileExists(model) {
@@ -205,7 +211,7 @@ func modelArgs(engine worker.Engine, model string) []string {
 // it back in requests). For llama.cpp a local file uses its base filename
 // without extension; an HF spec is the spec itself.
 func modelDisplayName(engine worker.Engine, model string) string {
-	if engine == worker.EngineVLLM || engine == worker.EngineMLX {
+	if engine == worker.EngineVLLM || engine == worker.EngineMLX || engine == worker.EngineSGLang {
 		return model
 	}
 	if strings.HasSuffix(model, ".gguf") || fileExists(model) {

@@ -98,3 +98,35 @@ models:
     sampling:
       temperature: 0.7
       top_p: 0.8
+
+  # --- SGLang tiers (NVIDIA GPU; prefix-cache + structured-output strengths) ---
+  # Cold-boot conformance is the GPU nightly tier, shared with vLLM
+  # (docs/open-questions.md). engine_args carry SGLang's tool/reasoning parsers.
+  - name: qwen2.5-7b-instruct-sglang
+    engine: sglang
+    tier: sonnet
+    reasoning: false
+    context_window: 32768
+    source:
+      type: hf
+      repo: Qwen/Qwen2.5-7B-Instruct
+    engine_args:
+      - --tool-call-parser
+      - qwen25
+    sampling:
+      temperature: 0.7
+      top_p: 0.8
+
+  - name: qwen3-8b-sglang
+    engine: sglang
+    tier: sonnet
+    reasoning: true
+    context_window: 40960
+    source:
+      type: hf
+      repo: Qwen/Qwen3-8B
+    engine_args:
+      - --tool-call-parser
+      - qwen25
+      - --reasoning-parser
+      - qwen3

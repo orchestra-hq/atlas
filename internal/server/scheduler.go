@@ -20,10 +20,21 @@ import (
 // the padded estimate.
 const kvOverheadFraction = 0.2
 
-// engineVLLM is the catalog engine value whose models require a GPU; placement
-// filters them onto GPU workers. (The worker package's worker.EngineVLLM holds
-// the same string; duplicated here to keep the server independent of it.)
-const engineVLLM = "vllm"
+// engineVLLM and engineSGLang are the catalog engine values whose models require
+// an NVIDIA GPU; placement filters them onto GPU workers. (The worker package's
+// worker.EngineVLLM/EngineSGLang hold the same strings; duplicated here to keep the
+// server independent of it.)
+const (
+	engineVLLM   = "vllm"
+	engineSGLang = "sglang"
+)
+
+// engineNeedsGPU reports whether a model's engine can only run on a GPU worker.
+// llama.cpp runs anywhere and MLX runs on Apple-Silicon (Metal, not a discrete
+// GPU), so neither is gated; vLLM and SGLang are CUDA servers and are.
+func engineNeedsGPU(engine string) bool {
+	return engine == engineVLLM || engine == engineSGLang
+}
 
 // Auto-start/idle-stop defaults (M1 phase 4b-2). A first request for an
 // un-deployed catalog model deploys one replica and blocks up to
@@ -460,7 +471,7 @@ func (s *Scheduler) fits(w *schedWorker, model, engine string, est int64) bool {
 	if w.serves(model) || w.failed[model] || w.engine != engine {
 		return false
 	}
-	if engine == engineVLLM && !w.hasGPU {
+	if engineNeedsGPU(engine) && !w.hasGPU {
 		return false
 	}
 	return est == 0 || w.capacity-s.used(w) >= est

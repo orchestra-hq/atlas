@@ -70,12 +70,12 @@ func TestModelDisplayName(t *testing.T) {
 }
 
 func TestParseEngine(t *testing.T) {
-	for _, s := range []string{"llamacpp", "vllm"} {
+	for _, s := range []string{"llamacpp", "vllm", "mlx", "sglang"} {
 		if _, err := parseEngine(s); err != nil {
 			t.Errorf("parseEngine(%q) errored: %v", s, err)
 		}
 	}
-	if _, err := parseEngine("sglang"); err == nil {
+	if _, err := parseEngine("nonesuch"); err == nil {
 		t.Error("expected error for unknown engine")
 	}
 }
