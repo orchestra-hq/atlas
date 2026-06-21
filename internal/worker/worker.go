@@ -14,6 +14,7 @@ import (
 
 	"github.com/orchestra-hq/atlas/internal/core"
 	"github.com/orchestra-hq/atlas/internal/engines/llamacpp"
+	"github.com/orchestra-hq/atlas/internal/engines/mlx"
 	"github.com/orchestra-hq/atlas/internal/engines/vllm"
 )
 
@@ -27,6 +28,7 @@ type Engine string
 const (
 	EngineLlamaCpp Engine = "llamacpp"
 	EngineVLLM     Engine = "vllm"
+	EngineMLX      Engine = "mlx"
 )
 
 // engineAdapter is the gateway-facing capability set both adapters provide.
@@ -50,6 +52,11 @@ type Config struct {
 	ModelArgs []string
 	// Model is the logical name clients address; echoed to the engine.
 	Model string
+	// ContextWindow is the model's window in tokens, used by engines that cannot
+	// report it themselves (MLX: mlx_lm.server exposes no model-metadata endpoint,
+	// so the catalog value is threaded here). Zero means "ask the engine" — the
+	// llama.cpp and vLLM adapters query it live and ignore this.
+	ContextWindow int
 	// Host/Port is where llama-server listens (loopback in single-node mode).
 	// A zero Port asks the OS for a free one.
 	Host string
@@ -169,6 +176,22 @@ func engineSetup(cfg Config) (args []string, adapter engineAdapter, err error) {
 		args = append(args, "--host", cfg.Host, "--port", port)
 		args = append(args, cfg.ExtraArgs...)
 		return args, vllm.New(baseURL, cfg.Model, &http.Client{}), nil
+	case EngineMLX:
+		// `<python> -m mlx_lm.server --model <repo> --host H --port P [extra]`:
+		// BinPath is the venv python (mlx-lm ships the server as a module). The model
+		// is the HF repo id in ModelArgs. Unlike vLLM there is no --served-model-name,
+		// and mlx_lm.server loads exactly the id a request names, so the adapter must
+		// echo that repo id — not cfg.Model (Atlas's logical served name). The window
+		// comes from the catalog (cfg.ContextWindow): mlx_lm.server reports none.
+		engineModel := cfg.Model
+		if n := len(cfg.ModelArgs); n > 0 {
+			engineModel = cfg.ModelArgs[n-1]
+		}
+		args = []string{"-m", "mlx_lm.server", "--model"}
+		args = append(args, cfg.ModelArgs...)
+		args = append(args, "--host", cfg.Host, "--port", port)
+		args = append(args, cfg.ExtraArgs...)
+		return args, mlx.New(baseURL, engineModel, cfg.ContextWindow, &http.Client{}), nil
 	default:
 		return nil, nil, fmt.Errorf("worker: unknown engine %q", cfg.Engine)
 	}

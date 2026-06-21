@@ -41,7 +41,7 @@ func newRunCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&opts.engine, "engine", string(worker.EngineLlamaCpp),
-		"inference engine: llamacpp (prebuilt binary) or vllm (uv-managed venv, GPU)")
+		"inference engine: llamacpp (prebuilt binary), vllm (uv venv, NVIDIA GPU), or mlx (uv venv, Apple Silicon)")
 	cmd.Flags().StringVar(&opts.system, "system", "", "system prompt")
 	cmd.Flags().IntVar(&opts.maxTokens, "max-tokens", 512, "maximum tokens to generate")
 	cmd.Flags().StringVar(&opts.stateDir, "state-dir", defaultStateDir(), "directory for runtimes, weights, and logs")
