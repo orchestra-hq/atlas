@@ -67,6 +67,9 @@ imported by both `internal/cli` (server side: generate, print) and
   so it is covered by config-selection unit tests and manual validation; the
   `wss://` + self-signed + pin path is covered end to end per-PR, and a genuine
   two-machine run lives in the nightly/full-matrix tier.
-- The self-signed certificate is also marked `IsCA` so an operator may instead
-  distribute it as a one-cert trust root (`--cacert`) for clients that prefer
-  chain validation to pinning; workers use the pin.
+- The self-signed certificate is a non-CA leaf (`IsCA: false`, no
+  `KeyUsageCertSign`): pinning trusts its exact leaf bytes, so the cert never needs
+  to sign anything, and keeping the on-disk private key out of CA scope limits the
+  blast radius if it leaks. Private trust is therefore via the pin, not by
+  distributing the cert as a CA root. (An earlier draft minted it `IsCA`; tightened
+  to a leaf in [PR #34](https://github.com/orchestra-hq/atlas/pull/34) after a security review.)

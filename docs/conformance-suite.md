@@ -111,3 +111,25 @@ After N requests across two keys and two models: `atlas usage` returns correct p
 ### G14 — Fleet ops (M1 phase 7)
 
 `wss://` connection works end-to-end (server with TLS cert, worker connecting over `wss://`). Env-var join (`ATLAS_SERVER_URL` + `ATLAS_JOIN_TOKEN`) works without CLI flags. Worker drain: SIGTERM triggers drain, in-flight request completes, no new requests routed to draining worker. Heartbeat timeout: kill -9 on worker process; server marks it gone within 2× heartbeat interval.
+
+---
+
+## M2 test groups
+
+These extend the matrix and the pass policy when M2 ships. See [m2-build-plan.md](m2-build-plan.md) for the phase that introduces each group.
+
+### G15 — Observability (M2 phase 1)
+
+`/metrics` exposes the core series (request rate/latency/error, per-model and per-worker token counters, in-flight gauges) and they move correctly across N requests and a worker drop. `atlas status` reports the same fleet state; `atlas usage --by-worker` attributes usage to stable worker names that survive a reconnect (not ephemeral per-connection ids). The admin CLI reaches a self-signed-TLS gateway with `--tls-pin`.
+
+### G16 — Load balancing + backpressure (M2 phase 2)
+
+Under concurrent load beyond the fleet's capacity for a model: requests spread across replicas by least-in-flight, excess requests queue up to the bound, and further requests shed with a well-formed retryable `429` (capacity momentarily full) or `529` (overloaded) carrying `Retry-After` — never a hang or a 5xx. Queue depth and shed counts appear in `/metrics`; usage records stay complete and correct under the load.
+
+### G17 — Engine breadth (M2 phase 3)
+
+G1–G8+G10 pass on MLX (Apple Silicon) and on SGLang (NVIDIA GPU), on the capable/nightly tier. The pinned engine version is the one provisioned; the upgrade flow moves a runtime to a new pinned version and the suite still passes.
+
+### G18 — Catalog + capability matrix (M2 phase 4)
+
+The agent-capability matrix is generated from real per-model×engine runs and reflects suite results. A request that omits sampling fields uses the model's catalog defaults; a reasoning model's thinking behavior follows its catalog config rather than the global convention.
