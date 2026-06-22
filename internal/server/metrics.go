@@ -39,6 +39,7 @@ type Metrics struct {
 	shed            *prometheus.CounterVec // by model, code (429/529) — backpressure sheds
 	affinity        *prometheus.CounterVec // by model, result (hit/miss) — affinity routing (M3 phase 1)
 	warmKeys        *prometheus.GaugeVec   // by model, worker — distinct warm affinity keys per replica
+	cloudSpill      *prometheus.CounterVec // by model, provider, result — cloud-fallback spills (M3 phase 4)
 
 	// workerSource yields the current connected-worker count for the GaugeFunc.
 	// Stored as an atomic so the hub-backed source can be wired after construction
@@ -59,6 +60,7 @@ const (
 	metricShed            = "atlas_shed_total"
 	metricAffinity        = "atlas_affinity_total"
 	metricWarmKeys        = "atlas_affinity_warm_keys"
+	metricCloudSpill      = "atlas_cloud_spill_total"
 )
 
 // NewMetrics builds the collectors and registers them on a private registry.
@@ -102,6 +104,10 @@ func NewMetrics() *Metrics {
 			Name: metricWarmKeys,
 			Help: "Distinct recently-warmed affinity keys routed to each replica, by model and serving worker.",
 		}, []string{"model", "worker"}),
+		cloudSpill: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: metricCloudSpill,
+			Help: "Total cloud-fallback spills by model, upstream provider, and result (served = relayed 2xx, upstream_error = relayed non-2xx, error = upstream unreachable).",
+		}, []string{"model", "provider", "result"}),
 	}
 	workers := prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Name: metricWorkers,
@@ -112,7 +118,7 @@ func NewMetrics() *Metrics {
 		}
 		return 0
 	})
-	m.reg.MustRegister(m.requests, m.requestDuration, m.inputTokens, m.outputTokens, m.inFlight, m.queueDepth, m.shed, m.affinity, m.warmKeys, workers)
+	m.reg.MustRegister(m.requests, m.requestDuration, m.inputTokens, m.outputTokens, m.inFlight, m.queueDepth, m.shed, m.affinity, m.warmKeys, m.cloudSpill, workers)
 	return m
 }
 
@@ -194,6 +200,15 @@ func (m *Metrics) setWarmKeys(model, worker string, count int) {
 	}
 }
 
+// incCloudSpill counts one cloud-fallback spill for a model to an upstream provider
+// (M3 phase 4): result is "served" (relayed 2xx), "upstream_error" (relayed non-2xx),
+// or "error" (upstream unreachable).
+func (m *Metrics) incCloudSpill(model, provider, result string) {
+	if m != nil {
+		m.cloudSpill.WithLabelValues(model, provider, result).Inc()
+	}
+}
+
 func (m *Metrics) incInFlight() {
 	if m != nil {
 		m.inFlight.Inc()
@@ -220,6 +235,7 @@ type MetricsSnapshot struct {
 	AffinityHits int64 `json:"affinity_hits"`
 	AffinityMiss int64 `json:"affinity_miss"`
 	WarmKeys     int64 `json:"warm_keys"`
+	CloudSpills  int64 `json:"cloud_spills"`
 }
 
 // Snapshot summarizes the registry for the status endpoint. It gathers the live
@@ -272,6 +288,8 @@ func (m *Metrics) Snapshot() MetricsSnapshot {
 			for _, mc := range fam.GetMetric() {
 				snap.WarmKeys += int64(mc.GetGauge().GetValue())
 			}
+		case metricCloudSpill:
+			snap.CloudSpills += sumCounters(fam.GetMetric())
 		}
 	}
 	return snap

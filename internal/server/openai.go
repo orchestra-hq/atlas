@@ -51,6 +51,15 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	affinityKey := g.affinity.routingKey(r, coreReq)
 	model, workerName, release, apiErr := g.dispatchPrep(r.Context(), coreReq.Model, affinityKey, catalog.ClassChat)
 	if apiErr != nil {
+		// Cloud-fallback (ADR-0013): spill overflow / unavailable-but-mappable to the
+		// upstream when enabled, relaying its OpenAI response unchanged; an unreachable
+		// upstream surfaces as a retryable overload.
+		if g.cloud.shouldSpill(coreReq.Model, apiErr) {
+			if err := g.spillToCloud(w, r, body, coreReq.Model, id.KeyID); err != nil {
+				writeOpenAIErr(w, core.ErrEngineUnavailable)
+			}
+			return
+		}
 		if apiErr.Type == anthropic.ErrNotFound {
 			writeOpenAIModelNotFound(w, coreReq.Model) // preserve the model_not_found code
 			return
@@ -61,6 +70,8 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	// Hold the admission slot and the instance's in-flight slot until the request
 	// completes (every return below runs it), so accounting stays accurate.
 	defer release()
+	// Label the response as locally served (ADR-0013); a cloud spill sets "cloud".
+	w.Header().Set(servedByHeader, servedByLocal)
 
 	promptTokens, err := g.assertContextFits(r.Context(), model, coreReq)
 	if err != nil {

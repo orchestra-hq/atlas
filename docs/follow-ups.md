@@ -49,6 +49,14 @@ Two related cross-process gaps in `internal/runtime/provision.go`:
 
 ## API surface / drop-in compatibility
 
+### Cloud-fallback usage is sniffed from the relayed body, not parsed structurally
+
+**Suggested:** when cloud-fallback sees real traffic, or alongside the base64-embeddings work. **Surfaced:** M3 phase 4 build.
+
+`tokenSniffer` (`internal/server/cloud.go`) extracts cloud-spill usage by regex-matching the providers' token fields (`input_tokens`/`output_tokens`, `prompt_tokens`/`completion_tokens`) off the relayed byte stream, keeping the last value seen. This is deliberately format-agnostic (one path covers buffered + SSE, Anthropic + OpenAI) and robust for today's shapes, but it is not a structural parse: if a provider renamed a usage field or nested it differently, the sniff would silently record zero rather than error. Cloud spend would then under-report — which matters because the point of the cloud ledger class is to monitor and cap real spend.
+
+**Decision needed:** acceptable as best-effort (the fields are stable across both providers and the sniffer is covered by tests), or worth a per-provider structural usage parse keyed on the request surface. Recommend leaving it best-effort until a real provider response proves it insufficient — no code change — but tracked so an under-reporting bill is not a surprise.
+
 ### `/v1/embeddings` always returns float vectors, ignoring `encoding_format: base64`
 
 **Suggested:** M3 phase 2b (the embeddings/rerank phase) or the first real-engine G20 nightly run. **Surfaced:** M3 phase 2a build.
