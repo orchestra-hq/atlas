@@ -31,14 +31,13 @@ resources:
   region: eu-west-2
   use_spot: true
   disk_size: 128 # vLLM + CUDA wheels + an 8B model need room
-  # Pin a recent AWS Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 22.04,
-  # eu-west-2). SkyPilot's default AMI shipped a CUDA-12.2 driver, too old for
-  # vLLM 0.23.0's bundled PyTorch ("NVIDIA driver is too old"); this image carries
-  # a current driver. Refresh via:
-  #   aws ssm get-parameter --region eu-west-2 \
-  #     --name /aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-22.04/latest/ami-id
-  image_id:
-    eu-west-2: ami-0c5fe80eabe9a6a1f
+  # NOTE on the GPU driver: SkyPilot's default AMI ships a CUDA-12.2 driver, which
+  # is too old for vLLM 0.23.0's bundled PyTorch ("NVIDIA driver is too old") —
+  # llama.cpp is unaffected and runs fine here. Pinning a full AWS Deep Learning
+  # AMI to get a newer driver was tried and BROKE SkyPilot's Ray bootstrap ("not a
+  # valid Sentinel" — its bundled Python/Ray conflicts with SkyPilot's), so it is
+  # NOT pinned. Getting vLLM a SkyPilot-compatible newer-driver image is a tracked
+  # follow-up (docs/open-questions.md); llama.cpp acceptance runs on the default.
 
 # Synced to the remote host. Run `sky launch` from the repo root so "." is the
 # Atlas checkout.
