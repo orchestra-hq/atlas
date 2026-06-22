@@ -76,11 +76,16 @@ type Reranker interface {
 // 4b-2). The gateway calls EnsureModel when a request names a catalog model with
 // no live route — it deploys one replica and blocks until an instance is ready —
 // and Touch on every request that routes, so an actively used auto-started model
-// is not idle-stopped. The scheduler implements it; nil disables auto-start
-// (single-node mode and tests), leaving an unrouted model a plain 404.
+// is not idle-stopped. ClassOf exposes the catalog's declared class for a model
+// (used by dispatchPrep to reject cold wrong-class requests before autostart). The
+// scheduler implements it; nil disables auto-start (single-node mode and tests),
+// leaving an unrouted model a plain 404.
 type Autostarter interface {
 	EnsureModel(ctx context.Context, model string) bool
 	Touch(model string)
+	// ClassOf returns the catalog-declared class for a model. ok is false when the
+	// model is not in the catalog (non-catalog raw specs or aliases not yet resolved).
+	ClassOf(model string) (class string, ok bool)
 }
 
 // Identity is the authenticated caller behind a request: which key it is, the
@@ -309,6 +314,18 @@ var noopRelease = func() {}
 // *anthropic.Error the caller should render (404 unknown model, 429 momentarily full,
 // 529 overloaded) and a nil release.
 func (g *Gateway) dispatchPrep(ctx context.Context, name, affinityKey, wantClass string) (Model, string, func(), *anthropic.Error) {
+	// Pre-ensure declared-class check: when no replica is live, consult the
+	// autostarter's catalog class to reject a wrong-class cold request before
+	// triggering a wasted autostart (which would otherwise produce a misleading
+	// 529 from the capability type-assertion rather than a clean 400).
+	if g.autostart != nil {
+		preCanon := g.canonical(name)
+		if g.routeCount(preCanon) == 0 {
+			if cls, ok := g.autostart.ClassOf(preCanon); ok && cls != wantClass {
+				return Model{}, "", nil, wrongClassErr(preCanon, wantClass)
+			}
+		}
+	}
 	canon, ok := g.ensure(ctx, name)
 	if !ok {
 		return Model{}, "", nil, modelNotFoundErr(name)

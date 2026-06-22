@@ -489,6 +489,16 @@ func (s *Scheduler) Touch(model string) {
 	s.mu.Unlock()
 }
 
+// ClassOf returns the catalog-declared class for a model, normalized so an empty
+// class reads as "chat". ok is false when the model is not in the catalog.
+func (s *Scheduler) ClassOf(model string) (class string, ok bool) {
+	entry, ok := s.cat.Lookup(model)
+	if !ok {
+		return "", false
+	}
+	return entry.ClassOrChat(), true
+}
+
 // Run sweeps for idle auto-started deployments and unloads them, until ctx is
 // cancelled (M1 phase 4b-2, idle-stop). It is a no-op when idle-stop is disabled
 // (idleTimeout <= 0). Start it once in a goroutine at server startup.
