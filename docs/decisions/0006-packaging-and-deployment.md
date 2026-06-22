@@ -22,7 +22,7 @@ This work is scoped as a new **M0.5 "Release & prove"** milestone (see [roadmap.
 ## Consequences
 
 - A `Dockerfile` (multi-stage, slim + CUDA targets) and GHCR publishing join the release pipeline (GoReleaser/CI); image tags are version-pinned like the binary.
-- A nightly scheduled workflow gains cloud credentials via GitHub OIDC (plus a `GH_PAT` to register the ephemeral runner) and an on-demand GPU quota in an AWS account. This is a real dependency on a cloud account, not on any one provisioning tool.
+- A nightly scheduled workflow gains cloud credentials via GitHub OIDC (plus a GitHub App, Administration:write on this repo, minting a short-lived token to register the ephemeral runner) and an on-demand GPU quota in an AWS account. This is a real dependency on a cloud account, not on any one provisioning tool.
 - The conformance harness stays engine- and provider-agnostic; the GPU run reuses `run.py` unchanged with `--engine vllm` and `CONF_CLAUDE_CODE_SMOKE=1`.
 - "Both engines green" and "real Claude Code drop-in" move from asserted-by-construction to observed, on a cadence (nightly) rather than per-PR — the per-PR CPU gate (`G1–G10` on llama.cpp) is unchanged.
 - Does not amend ADR-0003: dial-out workers remain the fleet mechanism; the provisioners (machulav for the nightly, SkyPilot for the serve recipe) only bring up single hosts.

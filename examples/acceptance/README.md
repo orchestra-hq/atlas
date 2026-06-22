@@ -34,11 +34,12 @@ The defaults serve **catalog** models (`qwen3-8b` on vLLM; `qwen2.5-7b-instruct-
 
 2. **OIDC provider + IAM role.** Add the GitHub OIDC provider (`token.actions.githubusercontent.com`, audience `sts.amazonaws.com`) if absent, and a role trusting `repo:orchestra-hq/atlas:*`. The role needs EC2 permissions for `RunInstances` / `TerminateInstances` / `CreateTags` / `Describe*` (machulav launches and tears down the instance — no keypair or instance profile required; the runner dials out to GitHub).
 
-3. **GitHub PAT.** machulav registers the ephemeral runner via the GitHub API, so it needs a token with the `repo` scope (classic) or a fine-grained token with **Administration: read/write** on this repo. Store it as the `GH_PAT` secret.
+3. **GitHub App (for runner registration).** Registering a self-hosted runner is an admin-gated GitHub API call, so the workflow mints a short-lived token from a GitHub App rather than holding a long-lived PAT. Create an App with a single permission — **Repository → Administration: read & write** — generate a private key, and **install it on this repo only**. The workflow's `create-github-app-token` step exchanges the App id + key for a ~1 h token scoped to this one repo. (A fine-grained PAT with Administration:write on just this repo also works; the App avoids any standing secret.)
 
 4. **Repo config** (Settings → Secrets and variables → Actions):
    - Secret `AWS_ROLE_ARN` = the OIDC role ARN.
-   - Secret `GH_PAT` = the runner-registration token.
+   - Secret `ACCEPTANCE_APP_ID` = the GitHub App's id.
+   - Secret `ACCEPTANCE_APP_PRIVATE_KEY` = the App's private key (.pem contents).
    - Variables `ACCEPTANCE_SUBNET_ID` + `ACCEPTANCE_SECURITY_GROUP_ID` = a subnet and security group in the region (a default-VPC subnet and the default SG work; the SG only needs outbound).
    - Variable `AWS_REGION` (defaults to `eu-west-2`).
    - Variable `GPU_ACCEPTANCE_ENABLED` = `true` — **the switch that arms the nightly.** Unset keeps it dormant.
