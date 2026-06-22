@@ -20,9 +20,12 @@
 name: atlas-acceptance
 
 resources:
-  # ~24GB single GPU is enough for a capable ~8B model; let SkyPilot pick the
-  # cheapest of these across enabled clouds/regions.
-  accelerators: { L4: 1, A10G: 1, A10: 1 }
+  # g6.xlarge: 1× NVIDIA L4 (24 GB VRAM) — fits Qwen3-8B on both engines.
+  # Pinned to eu-west-2 where the spot GPU quota lives; use_spot keeps the
+  # nightly cost low (~$0.40/hr). --retry-until-up in the nightly workflow
+  # rides out momentary spot capacity gaps in the region.
+  instance_type: g6.xlarge
+  region: eu-west-2
   use_spot: true
   disk_size: 128 # vLLM + CUDA wheels + an 8B model need room
 
