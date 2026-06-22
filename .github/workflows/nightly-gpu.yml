@@ -12,9 +12,11 @@ name: Nightly GPU acceptance
 # avoids the mid-run preemptions that repeatedly killed the SkyPilot runs.
 #
 # Dormant until enabled: start-runner is gated on GPU_ACCEPTANCE_ENABLED=true.
-# Requires (see examples/acceptance/README.md): secret AWS_ROLE_ARN (OIDC) +
-# GH_PAT (registers the self-hosted runner); vars ACCEPTANCE_SUBNET_ID,
-# ACCEPTANCE_SECURITY_GROUP_ID, AWS_REGION.
+# Requires (see examples/acceptance/README.md): secret AWS_ROLE_ARN (OIDC); a
+# GitHub App (Administration:write on this repo) via secrets ACCEPTANCE_APP_ID +
+# ACCEPTANCE_APP_PRIVATE_KEY (mints the short-lived token that registers the
+# self-hosted runner); vars ACCEPTANCE_SUBNET_ID, ACCEPTANCE_SECURITY_GROUP_ID,
+# AWS_REGION.
 
 on:
   schedule:
@@ -41,12 +43,20 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      # Mint a short-lived (~1 h) installation token scoped to this repo's
+      # Administration permission — the minimum GitHub requires to register a
+      # self-hosted runner. Narrower than a PAT: one repo, no long-lived secret.
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.ACCEPTANCE_APP_ID }}
+          private-key: ${{ secrets.ACCEPTANCE_APP_PRIVATE_KEY }}
       - name: Start EC2 runner
         id: start
         uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
         with:
           mode: start
-          github-token: ${{ secrets.GH_PAT }}
+          github-token: ${{ steps.app-token.outputs.token }}
           # On-demand g6.xlarge (1× L4, 24 GB). The Base OSS Nvidia Driver AMI
           # (Ubuntu 22.04, eu-west-2) carries a recent driver — required for
           # vLLM 0.23.0's CUDA-13 wheels. Refresh via:
@@ -100,10 +110,15 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.ACCEPTANCE_APP_ID }}
+          private-key: ${{ secrets.ACCEPTANCE_APP_PRIVATE_KEY }}
       - name: Stop EC2 runner
         uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
         with:
           mode: stop
-          github-token: ${{ secrets.GH_PAT }}
+          github-token: ${{ steps.app-token.outputs.token }}
           label: ${{ needs.start-runner.outputs.label }}
           ec2-instance-id: ${{ needs.start-runner.outputs.ec2-instance-id }}
