@@ -363,7 +363,11 @@ func (w *Worker) engineLogTail() string {
 		return ""
 	}
 	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-	const maxLines = 40
+	// vLLM runs its EngineCore in a subprocess and prints the real failure (CUDA
+	// OOM, a bad config) well above the outer async traceback, so a short tail
+	// captures only framing frames — the first GPU run's 40-line tail missed the
+	// root cause entirely. Keep enough to reach it.
+	const maxLines = 200
 	if len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
 	}

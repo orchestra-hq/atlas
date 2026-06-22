@@ -301,7 +301,7 @@ func TestEngineLogTail(t *testing.T) {
 	t.Run("labels engine and tails the last lines", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "engine.log")
 		var b strings.Builder
-		for i := range 100 {
+		for i := range 500 {
 			fmt.Fprintf(&b, "line-%d\n", i)
 		}
 		if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
@@ -311,11 +311,11 @@ func TestEngineLogTail(t *testing.T) {
 		if !strings.Contains(got, "vllm engine log") {
 			t.Fatalf("tail missing engine label: %q", got)
 		}
-		if !strings.Contains(got, "line-99") {
+		if !strings.Contains(got, "line-499") {
 			t.Fatalf("tail missing the last line: %q", got)
 		}
 		if strings.Contains(got, "line-0\n") {
-			t.Fatalf("tail should be truncated to the last 40 lines, but includes line-0: %q", got)
+			t.Fatalf("tail should be truncated to the cap, but includes line-0: %q", got)
 		}
 	})
 }
