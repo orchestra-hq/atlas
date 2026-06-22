@@ -31,6 +31,7 @@ type serverOptions struct {
 	retryAfter       int
 	affinityTol      int
 	affinityPrefix   int
+	cloudFallback    []string
 	tls              tlsOptions
 }
 
@@ -72,6 +73,11 @@ func newServerCmd() *cobra.Command {
 		"how many more in-flight requests a conversation's warm replica may carry than the least-loaded one before affinity yields to load balancing (-1 disables affinity)")
 	cmd.Flags().IntVar(&opts.affinityPrefix, "affinity-prefix-messages", 2,
 		"leading conversation messages hashed with the system prompt into the affinity routing key (when no x-atlas-session header is set)")
+	// Cloud-fallback (M3 phase 4, ADR-0013): off by default. Each --cloud-fallback
+	// opt-in spills one model's overflow to an upstream provider, the key read from
+	// an env var (never the command line).
+	cmd.Flags().StringArrayVar(&opts.cloudFallback, "cloud-fallback", nil,
+		"spill a model's overflow to a provider as localModel:provider:upstreamModel:keyEnv[:baseURL] (provider anthropic|openai; keyEnv names the env var holding the upstream key); repeat per model; off if unset")
 	// TLS (M1 phase 7, ADR-0009): mutually exclusive modes; default is plaintext
 	// (ws://, the dev/internal default per ADR-0007).
 	cmd.Flags().StringVar(&opts.tls.certFile, "tls-cert", "", "PEM certificate to serve TLS with (requires --tls-key)")
@@ -170,6 +176,13 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 		Tolerance:      opts.affinityTol,
 		PrefixMessages: opts.affinityPrefix,
 	}))
+	// Cloud-fallback (M3 phase 4, ADR-0013): off unless --cloud-fallback opts a model
+	// in. Wires to the metrics sink, so it follows SetMetrics.
+	cloudTargets, err := parseCloudFallback(opts.cloudFallback)
+	if err != nil {
+		return err
+	}
+	gw.SetCloudFallback(server.NewCloudFallback(cloudTargets, nil))
 	hub := server.NewHub(opts.token, gw)
 	// The connected-worker gauge reads the hub's live count at scrape time.
 	metrics.SetWorkerCountSource(func() int { return len(hub.Workers()) })

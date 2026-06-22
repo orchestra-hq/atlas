@@ -159,14 +159,15 @@ const localWorkerID = "local"
 // dispatch to a worker. It serves the Anthropic surface: POST /v1/messages
 // (buffered and SSE), POST /v1/messages/count_tokens, and GET /v1/models[/{id}].
 type Gateway struct {
-	auth      Authenticator // validates the API key on every request (ADR-0008)
-	createdAt string        // wire created_at stamped on model objects
-	logger    *slog.Logger  // one structured line per API request (G10)
-	autostart Autostarter   // deploys+waits on a request for an unrouted model (nil = off)
-	usage     UsageRecorder // durable per-request usage ledger (phase 6, G13; nil = off)
-	metrics   *Metrics      // Prometheus instrumentation (M2 phase 1; nil = off)
-	admission *Admission    // per-model load balancing + backpressure (M2 phase 2b; nil = off)
-	affinity  *Affinity     // prefix/session-affinity replica selection (M3 phase 1; nil = off)
+	auth      Authenticator  // validates the API key on every request (ADR-0008)
+	createdAt string         // wire created_at stamped on model objects
+	logger    *slog.Logger   // one structured line per API request (G10)
+	autostart Autostarter    // deploys+waits on a request for an unrouted model (nil = off)
+	usage     UsageRecorder  // durable per-request usage ledger (phase 6, G13; nil = off)
+	metrics   *Metrics       // Prometheus instrumentation (M2 phase 1; nil = off)
+	admission *Admission     // per-model load balancing + backpressure (M2 phase 2b; nil = off)
+	affinity  *Affinity      // prefix/session-affinity replica selection (M3 phase 1; nil = off)
+	cloud     *CloudFallback // cloud-fallback spill for overflow (M3 phase 4; nil = off)
 
 	// mu guards the route table, which is static in single-node mode but changes
 	// as remote workers register and drop their models in fleet mode. route and
@@ -246,6 +247,20 @@ func (g *Gateway) SetAffinity(a *Affinity) {
 	g.affinity = a
 	if a != nil {
 		a.metrics = g.metrics
+	}
+}
+
+// SetCloudFallback attaches cloud-fallback spill (M3 phase 4, ADR-0013), wiring it to
+// the metrics sink and logger. Call once at startup, after SetMetrics; nil (the
+// default) or a controller with no targets leaves fallback off, so overflow sheds
+// 429/529 per ADR-0010 and no request ever leaves the operator's infrastructure.
+func (g *Gateway) SetCloudFallback(c *CloudFallback) {
+	g.cloud = c
+	if c != nil {
+		c.metrics = g.metrics
+		if g.logger != nil {
+			c.logger = g.logger
+		}
 	}
 }
 
@@ -636,6 +651,16 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 	affinityKey := g.affinity.routingKey(r, coreReq)
 	model, workerName, release, apiErr := g.dispatchPrep(r.Context(), coreReq.Model, affinityKey, catalog.ClassChat)
 	if apiErr != nil {
+		// Cloud-fallback (ADR-0013): when overflow would shed (429/529) or the model is
+		// unavailable-but-mappable (404) and fallback is enabled for it, spill to the
+		// configured upstream instead of failing. An upstream that cannot be reached
+		// surfaces as a clean retryable overload, not a hang.
+		if g.cloud.shouldSpill(coreReq.Model, apiErr) {
+			if err := g.spillToCloud(w, r, body, coreReq.Model, id.KeyID); err != nil {
+				anthropic.WriteError(w, overloadedErr(g.admission.retryAfterSecs()))
+			}
+			return
+		}
 		anthropic.WriteError(w, apiErr)
 		return
 	}
@@ -643,6 +668,8 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 	// completes — every return below runs this, so a failed assertion, an Execute
 	// error, and a finished stream all free both.
 	defer release()
+	// Label the response as locally served (ADR-0013); a cloud spill sets "cloud".
+	w.Header().Set(servedByHeader, servedByLocal)
 
 	// Assert the prompt fits the model's window before dispatch, so an oversized
 	// request fails with a clean 400 rather than a garbled engine overflow
