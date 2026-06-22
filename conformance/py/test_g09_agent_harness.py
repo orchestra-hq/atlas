@@ -125,6 +125,10 @@ def test_claude_code_smoke(base_url, api_key, model):
     if claude is None:
         pytest.skip("claude binary not found (set CONF_CLAUDE_CODE_BIN) — drop-in smoke needs it")
 
+    # Wall-clock per attempt. A capable model on a real GPU still needs minutes
+    # to drive the full agentic loop, so the cell is given more time than the
+    # CPU-tier default via CONF_CLAUDE_CODE_TIMEOUT (the acceptance run raises it).
+    timeout_s = int(os.environ.get("CONF_CLAUDE_CODE_TIMEOUT", "300"))
     last_err = ""
     for attempt in range(2):
         with tempfile.TemporaryDirectory(prefix="atlas-cc-smoke-") as sandbox:
@@ -156,10 +160,10 @@ def test_claude_code_smoke(base_url, api_key, model):
                     stdin=subprocess.DEVNULL,
                     capture_output=True,
                     text=True,
-                    timeout=300,
+                    timeout=timeout_s,
                 )
             except subprocess.TimeoutExpired:
-                last_err = "claude -p timed out after 300s"
+                last_err = f"claude -p timed out after {timeout_s}s"
                 continue
 
             hello = os.path.join(sandbox, "hello.txt")

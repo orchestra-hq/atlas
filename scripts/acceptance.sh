@@ -32,6 +32,9 @@ ENGINES=${ACCEPTANCE_ENGINES:-"vllm llamacpp"}
 ADDR=${ATLAS_ADDR:-127.0.0.1:8080}
 export ATLAS_STATE_DIR=${ATLAS_STATE_DIR:-$REPO/.atlas-acceptance}
 export CONF_CLAUDE_CODE_SMOKE=${CONF_CLAUDE_CODE_SMOKE:-1}
+# The Claude Code smoke drives a full agentic loop; a capable model on a GPU
+# still needs minutes, so give it more wall-clock than the per-PR default (300s).
+export CONF_CLAUDE_CODE_TIMEOUT=${CONF_CLAUDE_CODE_TIMEOUT:-600}
 READY_TIMEOUT=${READY_TIMEOUT:-600} # seconds; an 8B vLLM load is minutes-slow
 
 # Capable models per engine, served by CATALOG NAME (not a raw -hf/spec). The
@@ -48,8 +51,14 @@ VLLM_REASONING_MODEL=${VLLM_REASONING_MODEL:-$VLLM_MODEL}
 # card, so cap the served length — ample for conformance (short prompts).
 VLLM_ENGINE_ARGS=${VLLM_ENGINE_ARGS:-"--max-model-len 16384"}
 
-LLAMACPP_MODEL=${LLAMACPP_MODEL:-qwen3-8b-gguf}
-LLAMACPP_REASONING_MODEL=${LLAMACPP_REASONING_MODEL:-$LLAMACPP_MODEL}
+# llama.cpp deploys TWO models (both Q4 fit a 24 GB card easily): a capable
+# non-reasoning chat model for the sonnet/haiku aliases — which also drives the
+# Claude Code smoke (G9) and satisfies G4's non-reasoning-graceful assertion that
+# a hybrid model cannot — and the reasoning Qwen3-8B for opus (G4 reasoning half).
+# vLLM stays single-model: two 7-8B bf16 models exceed 24 GB, so its non-reasoning
+# coverage waits on quantized weights (tracked separately).
+LLAMACPP_MODEL=${LLAMACPP_MODEL:-qwen2.5-7b-instruct-gguf}
+LLAMACPP_REASONING_MODEL=${LLAMACPP_REASONING_MODEL:-qwen3-8b-gguf}
 LLAMACPP_ENGINE_ARGS=${LLAMACPP_ENGINE_ARGS:-""}
 
 # Aliases are constant across engines, so the harness always addresses the same
