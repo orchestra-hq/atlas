@@ -75,11 +75,17 @@ jobs:
     needs: start-runner
     runs-on: ${{ needs.start-runner.outputs.label }}
     timeout-minutes: 120
+    # The machulav runner starts (from cloud-init, as root) without HOME set, so
+    # Go's cache, uv's ~/.local, npm, and the claude config dir have nowhere to
+    # live — setup-go's `go env` fails outright. Set it for the whole job.
+    env:
+      HOME: /root
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: false # ephemeral one-shot box; nothing to cache across runs
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
