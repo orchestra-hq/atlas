@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/orchestra-hq/atlas/catalog"
 	"github.com/orchestra-hq/atlas/internal/core"
 	"github.com/orchestra-hq/atlas/internal/engines/llamacpp"
 	"github.com/orchestra-hq/atlas/internal/engines/mlx"
@@ -33,12 +34,18 @@ const (
 	EngineSGLang   Engine = "sglang"
 )
 
-// engineAdapter is the gateway-facing capability set both adapters provide.
+// engineAdapter is the gateway-facing capability set every adapter provides. Embed
+// serves the embedding model class (M3 phase 2a) via the shared client's
+// /v1/embeddings call; a chat model's engine simply never receives an embed request
+// (the gateway routes by class), and an embedding-mode engine never receives
+// Execute, so both methods coexist on one interface without either path
+// misdirecting the other.
 type engineAdapter interface {
 	Execute(ctx context.Context, req core.Request) (core.Response, error)
 	ExecuteStream(ctx context.Context, req core.Request, sink core.StreamSink) error
 	CountTokens(ctx context.Context, req core.Request) (int, error)
 	ContextWindow(ctx context.Context) (int, error)
+	Embed(ctx context.Context, req core.EmbedRequest) (core.EmbedResponse, error)
 }
 
 // Config configures a single-engine worker supervising one engine subprocess.
@@ -73,6 +80,11 @@ type Config struct {
 	// reasoning model gets it. False (the default for a raw path/spec, or a
 	// non-reasoning entry) omits the kwarg. See openaichat.Client.ThinkingKwargs.
 	Reasoning bool
+	// Class is the model class (M3 phase 2a, ADR-0012): empty or "embedding". An
+	// embedding model launches its engine in embedding mode (e.g. llama.cpp
+	// --embedding), where the engine serves /v1/embeddings instead of chat. Empty
+	// (the default) is a chat model, launched exactly as before.
+	Class string
 	// Host/Port is where llama-server listens (loopback in single-node mode).
 	// A zero Port asks the OS for a free one.
 	Host string
@@ -181,6 +193,15 @@ func engineSetup(cfg Config) (args []string, adapter engineAdapter, err error) {
 			"--port", port,
 			"--jinja", // native chat template, tool + thinking parsing (catalog research)
 		}
+		if cfg.Class == catalog.ClassEmbedding {
+			// Embedding mode: llama-server serves /v1/embeddings (mean-pooled) and
+			// stops serving chat. The catalog window doubles as the max sequence the
+			// pooled encoder accepts, so cap the context to it.
+			args = append(args, "--embedding", "--pooling", "mean")
+			if cfg.ContextWindow > 0 {
+				args = append(args, "-c", fmt.Sprint(cfg.ContextWindow))
+			}
+		}
 		args = append(args, cfg.ModelArgs...)
 		args = append(args, cfg.ExtraArgs...)
 		return args, llamacpp.New(baseURL, cfg.Model, cfg.Reasoning, &http.Client{}), nil
@@ -257,6 +278,13 @@ func (w *Worker) withSamplingDefaults(req core.Request) core.Request {
 // satisfies server.TokenCounter.
 func (w *Worker) CountTokens(ctx context.Context, req core.Request) (int, error) {
 	return w.adapter.CountTokens(ctx, req)
+}
+
+// Embed runs one embeddings request against the supervised engine (M3 phase 2a). It
+// satisfies server.Embedder. Sampling defaults do not apply — embedding does not
+// sample — so the request passes through unmodified.
+func (w *Worker) Embed(ctx context.Context, req core.EmbedRequest) (core.EmbedResponse, error) {
+	return w.adapter.Embed(ctx, req)
 }
 
 // ContextWindow returns the engine's context window in tokens.

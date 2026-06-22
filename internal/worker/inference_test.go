@@ -20,6 +20,7 @@ type fakeEngine struct {
 	execute func(ctx context.Context, req core.Request) (core.Response, error)
 	stream  func(ctx context.Context, req core.Request, sink core.StreamSink) error
 	count   func(ctx context.Context, req core.Request) (int, error)
+	embed   func(ctx context.Context, req core.EmbedRequest) (core.EmbedResponse, error)
 }
 
 func (f *fakeEngine) Execute(ctx context.Context, req core.Request) (core.Response, error) {
@@ -32,6 +33,13 @@ func (f *fakeEngine) ExecuteStream(ctx context.Context, req core.Request, sink c
 
 func (f *fakeEngine) CountTokens(ctx context.Context, req core.Request) (int, error) {
 	return f.count(ctx, req)
+}
+
+func (f *fakeEngine) Embed(ctx context.Context, req core.EmbedRequest) (core.EmbedResponse, error) {
+	if f.embed == nil {
+		return core.EmbedResponse{}, nil
+	}
+	return f.embed(ctx, req)
 }
 
 // recordingSink captures streamed deltas for assertions.
@@ -201,6 +209,33 @@ func TestRemoteCountTokens(t *testing.T) {
 	}
 	if n != 42 {
 		t.Errorf("count = %d, want 42", n)
+	}
+}
+
+// TestRemoteEmbed drives an embeddings round-trip over the worker channel (M3 phase
+// 2a): the gateway's remote executor implements server.Embedder, and the worker's
+// handleEmbed routes to the engine's Embed.
+func TestRemoteEmbed(t *testing.T) {
+	eng := &fakeEngine{embed: func(_ context.Context, req core.EmbedRequest) (core.EmbedResponse, error) {
+		vecs := make([][]float32, len(req.Input))
+		for i := range req.Input {
+			vecs[i] = []float32{float32(i), 0.5}
+		}
+		return core.EmbedResponse{Embeddings: vecs, Usage: core.Usage{InputTokens: 8}}, nil
+	}}
+	m, teardown := dialedModel(t, eng)
+	defer teardown()
+
+	embedder, ok := m.Exec.(server.Embedder)
+	if !ok {
+		t.Fatal("remote worker is not an Embedder")
+	}
+	resp, err := embedder.Embed(context.Background(), core.EmbedRequest{Model: "m", Input: []string{"a", "b"}})
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if len(resp.Embeddings) != 2 || resp.Embeddings[1][0] != 1 || resp.Usage.InputTokens != 8 {
+		t.Errorf("embed result = %+v", resp)
 	}
 }
 

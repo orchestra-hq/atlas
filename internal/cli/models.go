@@ -30,6 +30,7 @@ type startedModel struct {
 	name      string
 	worker    *worker.Worker
 	ctxWindow int
+	class     string // model class (M3 phase 2a); empty = chat
 }
 
 // engineRuntime is a provisioned engine binary plus the catalog and store
@@ -93,6 +94,7 @@ func (r *engineRuntime) start(ctx context.Context, spec string) (startedModel, e
 		Temperature:   rm.sampling.Temperature, // catalog sampling defaults (M2 phase 4a)
 		TopP:          rm.sampling.TopP,
 		Reasoning:     rm.reasoning, // gates the thinking kwarg (M2 phase 4b)
+		Class:         rm.class,     // embedding launches engine in embedding mode (M3 phase 2a)
 		LogPath:       filepath.Join(r.stateDir, logFileName(r.engine, rm.served)),
 	})
 	if err != nil {
@@ -107,7 +109,7 @@ func (r *engineRuntime) start(ctx context.Context, spec string) (startedModel, e
 			r.cmd.Printf("  warning: could not read context window for %q (%v); fit assertion disabled\n", rm.served, err)
 		}
 	}
-	return startedModel{name: rm.served, worker: w, ctxWindow: ctxWindow}, nil
+	return startedModel{name: rm.served, worker: w, ctxWindow: ctxWindow, class: rm.class}, nil
 }
 
 // startModelsOn launches each spec on the runtime, blocking until each has
@@ -167,5 +169,5 @@ func (l *fleetLoader) Load(ctx context.Context, model, engine string) (worker.Se
 		return worker.ServedModel{}, nil, err
 	}
 	stop := func() { _ = sm.worker.Stop() }
-	return worker.ServedModel{Name: sm.name, ContextWindow: sm.ctxWindow, Engine: sm.worker}, stop, nil
+	return worker.ServedModel{Name: sm.name, ContextWindow: sm.ctxWindow, Class: sm.class, Engine: sm.worker}, stop, nil
 }

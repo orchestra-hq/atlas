@@ -187,7 +187,7 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 	// routes, so a reconnecting worker or a second worker serving the same model
 	// never loses a live route.
 	for _, sm := range join.Models {
-		h.registerInstance(wid, join.Name, Model{Name: sm.Name, Exec: rw, ContextWindow: sm.ContextWindow})
+		h.registerInstance(wid, join.Name, Model{Name: sm.Name, Exec: rw, ContextWindow: sm.ContextWindow, Class: sm.Class})
 	}
 	defer h.unregisterWorker(hw)
 
@@ -251,7 +251,7 @@ func (h *Hub) HandleConnect(w http.ResponseWriter, r *http.Request) {
 			if draining {
 				continue
 			}
-			h.registerInstance(wid, hw.info.Name, Model{Name: p.Model, Exec: rw, ContextWindow: p.ContextWindow})
+			h.registerInstance(wid, hw.info.Name, Model{Name: p.Model, Exec: rw, ContextWindow: p.ContextWindow, Class: p.Class})
 			h.addWorkerModel(wid, p.Model)
 			if h.sched != nil {
 				h.sched.ModelReady(wid, p.Model, p.ContextWindow)

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/orchestra-hq/atlas/catalog"
 	"github.com/orchestra-hq/atlas/internal/api/anthropic"
 	"github.com/orchestra-hq/atlas/internal/api/openai"
 	"github.com/orchestra-hq/atlas/internal/core"
@@ -48,7 +49,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	affinityKey := g.affinity.routingKey(r, coreReq)
-	model, workerName, release, apiErr := g.dispatchPrep(r.Context(), coreReq.Model, affinityKey)
+	model, workerName, release, apiErr := g.dispatchPrep(r.Context(), coreReq.Model, affinityKey, catalog.ClassChat)
 	if apiErr != nil {
 		if apiErr.Type == anthropic.ErrNotFound {
 			writeOpenAIModelNotFound(w, coreReq.Model) // preserve the model_not_found code
@@ -93,6 +94,81 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	resp, _ = core.ApplyStopSequences(resp, stops)
 	recordBillableUsage(r.Context(), tags, resp.Usage.InputTokens, resp.Usage.OutputTokens)
 	openai.WriteJSON(w, http.StatusOK, openai.FromCore(newCompletionID(), time.Now().Unix(), requested, resp))
+}
+
+// handleEmbeddings serves POST /v1/embeddings, the OpenAI-compatible embeddings
+// surface (M3 phase 2a, ADR-0012). It reuses the gateway's auth, model resolution,
+// and admission, but routes only to embedding-class models — a request naming a chat
+// model is rejected cleanly by the class check in dispatchPrep — and dispatches the
+// single-shot Embed capability rather than Execute. There is no streaming and no
+// context-window assertion (an embeddings request has no max_tokens).
+func (g *Gateway) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
+	id, authErr := g.authenticate(r)
+	if authErr != nil {
+		writeOpenAIErr(w, authErr)
+		return
+	}
+
+	body, err := readBody(w, r)
+	if err != nil {
+		openai.WriteError(w, openai.ErrInvalid("could not read request body"))
+		return
+	}
+
+	var req openai.EmbeddingsRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		openai.WriteError(w, openai.ErrInvalid("request body is not valid JSON or uses an unsupported input shape"))
+		return
+	}
+	coreReq := req.ToCore()
+	if coreReq.Model == "" {
+		openai.WriteError(w, openai.ErrInvalid("model is required"))
+		return
+	}
+	if len(coreReq.Input) == 0 {
+		openai.WriteError(w, openai.ErrInvalid("input is required"))
+		return
+	}
+
+	if !g.modelPermitted(id, coreReq.Model) {
+		writeOpenAIErr(w, forbiddenModelErr(coreReq.Model))
+		return
+	}
+
+	// Embeddings are single-shot, so no affinity key; class is embedding, so a chat
+	// model addressed here is rejected by dispatchPrep before an admission slot.
+	model, workerName, release, apiErr := g.dispatchPrep(r.Context(), coreReq.Model, "", catalog.ClassEmbedding)
+	if apiErr != nil {
+		if apiErr.Type == anthropic.ErrNotFound {
+			writeOpenAIModelNotFound(w, coreReq.Model)
+			return
+		}
+		writeOpenAIErr(w, apiErr)
+		return
+	}
+	defer release()
+
+	embedder, ok := model.Exec.(Embedder)
+	if !ok {
+		// The model resolved to the embedding class but its executor cannot embed — a
+		// capability gap, not a client error. Surface it as a retryable overload rather
+		// than a 500, consistent with an unavailable engine.
+		writeOpenAIErr(w, core.ErrEngineUnavailable)
+		return
+	}
+
+	// Dispatch under the canonical served name; echo the requested name back.
+	requested := coreReq.Model
+	coreReq.Model = model.Name
+	resp, err := embedder.Embed(r.Context(), coreReq)
+	if err != nil {
+		writeOpenAIErr(w, err)
+		return
+	}
+
+	tags := usageTags{keyID: id.KeyID, workerID: workerName, model: model.Name, inputTokens: resp.Usage.InputTokens}
+	recordBillableUsage(r.Context(), tags, resp.Usage.InputTokens, 0)
+	openai.WriteJSON(w, http.StatusOK, openai.FromCoreEmbeddings(requested, resp))
 }
 
 // streamChatCompletion serves a streaming POST /v1/chat/completions. It opens

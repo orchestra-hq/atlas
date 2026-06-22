@@ -58,14 +58,16 @@ const (
 	// Inference, server → worker.
 	MsgExecute     MessageType = "execute"
 	MsgCountTokens MessageType = "count_tokens"
+	MsgEmbed       MessageType = "embed" // run one embeddings request (M3 phase 2a)
 	MsgCancel      MessageType = "cancel"
 
 	// Inference, worker → server.
-	MsgResponse   MessageType = "response"    // reply to a non-streaming execute
-	MsgChunk      MessageType = "chunk"       // one streamed delta
-	MsgDone       MessageType = "done"        // end of a streamed execute
-	MsgTokenCount MessageType = "token_count" // reply to count_tokens
-	MsgError      MessageType = "error"       // a request failed
+	MsgResponse    MessageType = "response"     // reply to a non-streaming execute
+	MsgChunk       MessageType = "chunk"        // one streamed delta
+	MsgDone        MessageType = "done"         // end of a streamed execute
+	MsgTokenCount  MessageType = "token_count"  // reply to count_tokens
+	MsgEmbedResult MessageType = "embed_result" // reply to embed (M3 phase 2a)
+	MsgError       MessageType = "error"        // a request failed
 )
 
 // Error codes carried in ErrorPayload.Code, so the gateway can reconstruct the
@@ -115,10 +117,13 @@ type JoinPayload struct {
 
 // ServedModel advertises one model a worker serves: the name clients address
 // and its context window in tokens (0 = unknown, the gateway skips its fit
-// assertion). The gateway registers a route per ServedModel on join.
+// assertion). The gateway registers a route per ServedModel on join. Class is the
+// model class (M3 phase 2a, ADR-0012); empty means "chat", so a worker built before
+// classes registers chat routes unchanged.
 type ServedModel struct {
 	Name          string `json:"name"`
 	ContextWindow int    `json:"context_window,omitempty"`
+	Class         string `json:"class,omitempty"`
 }
 
 // JoinAckPayload is the server's response to a join message.
@@ -168,6 +173,7 @@ type UnloadPayload struct {
 type ModelReadyPayload struct {
 	Model         string `json:"model"`
 	ContextWindow int    `json:"context_window,omitempty"`
+	Class         string `json:"class,omitempty"` // model class (M3 phase 2a); empty = chat
 }
 
 // ModelUnloadedPayload reports that a model has been stopped (worker → server).
@@ -197,6 +203,14 @@ type ExecutePayload struct {
 type CountTokensPayload struct {
 	RequestID string       `json:"request_id"`
 	Request   core.Request `json:"request"`
+}
+
+// EmbedPayload runs one embeddings request on the worker (server → worker, M3
+// phase 2a). Single-shot: there is no stream or tool loop, so unlike ExecutePayload
+// it has no Stream flag; the worker answers with an embed_result or error frame.
+type EmbedPayload struct {
+	RequestID string            `json:"request_id"`
+	Request   core.EmbedRequest `json:"request"`
 }
 
 // CancelPayload tells the worker to stop an in-flight request (server → worker),
@@ -231,6 +245,13 @@ type DonePayload struct {
 type TokenCountPayload struct {
 	RequestID string `json:"request_id"`
 	Count     int    `json:"count"`
+}
+
+// EmbedResultPayload answers an embed request with the engine's vectors and token
+// usage (worker → server, M3 phase 2a).
+type EmbedResultPayload struct {
+	RequestID string             `json:"request_id"`
+	Response  core.EmbedResponse `json:"response"`
 }
 
 // ErrorPayload reports that a request failed (worker → server). Code is one of

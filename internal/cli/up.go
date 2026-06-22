@@ -93,7 +93,7 @@ func runUp(ctx context.Context, cmd *cobra.Command, opts *upOptions) error {
 	models := make([]server.Model, 0, len(started))
 	seen := map[string]bool{}
 	for _, sm := range started {
-		models = append(models, server.Model{Name: sm.name, Exec: sm.worker, ContextWindow: sm.ctxWindow})
+		models = append(models, server.Model{Name: sm.name, Exec: sm.worker, ContextWindow: sm.ctxWindow, Class: sm.class})
 		seen[sm.name] = true
 	}
 

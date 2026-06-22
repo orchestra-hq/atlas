@@ -2,7 +2,7 @@
 
 ## Status
 
-proposed
+accepted (phase 2a — embeddings + the class abstraction; the reranker half lands with phase 2b)
 
 ## Context
 
