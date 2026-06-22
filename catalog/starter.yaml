@@ -40,6 +40,27 @@ models:
       temperature: 0.6
       top_p: 0.95
 
+  # --- Capable gguf tier (GPU acceptance) ---------------------------------
+  # Qwen3-8B Q4_K_M (hybrid-thinking) is the llama.cpp half of the GPU
+  # acceptance run (docs/open-questions.md, scripts/acceptance.sh). Serving it
+  # through the catalog (rather than a raw -hf spec) is deliberate: it threads
+  # reasoning=true so enable_thinking is gated per request, the absence of which
+  # made a raw-served hybrid leak <think> blocks into non-reasoning replies
+  # (the documented raw-hybrid gap). ~5 GB; fits a 24 GB acceptance GPU.
+  - name: qwen3-8b-gguf
+    engine: llamacpp
+    tier: sonnet
+    reasoning: true
+    context_window: 40960
+    source:
+      type: gguf
+      url: https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf
+      sha256: d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785
+      size: 5027783488
+    sampling:
+      temperature: 0.6
+      top_p: 0.95
+
   # --- Embedding models (M3 phase 2a, ADR-0012) ---------------------------
   # CPU-bootable on llama.cpp's embedding mode (--embedding), so /v1/embeddings
   # is provable on the per-PR tier alongside chat. Embedding models carry no tier
@@ -70,6 +91,26 @@ models:
       size: 438376864
 
   # --- vLLM tiers (GPU; cold-boot conformance deferred to phase 11) -------
+  # Qwen3-8B is the vLLM half of the GPU acceptance run (scripts/acceptance.sh):
+  # an 8B that fits a 24 GB acceptance GPU, where the 35B/GLM tiers below do not.
+  # engine_args carry --enable-auto-tool-choice — vLLM rejects --tool-call-parser
+  # without it, so the raw-spec acceptance run (which omitted it) failed at engine
+  # start; the catalog path supplies the full, correct flag set.
+  - name: qwen3-8b
+    engine: vllm
+    tier: sonnet
+    reasoning: true
+    context_window: 40960
+    source:
+      type: hf
+      repo: Qwen/Qwen3-8B
+    engine_args:
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - hermes
+      - --reasoning-parser
+      - qwen3
+
   - name: qwen3.5-35b-a3b
     engine: vllm
     tier: sonnet

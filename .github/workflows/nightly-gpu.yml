@@ -51,13 +51,21 @@ jobs:
         run: pip install "skypilot[aws]==0.8.0"
       - name: Verify cloud access
         run: sky check aws
-      # `sky launch --down` auto-tears-down after the run; --retry-until-up rides
-      # out spot capacity gaps. The explicit `sky down` below is the safety net.
+      # --retry-until-up rides out spot capacity gaps. NOTE: --down is deliberately
+      # NOT passed here — with it, `sky launch` returned 0 even when the remote
+      # acceptance job FAILED, so a red run reported green (the first GPU run hit
+      # exactly this). Teardown is the explicit always() step below; the job status
+      # is then gated separately so a failed acceptance fails the workflow.
       - name: Launch acceptance on a spot GPU
         run: |
           sky launch -c atlas-nightly examples/acceptance/atlas-acceptance.sky.yaml \
             --env ACCEPTANCE_ENGINES="${{ github.event.inputs.engines || 'vllm llamacpp' }}" \
-            --yes --down --retry-until-up
+            --yes --retry-until-up
+      # Gate on the recorded job status: exits non-zero unless the latest job
+      # SUCCEEDED, so acceptance.sh's exit code reaches the workflow conclusion
+      # regardless of how `sky launch` reports it.
+      - name: Gate on acceptance result
+        run: sky logs atlas-nightly --status
       - name: Tear down
         if: always()
         run: sky down atlas-nightly --yes || true

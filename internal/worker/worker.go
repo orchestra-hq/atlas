@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/orchestra-hq/atlas/catalog"
@@ -323,10 +324,14 @@ func (w *Worker) waitReady(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-w.done:
-			return fmt.Errorf("worker: llama-server exited before becoming ready: %w", w.waitErr)
+			// Surface the engine's own output: the subprocess writes stdout+stderr to
+			// cfg.LogPath, a separate file from the parent's log, so without this tail
+			// the cause (a rejected flag, OOM, a bad model ref) is invisible — exactly
+			// what made the first GPU acceptance run's vLLM failure undiagnosable.
+			return fmt.Errorf("worker: %s engine exited before becoming ready: %w%s", w.cfg.Engine, w.waitErr, w.engineLogTail())
 		case <-ticker.C:
 			if time.Now().After(deadline) {
-				return fmt.Errorf("worker: llama-server not ready within %s", w.cfg.ReadyTimeout)
+				return fmt.Errorf("worker: %s engine not ready within %s%s", w.cfg.Engine, w.cfg.ReadyTimeout, w.engineLogTail())
 			}
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
 			if err != nil {
@@ -342,6 +347,31 @@ func (w *Worker) waitReady(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// engineLogTail returns the last few lines of the engine's log file, formatted
+// for appending to a startup-failure error so the engine's own diagnostics (a
+// rejected flag, OOM, a missing model) travel with the Go error rather than
+// being stranded in a file the caller never reads. Empty string when no log is
+// configured or it cannot be read — the error is still returned, just thinner.
+func (w *Worker) engineLogTail() string {
+	if w.cfg.LogPath == "" {
+		return ""
+	}
+	data, err := os.ReadFile(w.cfg.LogPath)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	const maxLines = 40
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	tail := strings.TrimSpace(strings.Join(lines, "\n"))
+	if tail == "" {
+		return ""
+	}
+	return fmt.Sprintf("\n--- %s engine log (last %d lines) ---\n%s", w.cfg.Engine, len(lines), tail)
 }
 
 // Stop terminates the engine subprocess (idempotent) and releases the log file.

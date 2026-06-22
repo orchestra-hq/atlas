@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"flag"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -286,6 +288,36 @@ func TestStartReadyTimeout(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 4*time.Second {
 		t.Errorf("timed out after %s, expected ~1s", elapsed)
 	}
+}
+
+func TestEngineLogTail(t *testing.T) {
+	t.Run("empty without a log path", func(t *testing.T) {
+		w := &Worker{cfg: Config{Engine: EngineVLLM}}
+		if got := w.engineLogTail(); got != "" {
+			t.Fatalf("engineLogTail = %q, want empty when no LogPath", got)
+		}
+	})
+
+	t.Run("labels engine and tails the last lines", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "engine.log")
+		var b strings.Builder
+		for i := range 100 {
+			fmt.Fprintf(&b, "line-%d\n", i)
+		}
+		if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got := (&Worker{cfg: Config{Engine: EngineVLLM, LogPath: path}}).engineLogTail()
+		if !strings.Contains(got, "vllm engine log") {
+			t.Fatalf("tail missing engine label: %q", got)
+		}
+		if !strings.Contains(got, "line-99") {
+			t.Fatalf("tail missing the last line: %q", got)
+		}
+		if strings.Contains(got, "line-0\n") {
+			t.Fatalf("tail should be truncated to the last 40 lines, but includes line-0: %q", got)
+		}
+	})
 }
 
 func TestStopIdempotent(t *testing.T) {
