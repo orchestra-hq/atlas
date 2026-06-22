@@ -180,7 +180,7 @@ func (g *Gateway) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 
 	tags := usageTags{keyID: id.KeyID, workerID: workerName, model: model.Name, inputTokens: resp.Usage.InputTokens}
 	recordBillableUsage(r.Context(), tags, resp.Usage.InputTokens, 0)
-	openai.WriteJSON(w, http.StatusOK, openai.FromCoreEmbeddings(requested, resp))
+	openai.WriteJSON(w, http.StatusOK, openai.FromCoreEmbeddings(requested, req.EncodingFormat, resp))
 }
 
 // handleRerank serves POST /v1/rerank, Atlas's native rerank surface following the

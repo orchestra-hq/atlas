@@ -55,23 +55,15 @@ Two related cross-process gaps in `internal/runtime/provision.go`:
 
 `tokenSniffer` (`internal/server/cloud.go`) extracts cloud-spill usage by regex-matching the providers' token fields (`input_tokens`/`output_tokens`, `prompt_tokens`/`completion_tokens`) off the relayed byte stream, keeping the last value seen. This is deliberately format-agnostic (one path covers buffered + SSE, Anthropic + OpenAI) and robust for today's shapes, but it is not a structural parse: if a provider renamed a usage field or nested it differently, the sniff would silently record zero rather than error. The same zero-attribution happens on any upstream 2xx the regex doesn't match and on a client disconnect mid-stream (the usage event may never arrive), yet the spill is still recorded as "served". Cloud spend would then under-report — which matters because the point of the cloud ledger class is to monitor and cap real spend.
 
-**Decision needed:** acceptable as best-effort (the fields are stable across both providers and the sniffer is covered by tests), or worth a per-provider structural usage parse keyed on the request surface. Recommend leaving it best-effort until a real provider response proves it insufficient — no code change — but tracked so an under-reporting bill is not a surprise.
+**Decision (2026-06-22):** best-effort. The fields are stable across both providers and the sniffer is covered by tests. Revisit only if a real provider response proves it insufficient — no code change — but tracked so an under-reporting bill is not a surprise.
 
 ### Wrong-class request to a cold model autostarts it instead of a clean 400
 
-**Suggested:** M3 follow-up / the next routing pass. **Surfaced:** M3 review (all-of-M3).
-
-`dispatchPrep` (`internal/server/gateway.go`) rejects a wrong-class request (a chat call to an embedding model, or vice versa) with a clean 400 only when a replica is already live: the guard is `if cls, known := g.routeClass(canon); known && cls != wantClass`, and `routeClass` returns `known=false` when no replica is live. So a wrong-class request to a _cold_ but autostartable model skips the class check, autostarts the model in its catalog class, and only then fails the capability type-assertion (`model.Exec.(Embedder)`/`.(Reranker)`) → a retryable 529 instead of the 400. It self-corrects once a replica is up (the next request gets the clean 400), and the capability assertion still prevents serving the wrong class, so the cost is a wasted autostart plus a misleading 529 on the first cold wrong-class request. Correctness is preserved; this is a UX/efficiency wart, not a routing bug.
-
-**Decision needed:** the deeper fix is to reject on the model's _declared_ class before doing work — have `dispatchPrep`/`routeClass` consult the catalog `class` for the resolved model when no replica is live, rather than only a live replica's reported class. That wires catalog/declared-class knowledge into the gateway hot path (today the gateway learns class from `model_ready`). Pick: (a) thread the declared class into the gateway and reject cold wrong-class up front — **recommended**; or (b) leave it best-effort and document that wrong-class rejection is only guaranteed once a model is warm. The author chose (b) deliberately (see the `routeClass` doc comment); this entry records it so the choice is revisited rather than forgotten.
+**Fixed (2026-06-22).** `Autostarter` now carries `ClassOf(model string) (class string, ok bool)`, implemented by the scheduler via a catalog lookup. `dispatchPrep` checks the declared class before calling `ensure` when no live replica is present, so a wrong-class cold request returns a 400 without triggering a wasted autostart.
 
 ### `/v1/embeddings` always returns float vectors, ignoring `encoding_format: base64`
 
-**Suggested:** M3 phase 2b (the embeddings/rerank phase) or the first real-engine G20 nightly run. **Surfaced:** M3 phase 2a build.
-
-`handleEmbeddings` (`internal/server/openai.go`) and `openai.FromCoreEmbeddings` always emit `embedding` as a JSON float array, and `openaichat.Client.Embed` pins `encoding_format: float` to the engine. The OpenAI Python SDK, however, defaults `client.embeddings.create(...)` to `encoding_format: base64` and decodes base64 on the way back. A client that leaves the default (rather than passing `encoding_format="float"`) sends `base64` and may not parse a float array — a drop-in gap for the headline SDK. The per-PR tier (float) is unaffected; this surfaces on the real-SDK G20 run.
-
-**Decision needed:** (a) honor `encoding_format` — base64-encode little-endian float32 bytes per vector when requested, changing the response `embedding` field to `string | []float32` — **recommended**, it is what true SDK drop-in requires; or (b) document float-only and require callers to pass `encoding_format="float"`. Touches the OpenAI drop-in promise, so resolve before declaring G20 green on the real tier.
+**Fixed (2026-06-22).** `FromCoreEmbeddings` now accepts `encodingFormat` and base64-encodes little-endian IEEE 754 float32 bytes per vector when the client requests `"base64"` (the OpenAI Python SDK default), returning a JSON string instead of a float array. Float format (or empty) is unchanged. The handler passes `req.EncodingFormat` through. Covered by unit tests in `internal/api/openai/embeddings_test.go` and a handler-level test in `internal/server/embeddings_test.go`.
 
 ### `enable_thinking:false` dropped for hybrid models served outside the catalog
 
@@ -79,7 +71,7 @@ Two related cross-process gaps in `internal/runtime/provision.go`:
 
 Phase 4b made the `enable_thinking` kwarg catalog-driven: `ThinkingKwargs` (`internal/engines/openaichat/wire.go`) omits it for any model with `reasoning=false`. That re-opens a drop-in regression for a **hybrid** model (e.g. Qwen3) served via a raw `.gguf`/HF spec rather than a catalog entry — it is classified non-reasoning, so the kwarg is omitted and the model's chat template can default thinking _on_, emitting unrequested `<think>` blocks to clients that did not ask for them. The catalog path is correct; only the raw escape-hatch path regresses.
 
-**Decision needed:** options are (a) document raw-served hybrids as best-effort and require the catalog for thinking control — no code change, **recommended**; (b) restore an unconditional `enable_thinking:false` for non-reasoning clients, which undoes 4b's deliberate omission and sends the kwarg to genuinely non-reasoning models; (c) add a per-serve reasoning override on the raw path (new surface). Touches the first-class Messages-API drop-in promise (CLAUDE.md rule 3), so it should not silently regress.
+**Decision (2026-06-22):** document raw-served hybrids as best-effort — the catalog is required for thinking control. No code change. The `ThinkingKwargs` doc comment already notes this; no further action until a hybrid model enters the shipped catalog on the raw path.
 
 ### Cloud-fallback spill wired into two handlers by hand
 

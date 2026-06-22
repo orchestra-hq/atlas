@@ -6,15 +6,20 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+
+	"github.com/orchestra-hq/atlas/catalog"
 )
 
 // fakeAutostarter stands in for the scheduler: on EnsureModel it registers a
 // route (as the real hub does when a worker reports model_ready) so the
 // gateway's retry resolves, and it records every EnsureModel/Touch call.
+// classes is an optional map of model name → catalog class for ClassOf; an absent
+// entry returns ok=false (unknown class, no pre-ensure rejection).
 type fakeAutostarter struct {
 	g       *Gateway
 	exec    Executor
 	succeed bool
+	classes map[string]string // optional: catalog declared class per model
 
 	mu      sync.Mutex
 	ensured []string
@@ -27,7 +32,8 @@ func (f *fakeAutostarter) EnsureModel(_ context.Context, model string) bool {
 	ok := f.succeed
 	f.mu.Unlock()
 	if ok {
-		f.g.RegisterInstance("auto", "auto", Model{Name: model, Exec: f.exec})
+		cls := f.classes[model]
+		f.g.RegisterInstance("auto", "auto", Model{Name: model, Exec: f.exec, Class: cls})
 	}
 	return ok
 }
@@ -36,6 +42,11 @@ func (f *fakeAutostarter) Touch(model string) {
 	f.mu.Lock()
 	f.touched = append(f.touched, model)
 	f.mu.Unlock()
+}
+
+func (f *fakeAutostarter) ClassOf(model string) (string, bool) {
+	cls, ok := f.classes[model]
+	return cls, ok
 }
 
 func (f *fakeAutostarter) ensuredModels() []string {
@@ -122,5 +133,30 @@ func TestAutostart_touchesAlreadyRoutedModel(t *testing.T) {
 	}
 	if got := fa.touchedModels(); len(got) != 1 || got[0] != "auto-model" {
 		t.Fatalf("Touch calls = %v, want [auto-model] from the second (routed) request", got)
+	}
+}
+
+// TestAutostart_coldWrongClassRejectedBeforeAutostart: a wrong-class request to a
+// cold autostartable model must return a clean 400 without calling EnsureModel —
+// no wasted autostart, no misleading 529.
+func TestAutostart_coldWrongClassRejectedBeforeAutostart(t *testing.T) {
+	g := NewGateway(staticAuth(testKey), nil, nil)
+	fa := &fakeAutostarter{
+		g:       g,
+		exec:    &fakeEmbedder{vecs: [][]float32{{1}}},
+		succeed: true,
+		classes: map[string]string{"embed-model": catalog.ClassEmbedding},
+	}
+	g.SetAutostarter(fa)
+	srv := httptest.NewServer(g.Handler())
+	defer srv.Close()
+
+	// Chat (POST /v1/messages) request against a cold embedding-class model.
+	resp, body := post(t, srv, testKey, `{"model":"embed-model","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for cold wrong-class request (body %v)", resp.StatusCode, body)
+	}
+	if got := fa.ensuredModels(); len(got) != 0 {
+		t.Fatalf("EnsureModel called %d times, want 0 (should reject before autostart)", len(got))
 	}
 }

@@ -2,8 +2,11 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -286,6 +289,44 @@ func TestRerank_validationErrors(t *testing.T) {
 		resp, _ := rerankPost(t, srv, body)
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("body %s: status = %d, want 400", body, resp.StatusCode)
+		}
+	}
+}
+
+// TestEmbeddings_base64Encoding: encoding_format:"base64" in the request produces
+// a base64 JSON string in the response (not a float array) so the OpenAI Python
+// SDK default (base64) round-trips correctly.
+func TestEmbeddings_base64Encoding(t *testing.T) {
+	emb := &fakeEmbedder{vecs: [][]float32{{1.0, 2.0, 3.0}}}
+	srv := embeddingsServer(Model{Name: "embed-model", Exec: emb, Class: catalog.ClassEmbedding})
+	defer srv.Close()
+
+	resp, body := embedPost(t, srv, `{"model":"embed-model","input":["x"],"encoding_format":"base64"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %v)", resp.StatusCode, body)
+	}
+	data, _ := body["data"].([]any)
+	if len(data) != 1 {
+		t.Fatalf("data length = %d, want 1", len(data))
+	}
+	datum, _ := data[0].(map[string]any)
+	// embedding must be a string, not an array
+	encoded, ok := datum["embedding"].(string)
+	if !ok {
+		t.Fatalf("embedding = %T(%v), want a base64 string", datum["embedding"], datum["embedding"])
+	}
+	b, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("base64 decode: %v", err)
+	}
+	want := []float32{1.0, 2.0, 3.0}
+	if len(b) != len(want)*4 {
+		t.Fatalf("decoded byte len = %d, want %d", len(b), len(want)*4)
+	}
+	for i, wf := range want {
+		got := math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
+		if got != wf {
+			t.Fatalf("float[%d] = %v, want %v", i, got, wf)
 		}
 	}
 }
