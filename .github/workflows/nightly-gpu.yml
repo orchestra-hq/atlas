@@ -35,10 +35,14 @@ jobs:
       # Exchange the workflow's OIDC token for short-lived AWS creds — no static
       # access keys stored in the repo. AWS_ROLE_ARN is a repo secret; the role
       # trusts this repo's OIDC subject (see examples/acceptance/README.md).
+      # role-duration-seconds must not exceed the role's max-session-duration
+      # (set to 14400 / 4 h in IAM); provision + conformance run takes ~1 h so
+      # 4 h gives comfortable headroom.
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          role-duration-seconds: 14400
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
