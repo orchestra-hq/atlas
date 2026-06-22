@@ -31,6 +31,14 @@ resources:
   region: eu-west-2
   use_spot: true
   disk_size: 128 # vLLM + CUDA wheels + an 8B model need room
+  # Pin a recent AWS Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 22.04,
+  # eu-west-2). SkyPilot's default AMI shipped a CUDA-12.2 driver, too old for
+  # vLLM 0.23.0's bundled PyTorch ("NVIDIA driver is too old"); this image carries
+  # a current driver. Refresh via:
+  #   aws ssm get-parameter --region eu-west-2 \
+  #     --name /aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-22.04/latest/ami-id
+  image_id:
+    eu-west-2: ami-0c5fe80eabe9a6a1f
 
 # Synced to the remote host. Run `sky launch` from the repo root so "." is the
 # Atlas checkout.
