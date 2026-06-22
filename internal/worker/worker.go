@@ -46,6 +46,7 @@ type engineAdapter interface {
 	CountTokens(ctx context.Context, req core.Request) (int, error)
 	ContextWindow(ctx context.Context) (int, error)
 	Embed(ctx context.Context, req core.EmbedRequest) (core.EmbedResponse, error)
+	Rerank(ctx context.Context, req core.RerankRequest) (core.RerankResponse, error)
 }
 
 // Config configures a single-engine worker supervising one engine subprocess.
@@ -193,11 +194,19 @@ func engineSetup(cfg Config) (args []string, adapter engineAdapter, err error) {
 			"--port", port,
 			"--jinja", // native chat template, tool + thinking parsing (catalog research)
 		}
-		if cfg.Class == catalog.ClassEmbedding {
+		switch cfg.Class {
+		case catalog.ClassEmbedding:
 			// Embedding mode: llama-server serves /v1/embeddings (mean-pooled) and
 			// stops serving chat. The catalog window doubles as the max sequence the
 			// pooled encoder accepts, so cap the context to it.
 			args = append(args, "--embedding", "--pooling", "mean")
+			if cfg.ContextWindow > 0 {
+				args = append(args, "-c", fmt.Sprint(cfg.ContextWindow))
+			}
+		case catalog.ClassReranker:
+			// Reranking mode: llama-server serves /v1/rerank (rank pooling) on a
+			// cross-encoder and stops serving chat. Cap the context like embedding mode.
+			args = append(args, "--reranking")
 			if cfg.ContextWindow > 0 {
 				args = append(args, "-c", fmt.Sprint(cfg.ContextWindow))
 			}
@@ -285,6 +294,13 @@ func (w *Worker) CountTokens(ctx context.Context, req core.Request) (int, error)
 // sample — so the request passes through unmodified.
 func (w *Worker) Embed(ctx context.Context, req core.EmbedRequest) (core.EmbedResponse, error) {
 	return w.adapter.Embed(ctx, req)
+}
+
+// Rerank runs one rerank request against the supervised engine (M3 phase 2b). It
+// satisfies server.Reranker. Like embedding it does not sample, so the request
+// passes through unmodified.
+func (w *Worker) Rerank(ctx context.Context, req core.RerankRequest) (core.RerankResponse, error) {
+	return w.adapter.Rerank(ctx, req)
 }
 
 // ContextWindow returns the engine's context window in tokens.

@@ -21,6 +21,7 @@ type fakeEngine struct {
 	stream  func(ctx context.Context, req core.Request, sink core.StreamSink) error
 	count   func(ctx context.Context, req core.Request) (int, error)
 	embed   func(ctx context.Context, req core.EmbedRequest) (core.EmbedResponse, error)
+	rerank  func(ctx context.Context, req core.RerankRequest) (core.RerankResponse, error)
 }
 
 func (f *fakeEngine) Execute(ctx context.Context, req core.Request) (core.Response, error) {
@@ -40,6 +41,13 @@ func (f *fakeEngine) Embed(ctx context.Context, req core.EmbedRequest) (core.Emb
 		return core.EmbedResponse{}, nil
 	}
 	return f.embed(ctx, req)
+}
+
+func (f *fakeEngine) Rerank(ctx context.Context, req core.RerankRequest) (core.RerankResponse, error) {
+	if f.rerank == nil {
+		return core.RerankResponse{}, nil
+	}
+	return f.rerank(ctx, req)
 }
 
 // recordingSink captures streamed deltas for assertions.
@@ -236,6 +244,32 @@ func TestRemoteEmbed(t *testing.T) {
 	}
 	if len(resp.Embeddings) != 2 || resp.Embeddings[1][0] != 1 || resp.Usage.InputTokens != 8 {
 		t.Errorf("embed result = %+v", resp)
+	}
+}
+
+// TestRemoteRerank drives a rerank round-trip over the worker channel (M3 phase 2b):
+// the gateway's remote executor implements server.Reranker, and the worker's
+// handleRerank routes to the engine's Rerank.
+func TestRemoteRerank(t *testing.T) {
+	eng := &fakeEngine{rerank: func(_ context.Context, req core.RerankRequest) (core.RerankResponse, error) {
+		return core.RerankResponse{
+			Results: []core.RerankResult{{Index: len(req.Documents) - 1, Score: 0.9}, {Index: 0, Score: 0.1}},
+			Usage:   core.Usage{InputTokens: 5},
+		}, nil
+	}}
+	m, teardown := dialedModel(t, eng)
+	defer teardown()
+
+	reranker, ok := m.Exec.(server.Reranker)
+	if !ok {
+		t.Fatal("remote worker is not a Reranker")
+	}
+	resp, err := reranker.Rerank(context.Background(), core.RerankRequest{Model: "m", Query: "q", Documents: []string{"a", "b"}})
+	if err != nil {
+		t.Fatalf("Rerank: %v", err)
+	}
+	if len(resp.Results) != 2 || resp.Results[0].Index != 1 || resp.Usage.InputTokens != 5 {
+		t.Errorf("rerank result = %+v", resp)
 	}
 }
 

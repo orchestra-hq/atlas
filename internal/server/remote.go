@@ -54,13 +54,14 @@ type pendingReq struct {
 // request. Kind selects which fields are set.
 type reqEvent struct {
 	kind   wire.MessageType
-	event  core.StreamEvent   // MsgChunk
-	resp   core.Response      // MsgResponse
-	embed  core.EmbedResponse // MsgEmbedResult
-	reason core.StopReason    // MsgDone
-	usage  core.Usage         // MsgDone
-	count  int                // MsgTokenCount
-	errp   wire.ErrorPayload  // MsgError
+	event  core.StreamEvent    // MsgChunk
+	resp   core.Response       // MsgResponse
+	embed  core.EmbedResponse  // MsgEmbedResult
+	rerank core.RerankResponse // MsgRerankResult
+	reason core.StopReason     // MsgDone
+	usage  core.Usage          // MsgDone
+	count  int                 // MsgTokenCount
+	errp   wire.ErrorPayload   // MsgError
 }
 
 // pendingBufferSize is how many inference frames a single request may buffer
@@ -292,6 +293,37 @@ func (rw *remoteWorker) Embed(ctx context.Context, req core.EmbedRequest) (core.
 	}
 }
 
+// Rerank runs one rerank request on the worker and returns its ranked results (M3
+// phase 2b). It satisfies Reranker, mirroring Embed: single request, single response
+// frame.
+func (rw *remoteWorker) Rerank(ctx context.Context, req core.RerankRequest) (core.RerankResponse, error) {
+	id, p := rw.begin()
+	defer rw.end(id)
+
+	if err := rw.send(ctx, wire.MsgRerank, wire.RerankPayload{RequestID: id, Request: req}); err != nil {
+		return core.RerankResponse{}, err
+	}
+	for {
+		select {
+		case ev := <-p.ch:
+			switch ev.kind {
+			case wire.MsgRerankResult:
+				return ev.rerank, nil
+			case wire.MsgError:
+				return core.RerankResponse{}, wireError(ev.errp)
+			}
+		case <-p.overflow:
+			rw.cancel(id)
+			return core.RerankResponse{}, errSlowConsumer
+		case <-ctx.Done():
+			rw.cancel(id)
+			return core.RerankResponse{}, ctx.Err()
+		case <-rw.done:
+			return core.RerankResponse{}, core.ErrEngineUnavailable
+		}
+	}
+}
+
 // begin allocates a request id and registers its pending entry.
 func (rw *remoteWorker) begin() (string, *pendingReq) {
 	id := "r" + strconv.FormatUint(rw.idSeq.Add(1), 10)
@@ -378,6 +410,12 @@ func decodeReqEvent(m wire.Message) (ev reqEvent, id string, ok bool) {
 			return reqEvent{}, "", false
 		}
 		return reqEvent{kind: m.Type, embed: p.Response}, p.RequestID, true
+	case wire.MsgRerankResult:
+		var p wire.RerankResultPayload
+		if json.Unmarshal(m.Payload, &p) != nil {
+			return reqEvent{}, "", false
+		}
+		return reqEvent{kind: m.Type, rerank: p.Response}, p.RequestID, true
 	case wire.MsgError:
 		var p wire.ErrorPayload
 		if json.Unmarshal(m.Payload, &p) != nil {

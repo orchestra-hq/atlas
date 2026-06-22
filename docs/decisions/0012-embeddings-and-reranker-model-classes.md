@@ -2,7 +2,7 @@
 
 ## Status
 
-accepted (phase 2a — embeddings + the class abstraction; the reranker half lands with phase 2b)
+accepted (implemented across phase 2a — embeddings + the class abstraction — and phase 2b — the reranker class and `/v1/rerank`)
 
 ## Context
 
