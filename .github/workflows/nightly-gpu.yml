@@ -1,15 +1,20 @@
 name: Nightly GPU acceptance
 
 # The capable/GPU acceptance run that flips M0 to "done" (M0.5, ADR-0006):
-# from a CPU runner, use SkyPilot to bring up a spot GPU, run the full
-# conformance gate (G1–G10) + the real Claude Code smoke on both engines via
-# scripts/acceptance.sh, then tear the GPU down. SkyPilot is fenced to this one
-# workflow + the one examples/ recipe — never an Atlas dependency (ADR-0006).
+# provision an on-demand GPU box, run the full conformance gate (G1–G10) + the
+# real Claude Code smoke on both engines via scripts/acceptance.sh, tear it down.
 #
-# Dormant until enabled: the job is gated on the repo variable
-# GPU_ACCEPTANCE_ENABLED=true, so this lands without firing (and failing)
-# nightly before the AWS side is wired up. See examples/acceptance/README.md
-# for the one-time AWS/OIDC setup the repo owner does, then flip the variable.
+# Provisioning is machulav/ec2-github-runner (not SkyPilot): it launches an
+# ephemeral EC2 instance as a self-hosted runner, so acceptance.sh runs as native
+# workflow steps on the GPU box — logs stream live, exit codes propagate, and the
+# instance is always terminated by stop-runner. This replaced SkyPilot, whose Ray
+# bootstrap clashed with the recent-driver AMI vLLM needs. On-demand (not spot)
+# avoids the mid-run preemptions that repeatedly killed the SkyPilot runs.
+#
+# Dormant until enabled: start-runner is gated on GPU_ACCEPTANCE_ENABLED=true.
+# Requires (see examples/acceptance/README.md): secret AWS_ROLE_ARN (OIDC) +
+# GH_PAT (registers the self-hosted runner); vars ACCEPTANCE_SUBNET_ID,
+# ACCEPTANCE_SECURITY_GROUP_ID, AWS_REGION.
 
 on:
   schedule:
@@ -20,52 +25,85 @@ on:
         description: Engines to run (space-separated)
         default: vllm llamacpp
 
-permissions:
-  id-token: write # mint the OIDC token AWS exchanges for short-lived creds
-  contents: read
-
 jobs:
-  acceptance:
-    name: GPU acceptance (SkyPilot)
+  start-runner:
+    name: Start GPU runner
     if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 120
+    permissions:
+      id-token: write # mint the OIDC token AWS exchanges for short-lived creds
+      contents: read
+    outputs:
+      label: ${{ steps.start.outputs.label }}
+      ec2-instance-id: ${{ steps.start.outputs.ec2-instance-id }}
     steps:
-      - uses: actions/checkout@v5
-      # Exchange the workflow's OIDC token for short-lived AWS creds — no static
-      # access keys stored in the repo. AWS_ROLE_ARN is a repo secret; the role
-      # trusts this repo's OIDC subject (see examples/acceptance/README.md).
-      # role-duration-seconds must not exceed the role's max-session-duration
-      # (set to 14400 / 4 h in IAM); provision + conformance run takes ~1 h so
-      # 4 h gives comfortable headroom.
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-          role-duration-seconds: 14400
-      - uses: actions/setup-python@v5
+          aws-region: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      - name: Start EC2 runner
+        id: start
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
         with:
-          python-version: "3.12"
-      - name: Install SkyPilot
-        # Pinned; bump after validating on the first manual dispatch.
-        run: pip install "skypilot[aws]==0.8.0"
-      - name: Verify cloud access
-        run: sky check aws
-      # --retry-until-up rides out spot capacity gaps. NOTE: --down is deliberately
-      # NOT passed here — with it, `sky launch` returned 0 even when the remote
-      # acceptance job FAILED, so a red run reported green (the first GPU run hit
-      # exactly this). Teardown is the explicit always() step below; the job status
-      # is then gated separately so a failed acceptance fails the workflow.
-      - name: Launch acceptance on a spot GPU
+          mode: start
+          github-token: ${{ secrets.GH_PAT }}
+          # On-demand g6.xlarge (1× L4, 24 GB). The Base OSS Nvidia Driver AMI
+          # (Ubuntu 22.04, eu-west-2) carries a recent driver — required for
+          # vLLM 0.23.0's CUDA-13 wheels. Refresh via:
+          #   aws ssm get-parameter --region eu-west-2 \
+          #     --name /aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-22.04/latest/ami-id
+          ec2-image-id: ami-0c5fe80eabe9a6a1f
+          ec2-instance-type: g6.xlarge
+          subnet-id: ${{ vars.ACCEPTANCE_SUBNET_ID }}
+          security-group-id: ${{ vars.ACCEPTANCE_SECURITY_GROUP_ID }}
+          aws-resource-tags: >-
+            [{"Key": "Name", "Value": "atlas-gpu-acceptance"},
+             {"Key": "atlas-acceptance", "Value": "nightly"}]
+
+  acceptance:
+    name: GPU acceptance
+    needs: start-runner
+    runs-on: ${{ needs.start-runner.outputs.label }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install uv + Claude Code
         run: |
-          sky launch -c atlas-nightly examples/acceptance/atlas-acceptance.sky.yaml \
-            --env ACCEPTANCE_ENGINES="${{ github.event.inputs.engines || 'vllm llamacpp' }}" \
-            --yes --retry-until-up
-      # Gate on the recorded job status: exits non-zero unless the latest job
-      # SUCCEEDED, so acceptance.sh's exit code reaches the workflow conclusion
-      # regardless of how `sky launch` reports it.
-      - name: Gate on acceptance result
-        run: sky logs atlas-nightly --status
-      - name: Tear down
-        if: always()
-        run: sky down atlas-nightly --yes || true
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          sudo npm i -g @anthropic-ai/claude-code
+      - name: Run acceptance (G1–G10 + Claude Code smoke, both engines)
+        env:
+          ACCEPTANCE_ENGINES: ${{ github.event.inputs.engines || 'vllm llamacpp' }}
+        run: |
+          nvidia-smi || { echo "no GPU visible on the host" >&2; exit 1; }
+          bash scripts/acceptance.sh
+
+  stop-runner:
+    name: Stop GPU runner
+    needs: [start-runner, acceptance]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Always terminate a started runner — even if acceptance failed — so a GPU
+    # instance is never leaked. Skips only when start-runner did not start one.
+    if: ${{ always() && needs.start-runner.result == 'success' }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ secrets.GH_PAT }}
+          label: ${{ needs.start-runner.outputs.label }}
+          ec2-instance-id: ${{ needs.start-runner.outputs.ec2-instance-id }}
