@@ -146,7 +146,7 @@ These extend the matrix and the pass policy when M3 ships. See [m3-build-plan.md
 
 A conversation sent repeatedly across turns lands on the same replica while that replica has capacity, so a prefix-caching engine reuses its warm cache (affinity hit). Under load that pushes the affine replica past the configured tolerance, the request falls back to least-in-flight rather than queueing behind a busy replica — never a hang or a 5xx, and the G16 backpressure semantics still hold. Affinity hit/miss and per-replica warm-key counts appear in `/metrics` and `atlas top`.
 
-### G20 — Embeddings + reranker model classes (M3 phase 2)
+### G20 — Embeddings + reranker model classes (M3 phase 2a–2b)
 
 A deployed embedding model serves `POST /v1/embeddings` with correct-dimension vectors for the OpenAI SDK drop-in; a deployed reranker serves `POST /v1/rerank` and orders documents by relevance. A request sent to the wrong class (embeddings against a chat model, or vice versa) returns a clean, well-formed error, not a 5xx. Class-aware scheduling places embedding/reranker models on capable workers by the same VRAM-fit policy as chat models.
 
