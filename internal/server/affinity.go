@@ -150,6 +150,30 @@ func (af *Affinity) selectReplica(model, key string, rs []route) route {
 	return leastInFlight(rs)
 }
 
+// FNV-1a 64-bit constants. rendezvousHash computes the hash inline rather than via
+// hash/fnv so the per-replica dispatch hot path does no interface dispatch and never
+// depends on escape analysis to keep a hash.Hash64 off the heap; the result is
+// byte-for-byte identical to fnv.New64a over the same input.
+const (
+	fnvOffset64 uint64 = 14695981039346656037
+	fnvPrime64  uint64 = 1099511628211
+)
+
+// rendezvousHash is FNV-1a over key, a 0x00 separator, and workerID — the same byte
+// stream the old fnv.New64a path fed, so routing decisions are unchanged. It indexes
+// the strings directly (no []byte conversion) and so allocates nothing.
+func rendezvousHash(key, workerID string) uint64 {
+	h := fnvOffset64
+	for i := 0; i < len(key); i++ {
+		h = (h ^ uint64(key[i])) * fnvPrime64
+	}
+	h *= fnvPrime64 // separator byte 0x00: XOR is a no-op, the multiply is not
+	for i := 0; i < len(workerID); i++ {
+		h = (h ^ uint64(workerID[i])) * fnvPrime64
+	}
+	return h
+}
+
 // rendezvous picks the route with the highest hash of (key, route identity) —
 // rendezvous (highest-random-weight) hashing, which gives the consistent-hash
 // property ADR-0011 calls for without a ring: adding or removing a replica only
@@ -161,11 +185,7 @@ func rendezvous(key string, rs []route) route {
 	best := rs[0]
 	var bestH uint64
 	for i := range rs {
-		h := fnv.New64a()
-		_, _ = h.Write([]byte(key))
-		_, _ = h.Write([]byte{0})
-		_, _ = h.Write([]byte(rs[i].workerID))
-		if hv := h.Sum64(); i == 0 || hv > bestH {
+		if hv := rendezvousHash(key, rs[i].workerID); i == 0 || hv > bestH {
 			best, bestH = rs[i], hv
 		}
 	}
@@ -175,11 +195,20 @@ func rendezvous(key string, rs []route) route {
 // recordWarm notes that key is warm on worker for model, updating the bounded
 // warm-key set and the per-replica gauge. Called only on an affinity hit — the
 // event that actually warms (or re-warms) a replica's prefix cache for the key.
+//
+// The warm set is gauge bookkeeping, not routing state (routing is the stateless
+// rendezvous hash), so dispatch must never serialize on it: under concurrent hits
+// we TryLock and, if the lock is held, drop this sample rather than block the hot
+// path. Insert and its eviction happen together inside the held lock, so skipping a
+// whole record() keeps the set bounded — a dropped sample only ages the gauge
+// slightly, which is consistent with its capped-LRU, best-effort contract.
 func (af *Affinity) recordWarm(model, key, worker string) {
 	if af == nil {
 		return
 	}
-	af.mu.Lock()
+	if !af.mu.TryLock() {
+		return
+	}
 	moved, evicted := af.warm.record(model, key, worker)
 	af.mu.Unlock()
 	for _, c := range moved {

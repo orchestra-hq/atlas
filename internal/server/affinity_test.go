@@ -1,12 +1,37 @@
 package server
 
 import (
+	"hash/fnv"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 
 	"github.com/orchestra-hq/atlas/internal/core"
 )
+
+// TestRendezvousHash_matchesFNV pins the inline FNV-1a to hash/fnv over the exact
+// byte stream the old hasher fed (key, 0x00, workerID). Routing stability across
+// restarts depends on this hash never changing, so a divergence here is a routing
+// regression, not just a perf one.
+func TestRendezvousHash_matchesFNV(t *testing.T) {
+	cases := [][2]string{
+		{"", ""},
+		{"conv-1", "w1"},
+		{"x-atlas-session-abc", "worker-7"},
+		{"\x00embedded", "id\x00with\x00nuls"},
+		{"unicode-✓-key", "wörker"},
+	}
+	for _, c := range cases {
+		key, worker := c[0], c[1]
+		h := fnv.New64a()
+		_, _ = h.Write([]byte(key))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(worker))
+		if got, want := rendezvousHash(key, worker), h.Sum64(); got != want {
+			t.Fatalf("rendezvousHash(%q,%q)=%#x, fnv=%#x", key, worker, got, want)
+		}
+	}
+}
 
 // mkRoute builds a route with a worker id/name and a seeded in-flight count, for
 // exercising selection directly.
