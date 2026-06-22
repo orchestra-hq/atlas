@@ -1044,22 +1044,7 @@ func (g *Gateway) authenticate(r *http.Request) (Identity, *anthropic.Error) {
 // key system covers both surfaces — scope on the key, not a second secret.
 func RequireAdmin(auth Authenticator, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		secret := apiKeyFromRequest(r)
-		if secret == "" {
-			writeAdminError(w, http.StatusUnauthorized, "missing or invalid API key")
-			return
-		}
-		id, ok, err := auth.Authenticate(r.Context(), secret)
-		if err != nil {
-			writeAdminError(w, http.StatusInternalServerError, "authentication backend error")
-			return
-		}
-		if !ok {
-			writeAdminError(w, http.StatusUnauthorized, "missing or invalid API key")
-			return
-		}
-		if !id.Admin {
-			writeAdminError(w, http.StatusForbidden, "this API key is not permitted to use the admin surface")
+		if _, ok := adminIdentity(auth, w, r); !ok {
 			return
 		}
 		next(w, r)

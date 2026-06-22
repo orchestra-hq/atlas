@@ -94,6 +94,26 @@ CREATE TABLE IF NOT EXISTS usage (
 CREATE INDEX IF NOT EXISTS idx_usage_key_id ON usage(key_id);
 CREATE INDEX IF NOT EXISTS idx_usage_model ON usage(model);
 CREATE INDEX IF NOT EXISTS idx_usage_worker_id ON usage(worker_id);`,
+	// v3: the control-plane audit log (M3 phase 3, ADR-0008 lineage). One row per
+	// control-plane mutation — actor (admin key id, or "cli"/"system" for local
+	// key management), action, target, result, and an RFC3339 UTC timestamp. The
+	// table is append-only by convention: RecordAudit inserts, ListAudit reads, and
+	// no code path updates or deletes a row. Indexed on the columns `atlas audit`
+	// filters by. Tamper-evidence (hash-chaining) is a future option, not built here.
+	`
+CREATE TABLE IF NOT EXISTS audit (
+	id      INTEGER PRIMARY KEY AUTOINCREMENT,
+	ts      TEXT NOT NULL,
+	actor   TEXT NOT NULL,
+	action  TEXT NOT NULL,
+	target  TEXT NOT NULL DEFAULT '',
+	result  TEXT NOT NULL DEFAULT '',
+	detail  TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit(actor);
+CREATE INDEX IF NOT EXISTS idx_audit_action ON audit(action);
+CREATE INDEX IF NOT EXISTS idx_audit_target ON audit(target);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit(ts);`,
 }
 
 // migrate brings the schema up to date by applying each migration step whose

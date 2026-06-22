@@ -185,16 +185,26 @@ func runServer(ctx context.Context, cmd *cobra.Command, opts *serverOptions) err
 	gw.SetAutostarter(sched)
 	go sched.Run(ctx)
 
+	// Audit recorder (M3 phase 3, G21): control-plane mutations are written to the
+	// same SQLite store as keys and usage. Bridges the gateway's AuditRecorder to the
+	// db; a write failure is logged, never fatal.
+	audit := auditRecorder{db: store, log: logger}
+
 	mux := http.NewServeMux()
 	// Worker join is authenticated by the join --token, not an API key.
 	mux.HandleFunc("GET /workers/connect", hub.HandleConnect)
 	// The /admin/* control surface requires an admin-scoped API key (ADR-0008,
-	// phase 5b): the same key store as the client gateway, gated by scope.
+	// phase 5b): the same key store as the client gateway, gated by scope. Mutating
+	// routes go through RequireAdminAudited, which records the actor/action/target/
+	// result of each mutation (M3 phase 3); read routes use plain RequireAdmin.
 	mux.HandleFunc("GET /admin/workers", server.RequireAdmin(authn, hub.HandleListWorkers))
-	mux.HandleFunc("POST /admin/workers/{id}/drain", server.RequireAdmin(authn, hub.HandleRemoveWorker))
-	mux.HandleFunc("POST /admin/deployments", server.RequireAdmin(authn, sched.HandleSetDeployment))
+	mux.HandleFunc("POST /admin/workers/{id}/drain", server.RequireAdminAudited(authn, audit, "worker.drain", hub.HandleRemoveWorker))
+	mux.HandleFunc("POST /admin/deployments", server.RequireAdminAudited(authn, audit, "deployment.set", sched.HandleSetDeployment))
 	mux.HandleFunc("GET /admin/deployments", server.RequireAdmin(authn, sched.HandleListDeployments))
-	mux.HandleFunc("DELETE /admin/deployments/{model}", server.RequireAdmin(authn, sched.HandleStopDeployment))
+	mux.HandleFunc("DELETE /admin/deployments/{model}", server.RequireAdminAudited(authn, audit, "deployment.stop", sched.HandleStopDeployment))
+	// The audit log itself is admin-scoped and read-only (M3 phase 3); reading it is
+	// not a mutation, so it is not audited.
+	mux.HandleFunc("GET /admin/audit", server.RequireAdmin(authn, auditListHandler(store)))
 	// Observability (M2 phase 1, G15): a Prometheus scrape and the one-shot
 	// snapshot `atlas status` renders, both admin-scoped and reading the same
 	// counters.

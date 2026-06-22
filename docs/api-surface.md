@@ -46,14 +46,15 @@ Even though engines (vLLM/SGLang/llama.cpp/Ollama) natively speak OpenAI-compat,
 
 What the CLI and web console use. Not a compatibility surface — design for us.
 
-| Area      | Endpoints (sketch)                                                                       |
-| --------- | ---------------------------------------------------------------------------------------- |
-| Workers   | list/inspect workers, generate join tokens, drain/remove                                 |
-| Models    | registry CRUD, `pull` (download to workers), deploy/scale/stop instances, catalog browse |
-| Instances | list running instances, health, logs                                                     |
-| Keys      | create/revoke API keys, set allowed models                                               |
-| Usage     | tokens by key/model/worker/time window                                                   |
-| System    | health, version, license info                                                            |
+| Area      | Endpoints (sketch)                                                                                 |
+| --------- | -------------------------------------------------------------------------------------------------- |
+| Workers   | list/inspect workers, generate join tokens, drain/remove                                           |
+| Models    | registry CRUD, `pull` (download to workers), deploy/scale/stop instances, catalog browse           |
+| Instances | list running instances, health, logs                                                               |
+| Keys      | create/revoke API keys, set allowed models                                                         |
+| Usage     | tokens by key/model/worker/time window                                                             |
+| Audit     | list control-plane mutations (`GET /admin/audit`), filter by actor/action/target/time (M3 phase 3) |
+| System    | health, version, license info                                                                      |
 
 Admin auth reuses the same API-key system: the `/admin/*` surface requires a key carrying the `admin` scope, not a separate token ([ADR-0008](decisions/0008-control-plane-persistence-and-api-keys.md)). Scoped keys and the `/admin/*` gate land in phase 5 (5a mints admin-scoped keys; 5b enforces the gate).
 
