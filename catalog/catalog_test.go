@@ -64,19 +64,36 @@ func TestLookup(t *testing.T) {
 
 func TestValidateRejectsBadEntries(t *testing.T) {
 	cases := map[string]string{
-		"bad name":    `models: [{name: "Bad Name", engine: llamacpp, tier: haiku, context_window: 1, source: {type: gguf, url: u, sha256: ` + strings.Repeat("a", 64) + `}}]`,
-		"bad engine":  `models: [{name: m, engine: sglang, tier: haiku, context_window: 1, source: {type: gguf, url: u, sha256: ` + strings.Repeat("a", 64) + `}}]`,
-		"bad tier":    `models: [{name: m, engine: llamacpp, tier: tiny, context_window: 1, source: {type: gguf, url: u, sha256: ` + strings.Repeat("a", 64) + `}}]`,
-		"no ctx":      `models: [{name: m, engine: llamacpp, tier: haiku, source: {type: gguf, url: u, sha256: ` + strings.Repeat("a", 64) + `}}]`,
-		"gguf no sha": `models: [{name: m, engine: llamacpp, tier: haiku, context_window: 1, source: {type: gguf, url: u}}]`,
-		"gguf vllm":   `models: [{name: m, engine: vllm, tier: haiku, context_window: 1, source: {type: gguf, url: u, sha256: ` + strings.Repeat("a", 64) + `}}]`,
-		"hf no repo":  `models: [{name: m, engine: vllm, tier: haiku, context_window: 1, source: {type: hf}}]`,
-		"short sha":   `models: [{name: m, engine: llamacpp, tier: haiku, context_window: 1, source: {type: gguf, url: u, sha256: abc}}]`,
+		"bad name":     `models: [{name: "Bad Name", engine: llamacpp, tier: haiku, context_window: 1, source: {type: gguf, url: u, sha256: ` + strings.Repeat("a", 64) + `}}]`,
+		"bad engine":   `models: [{name: m, engine: sglang, tier: haiku, context_window: 1, source: {type: gguf, url: u, sha256: ` + strings.Repeat("a", 64) + `}}]`,
+		"bad tier":     `models: [{name: m, engine: llamacpp, tier: tiny, context_window: 1, source: {type: gguf, url: u, sha256: ` + strings.Repeat("a", 64) + `}}]`,
+		"no ctx":       `models: [{name: m, engine: llamacpp, tier: haiku, source: {type: gguf, url: u, sha256: ` + strings.Repeat("a", 64) + `}}]`,
+		"gguf no sha":  `models: [{name: m, engine: llamacpp, tier: haiku, context_window: 1, source: {type: gguf, url: u}}]`,
+		"gguf vllm":    `models: [{name: m, engine: vllm, tier: haiku, context_window: 1, source: {type: gguf, url: u, sha256: ` + strings.Repeat("a", 64) + `}}]`,
+		"hf no repo":   `models: [{name: m, engine: vllm, tier: haiku, context_window: 1, source: {type: hf}}]`,
+		"short sha":    `models: [{name: m, engine: llamacpp, tier: haiku, context_window: 1, source: {type: gguf, url: u, sha256: abc}}]`,
+		"bad class":    `models: [{name: m, class: vision, engine: llamacpp, tier: haiku, context_window: 1, source: {type: gguf, url: u, sha256: ` + strings.Repeat("a", 64) + `}}]`,
+		"chat no tier": `models: [{name: m, engine: llamacpp, context_window: 1, source: {type: gguf, url: u, sha256: ` + strings.Repeat("a", 64) + `}}]`,
 	}
 	for name, doc := range cases {
 		if _, err := parse([]byte(doc)); err == nil {
 			t.Errorf("%s: expected validation error, got nil", name)
 		}
+	}
+}
+
+// TestEmbeddingClassValid: an embedding-class entry is valid without a tier (it is
+// addressed by name, not via the chat aliases), and ClassOrChat reports its class
+// while a tier-less chat default reads back as chat.
+func TestEmbeddingClassValid(t *testing.T) {
+	doc := `models: [{name: emb, class: embedding, engine: llamacpp, context_window: 512, source: {type: gguf, url: u, sha256: ` + strings.Repeat("a", 64) + `}}]`
+	c, err := parse([]byte(doc))
+	if err != nil {
+		t.Fatalf("embedding entry without a tier should be valid: %v", err)
+	}
+	e, ok := c.Lookup("emb")
+	if !ok || e.ClassOrChat() != ClassEmbedding {
+		t.Fatalf("ClassOrChat = %q (ok=%v), want embedding", e.ClassOrChat(), ok)
 	}
 }
 

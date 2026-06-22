@@ -28,6 +28,10 @@ func (c *captureAdapter) CountTokens(_ context.Context, req core.Request) (int, 
 
 func (c *captureAdapter) ContextWindow(context.Context) (int, error) { return 0, nil }
 
+func (c *captureAdapter) Embed(_ context.Context, _ core.EmbedRequest) (core.EmbedResponse, error) {
+	return core.EmbedResponse{}, nil
+}
+
 func ptr(f float64) *float64 { return &f }
 
 // TestSamplingDefaultsApplied: a request that omits temperature/top_p picks up the

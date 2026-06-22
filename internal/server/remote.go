@@ -54,12 +54,13 @@ type pendingReq struct {
 // request. Kind selects which fields are set.
 type reqEvent struct {
 	kind   wire.MessageType
-	event  core.StreamEvent  // MsgChunk
-	resp   core.Response     // MsgResponse
-	reason core.StopReason   // MsgDone
-	usage  core.Usage        // MsgDone
-	count  int               // MsgTokenCount
-	errp   wire.ErrorPayload // MsgError
+	event  core.StreamEvent   // MsgChunk
+	resp   core.Response      // MsgResponse
+	embed  core.EmbedResponse // MsgEmbedResult
+	reason core.StopReason    // MsgDone
+	usage  core.Usage         // MsgDone
+	count  int                // MsgTokenCount
+	errp   wire.ErrorPayload  // MsgError
 }
 
 // pendingBufferSize is how many inference frames a single request may buffer
@@ -260,6 +261,37 @@ func (rw *remoteWorker) CountTokens(ctx context.Context, req core.Request) (int,
 	}
 }
 
+// Embed runs one embeddings request on the worker and returns its vectors (M3
+// phase 2a). It satisfies Embedder, mirroring CountTokens: single request, single
+// response frame.
+func (rw *remoteWorker) Embed(ctx context.Context, req core.EmbedRequest) (core.EmbedResponse, error) {
+	id, p := rw.begin()
+	defer rw.end(id)
+
+	if err := rw.send(ctx, wire.MsgEmbed, wire.EmbedPayload{RequestID: id, Request: req}); err != nil {
+		return core.EmbedResponse{}, err
+	}
+	for {
+		select {
+		case ev := <-p.ch:
+			switch ev.kind {
+			case wire.MsgEmbedResult:
+				return ev.embed, nil
+			case wire.MsgError:
+				return core.EmbedResponse{}, wireError(ev.errp)
+			}
+		case <-p.overflow:
+			rw.cancel(id)
+			return core.EmbedResponse{}, errSlowConsumer
+		case <-ctx.Done():
+			rw.cancel(id)
+			return core.EmbedResponse{}, ctx.Err()
+		case <-rw.done:
+			return core.EmbedResponse{}, core.ErrEngineUnavailable
+		}
+	}
+}
+
 // begin allocates a request id and registers its pending entry.
 func (rw *remoteWorker) begin() (string, *pendingReq) {
 	id := "r" + strconv.FormatUint(rw.idSeq.Add(1), 10)
@@ -340,6 +372,12 @@ func decodeReqEvent(m wire.Message) (ev reqEvent, id string, ok bool) {
 			return reqEvent{}, "", false
 		}
 		return reqEvent{kind: m.Type, count: p.Count}, p.RequestID, true
+	case wire.MsgEmbedResult:
+		var p wire.EmbedResultPayload
+		if json.Unmarshal(m.Payload, &p) != nil {
+			return reqEvent{}, "", false
+		}
+		return reqEvent{kind: m.Type, embed: p.Response}, p.RequestID, true
 	case wire.MsgError:
 		var p wire.ErrorPayload
 		if json.Unmarshal(m.Payload, &p) != nil {

@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/orchestra-hq/atlas/catalog"
 	"github.com/orchestra-hq/atlas/internal/api/anthropic"
 	"github.com/orchestra-hq/atlas/internal/core"
 )
@@ -50,6 +51,16 @@ type StreamExecutor interface {
 // that does not simply skips the pre-dispatch assertion.
 type TokenCounter interface {
 	CountTokens(ctx context.Context, req core.Request) (int, error)
+}
+
+// Embedder is an executor that can serve the embedding model class (M3 phase 2a,
+// ADR-0012): text in, vectors out, single-shot. Both the in-process worker and the
+// remote worker implement it, so POST /v1/embeddings dispatches to either exactly as
+// the chat surfaces dispatch Execute. A route whose executor does not implement it
+// (a chat model addressed via the embeddings endpoint) is rejected by the gateway's
+// class check before it ever reaches here.
+type Embedder interface {
+	Embed(ctx context.Context, req core.EmbedRequest) (core.EmbedResponse, error)
 }
 
 // Autostarter brings a model online on demand and tracks its activity (M1 phase
@@ -85,10 +96,22 @@ type Authenticator interface {
 
 // Model is one model the gateway serves: a canonical Name, the Executor that
 // runs it, and its ContextWindow in tokens (0 = unknown, assertion skipped).
+// Class is the model class (M3 phase 2a, ADR-0012); empty is treated as "chat", so
+// every pre-class model and raw spec routes to the chat surface unchanged.
 type Model struct {
 	Name          string
 	Exec          Executor
 	ContextWindow int
+	Class         string
+}
+
+// ClassOrChat returns the model's class, defaulting empty to "chat" so callers
+// compare against a normalized value (catalog.ClassChat / ClassEmbedding).
+func (m Model) ClassOrChat() string {
+	if m.Class == "" {
+		return catalog.ClassChat
+	}
+	return m.Class
 }
 
 // route is one live instance of a model: the executor for the worker connection
@@ -114,6 +137,7 @@ type route struct {
 	workerName    string
 	exec          Executor
 	contextWindow int
+	class         string // model class (M3 phase 2a); empty = chat
 	inflight      *atomic.Int64
 }
 
@@ -260,10 +284,18 @@ var noopRelease = func() {}
 // the admission slot and the replica's in-flight slot. On failure it returns the
 // *anthropic.Error the caller should render (404 unknown model, 429 momentarily full,
 // 529 overloaded) and a nil release.
-func (g *Gateway) dispatchPrep(ctx context.Context, name, affinityKey string) (Model, string, func(), *anthropic.Error) {
+func (g *Gateway) dispatchPrep(ctx context.Context, name, affinityKey, wantClass string) (Model, string, func(), *anthropic.Error) {
 	canon, ok := g.ensure(ctx, name)
 	if !ok {
 		return Model{}, "", nil, modelNotFoundErr(name)
+	}
+	// Class routing (M3 phase 2a, ADR-0012): the model must serve the class this
+	// endpoint dispatches (chat for /v1/messages and the OpenAI chat mirror,
+	// embedding for /v1/embeddings). A mismatch — e.g. an embeddings call against a
+	// chat model — is a clean client error, rejected before an admission slot is
+	// taken, never a 5xx.
+	if cls, known := g.routeClass(canon); known && cls != wantClass {
+		return Model{}, "", nil, wrongClassErr(canon, wantClass)
 	}
 	admitRelease, apiErr := g.admission.Acquire(ctx, canon)
 	if apiErr != nil {
@@ -334,6 +366,24 @@ func (g *Gateway) routeCount(canon string) int {
 	return len(g.routes[canon])
 }
 
+// routeClass returns the model class of a canonical model's live replicas,
+// normalized so empty reads as chat (M3 phase 2a). known is false when no replica
+// is live (so the caller falls through to the usual not-found / overload paths
+// rather than rejecting on a class it cannot determine). Replicas of one model are
+// homogeneous, so the first answers.
+func (g *Gateway) routeClass(canon string) (class string, known bool) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	rs := g.routes[canon]
+	if len(rs) == 0 {
+		return "", false
+	}
+	if rs[0].class == "" {
+		return catalog.ClassChat, true
+	}
+	return rs[0].class, true
+}
+
 // pickLocked selects a live instance of name (resolving an alias first), for a
 // caller already holding mu. For forDispatch it selects a replica — the affinityKey's
 // affine replica when affinity is on and within load tolerance, otherwise
@@ -358,7 +408,7 @@ func (g *Gateway) pickLocked(name string, intent resolveIntent, affinityKey stri
 		r.inflight.Add(1)
 		release = releaseOnce(r.inflight)
 	}
-	return Model{Name: name, Exec: r.exec, ContextWindow: r.contextWindow}, r.workerName, release, true
+	return Model{Name: name, Exec: r.exec, ContextWindow: r.contextWindow, Class: r.class}, r.workerName, release, true
 }
 
 // leastInFlight returns the route with the fewest live in-flight requests, ties
@@ -408,7 +458,7 @@ func releaseOnce(c *atomic.Int64) func() {
 func (g *Gateway) RegisterInstance(workerID, workerName string, m Model) {
 	g.mu.Lock()
 	rs := g.routes[m.Name]
-	next := route{workerID: workerID, workerName: workerName, exec: m.Exec, contextWindow: m.ContextWindow, inflight: new(atomic.Int64)}
+	next := route{workerID: workerID, workerName: workerName, exec: m.Exec, contextWindow: m.ContextWindow, class: m.Class, inflight: new(atomic.Int64)}
 	// One route per (worker connection, model): a re-registration of the same pair
 	// replaces in place rather than appending a duplicate — e.g. a worker re-emits
 	// model_ready for a model it already serves. Duplicates would double-weight
@@ -510,6 +560,7 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/messages", g.handleMessages)
 	mux.HandleFunc("POST /v1/messages/count_tokens", g.handleCountTokens)
 	mux.HandleFunc("POST /v1/chat/completions", g.handleChatCompletions)
+	mux.HandleFunc("POST /v1/embeddings", g.handleEmbeddings)
 	mux.HandleFunc("GET /v1/models", g.handleListModels)
 	mux.HandleFunc("GET /v1/models/{id}", g.handleGetModel)
 	// Liveness: the process is up and serving. Says nothing about whether a
@@ -573,7 +624,7 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	affinityKey := g.affinity.routingKey(r, coreReq)
-	model, workerName, release, apiErr := g.dispatchPrep(r.Context(), coreReq.Model, affinityKey)
+	model, workerName, release, apiErr := g.dispatchPrep(r.Context(), coreReq.Model, affinityKey, catalog.ClassChat)
 	if apiErr != nil {
 		anthropic.WriteError(w, apiErr)
 		return
@@ -1065,6 +1116,14 @@ func modelNotFoundErr(model string) *anthropic.Error {
 
 func writeModelNotFound(w http.ResponseWriter, model string) {
 	anthropic.WriteError(w, modelNotFoundErr(model))
+}
+
+// wrongClassErr is the clean 400 for a request sent to a model of the wrong class
+// (M3 phase 2a, ADR-0012): e.g. an embeddings call against a chat model, or a chat
+// call against an embedding model. The model exists, so it is not a 404; it simply
+// does not serve this endpoint's class.
+func wrongClassErr(model, wantClass string) *anthropic.Error {
+	return anthropic.ErrInvalid("model %q does not serve %s requests", model, wantClass)
 }
 
 // rateLimitedErr is the retryable 429: the model has live capacity but is

@@ -26,6 +26,10 @@ type resolvedModel struct {
 	// reasoning is the catalog entry's reasoning capability (M2 phase 4b); false
 	// for a raw path/spec, which gates the thinking kwarg off.
 	reasoning bool
+	// class is the catalog entry's model class (M3 phase 2a); empty for a raw
+	// path/spec, which is a chat model. An "embedding" class launches the engine in
+	// embedding mode and registers the route as embedding-class.
+	class string
 }
 
 // resolveModel turns one --model value into a worker plan. A catalog name
@@ -63,6 +67,7 @@ func resolveModel(ctx context.Context, cmd *cobra.Command, engine worker.Engine,
 			ctxHint:    entry.ContextWindow,
 			sampling:   entry.Sampling,
 			reasoning:  entry.Reasoning,
+			class:      entry.ClassOrChat(),
 		}, nil
 	case "hf":
 		// The engine resolves the repo from its own cache at boot; the store does
@@ -83,6 +88,7 @@ func resolveModel(ctx context.Context, cmd *cobra.Command, engine worker.Engine,
 			ctxHint:    entry.ContextWindow,
 			sampling:   entry.Sampling,
 			reasoning:  entry.Reasoning,
+			class:      entry.ClassOrChat(),
 		}, nil
 	default:
 		return resolvedModel{}, fmt.Errorf("model %q: unsupported source type %q", entry.Name, entry.Source.Type)

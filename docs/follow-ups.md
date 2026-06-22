@@ -49,6 +49,14 @@ Two related cross-process gaps in `internal/runtime/provision.go`:
 
 ## API surface / drop-in compatibility
 
+### `/v1/embeddings` always returns float vectors, ignoring `encoding_format: base64`
+
+**Suggested:** M3 phase 2b (the embeddings/rerank phase) or the first real-engine G20 nightly run. **Surfaced:** M3 phase 2a build.
+
+`handleEmbeddings` (`internal/server/openai.go`) and `openai.FromCoreEmbeddings` always emit `embedding` as a JSON float array, and `openaichat.Client.Embed` pins `encoding_format: float` to the engine. The OpenAI Python SDK, however, defaults `client.embeddings.create(...)` to `encoding_format: base64` and decodes base64 on the way back. A client that leaves the default (rather than passing `encoding_format="float"`) sends `base64` and may not parse a float array — a drop-in gap for the headline SDK. The per-PR tier (float) is unaffected; this surfaces on the real-SDK G20 run.
+
+**Decision needed:** (a) honor `encoding_format` — base64-encode little-endian float32 bytes per vector when requested, changing the response `embedding` field to `string | []float32` — **recommended**, it is what true SDK drop-in requires; or (b) document float-only and require callers to pass `encoding_format="float"`. Touches the OpenAI drop-in promise, so resolve before declaring G20 green on the real tier.
+
 ### `enable_thinking:false` dropped for hybrid models served outside the catalog
 
 **Suggested:** the phase that owns reasoning config (phase 4b follow-up / catalog expansion). **Surfaced:** M2 milestone review.

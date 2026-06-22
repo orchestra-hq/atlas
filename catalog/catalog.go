@@ -27,7 +27,19 @@ var (
 	validEngines = map[string]bool{"llamacpp": true, "vllm": true, "mlx": true, "sglang": true}
 	validTiers   = map[string]bool{"haiku": true, "sonnet": true, "opus": true}
 	validSources = map[string]bool{"gguf": true, "hf": true}
+	validClasses = map[string]bool{ClassChat: true, ClassEmbedding: true, ClassReranker: true}
 	sha256RE     = regexp.MustCompile(`^[a-f0-9]{64}$`)
+)
+
+// Model classes (M3 phase 2a, ADR-0012). A model's class selects the endpoint and
+// engine capability a request routes to: ClassChat is the default and covers every
+// model that existed before classes, so an entry that omits `class` is chat and
+// nothing about the existing catalog changes. ClassEmbedding serves /v1/embeddings;
+// ClassReranker (phase 2b) serves /v1/rerank.
+const (
+	ClassChat      = "chat"
+	ClassEmbedding = "embedding"
+	ClassReranker  = "reranker"
 )
 
 // Source is where a model's weights come from. A "gguf" source is a single
@@ -51,14 +63,26 @@ type Sampling struct {
 
 // Entry is one curated model definition.
 type Entry struct {
-	Name          string   `yaml:"name"`
+	Name string `yaml:"name"`
+	// Class selects the model's role: "chat" (default), "embedding", or "reranker"
+	// (M3 phase 2a, ADR-0012). Empty means chat, so existing entries are unchanged.
+	Class         string   `yaml:"class,omitempty"`
 	Engine        string   `yaml:"engine"`
-	Tier          string   `yaml:"tier"`
+	Tier          string   `yaml:"tier,omitempty"`
 	Reasoning     bool     `yaml:"reasoning"`
 	ContextWindow int      `yaml:"context_window"`
 	Source        Source   `yaml:"source"`
 	EngineArgs    []string `yaml:"engine_args,omitempty"`
 	Sampling      Sampling `yaml:"sampling,omitempty"`
+}
+
+// ClassOrChat returns the entry's model class, defaulting an unset field to "chat"
+// so callers never have to special-case the empty string.
+func (e Entry) ClassOrChat() string {
+	if e.Class == "" {
+		return ClassChat
+	}
+	return e.Class
 }
 
 type catalogFile struct {
@@ -115,7 +139,18 @@ func validate(e Entry) error {
 	if !validEngines[e.Engine] {
 		return fmt.Errorf("catalog: model %q: invalid engine %q", e.Name, e.Engine)
 	}
-	if !validTiers[e.Tier] {
+	if !validClasses[e.ClassOrChat()] {
+		return fmt.Errorf("catalog: model %q: invalid class %q (want chat|embedding|reranker)", e.Name, e.Class)
+	}
+	// Tier is the chat alias key (claude-sonnet → a sonnet-tier model), so it is
+	// required for chat models and inapplicable to embedding/reranker models, which
+	// are addressed by name only. A non-chat entry may omit it, but a present tier
+	// must still be valid.
+	if e.ClassOrChat() == ClassChat {
+		if !validTiers[e.Tier] {
+			return fmt.Errorf("catalog: model %q: invalid tier %q (want haiku|sonnet|opus)", e.Name, e.Tier)
+		}
+	} else if e.Tier != "" && !validTiers[e.Tier] {
 		return fmt.Errorf("catalog: model %q: invalid tier %q (want haiku|sonnet|opus)", e.Name, e.Tier)
 	}
 	if e.ContextWindow <= 0 {

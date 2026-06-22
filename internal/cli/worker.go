@@ -139,7 +139,7 @@ func runWorker(ctx context.Context, cmd *cobra.Command, opts *workerOptions) err
 
 	served := make([]worker.ServedModel, 0, len(started))
 	for _, sm := range started {
-		served = append(served, worker.ServedModel{Name: sm.name, ContextWindow: sm.ctxWindow, Engine: sm.worker})
+		served = append(served, worker.ServedModel{Name: sm.name, ContextWindow: sm.ctxWindow, Class: sm.class, Engine: sm.worker})
 	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))

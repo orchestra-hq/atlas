@@ -36,6 +36,7 @@ type Inferencer interface {
 	Execute(ctx context.Context, req core.Request) (core.Response, error)
 	ExecuteStream(ctx context.Context, req core.Request, sink core.StreamSink) error
 	CountTokens(ctx context.Context, req core.Request) (int, error)
+	Embed(ctx context.Context, req core.EmbedRequest) (core.EmbedResponse, error)
 }
 
 // ServedModel binds a model name clients address to the engine that answers it
@@ -44,7 +45,11 @@ type Inferencer interface {
 type ServedModel struct {
 	Name          string
 	ContextWindow int
-	Engine        Inferencer
+	// Class is the model class (M3 phase 2a, ADR-0012): empty means chat. The
+	// worker advertises it so the gateway can route by class and reject a
+	// wrong-class request (e.g. an embeddings call against a chat model).
+	Class  string
+	Engine Inferencer
 }
 
 // Loader launches a model instance on demand when the scheduler sends a load
@@ -204,7 +209,7 @@ func dialOnce(ctx context.Context, cfg DialConfig, hw wire.Hardware, log *slog.L
 	served := make([]wire.ServedModel, 0, len(cfg.Models))
 	for _, m := range cfg.Models {
 		models[m.Name] = m
-		served = append(served, wire.ServedModel{Name: m.Name, ContextWindow: m.ContextWindow})
+		served = append(served, wire.ServedModel{Name: m.Name, ContextWindow: m.ContextWindow, Class: m.Class})
 	}
 
 	joinMsg, err := wire.Encode(wire.MsgJoin, "", wire.JoinPayload{
@@ -474,6 +479,15 @@ func (s *session) dispatch(ctx context.Context, data []byte) {
 			return
 		}
 		go s.handleCountTokens(ctx, p)
+	case wire.MsgEmbed:
+		var p wire.EmbedPayload
+		if err := json.Unmarshal(m.Payload, &p); err != nil {
+			return
+		}
+		if s.refuseIfDraining(ctx, p.RequestID) {
+			return
+		}
+		go s.handleEmbed(ctx, p)
 	case wire.MsgCancel:
 		var p wire.CancelPayload
 		if err := json.Unmarshal(m.Payload, &p); err != nil {
@@ -516,7 +530,7 @@ func (s *session) handleLoad(ctx context.Context, p wire.LoadPayload) {
 		return
 	case already:
 		// Idempotent: already serving this model — re-confirm it is ready.
-		_ = s.enqueue(ctx, wire.MsgModelReady, wire.ModelReadyPayload{Model: p.Model, ContextWindow: existing.ContextWindow})
+		_ = s.enqueue(ctx, wire.MsgModelReady, wire.ModelReadyPayload{Model: p.Model, ContextWindow: existing.ContextWindow, Class: existing.Class})
 		return
 	}
 
@@ -550,8 +564,8 @@ func (s *session) handleLoad(ctx context.Context, p wire.LoadPayload) {
 		s.loaded[served.Name] = stop
 		s.mu.Unlock()
 	}
-	s.log.Info("loaded model", "model", served.Name, "context_window", served.ContextWindow)
-	_ = s.enqueue(ctx, wire.MsgModelReady, wire.ModelReadyPayload{Model: served.Name, ContextWindow: served.ContextWindow})
+	s.log.Info("loaded model", "model", served.Name, "context_window", served.ContextWindow, "class", served.Class)
+	_ = s.enqueue(ctx, wire.MsgModelReady, wire.ModelReadyPayload{Model: served.Name, ContextWindow: served.ContextWindow, Class: served.Class})
 }
 
 // handleUnload stops a model this connection loaded and reports model_unloaded.
@@ -691,6 +705,34 @@ func (s *session) handleCountTokens(ctx context.Context, p wire.CountTokensPaylo
 		return
 	}
 	_ = s.enqueue(reqCtx, wire.MsgTokenCount, wire.TokenCountPayload{RequestID: p.RequestID, Count: n})
+}
+
+// handleEmbed answers an embed request with the engine's vectors (M3 phase 2a). It
+// mirrors handleCountTokens: single-shot, cancellable, replying with an embed_result
+// on success or an error frame on failure.
+func (s *session) handleEmbed(ctx context.Context, p wire.EmbedPayload) {
+	model, ok := s.lookupModel(p.Request.Model)
+	if !ok {
+		_ = s.enqueue(ctx, wire.MsgError, wire.ErrorPayload{
+			RequestID: p.RequestID, Code: wire.CodeInternal,
+			Message: "worker does not serve model " + p.Request.Model,
+		})
+		return
+	}
+
+	reqCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.register(p.RequestID, cancel)
+	defer s.unregister(p.RequestID)
+
+	resp, err := model.Engine.Embed(reqCtx, p.Request)
+	if err != nil {
+		if reqCtx.Err() == nil {
+			_ = s.enqueue(ctx, wire.MsgError, wire.ErrorPayload{RequestID: p.RequestID, Code: errorCode(err), Message: err.Error()})
+		}
+		return
+	}
+	_ = s.enqueue(reqCtx, wire.MsgEmbedResult, wire.EmbedResultPayload{RequestID: p.RequestID, Response: resp})
 }
 
 // enqueue hands a frame to the main loop for writing, returning ctx.Err() if the
