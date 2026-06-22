@@ -20,11 +20,14 @@
 name: atlas-acceptance
 
 resources:
-  # g6.xlarge: 1× NVIDIA L4 (24 GB VRAM) — fits Qwen3-8B on both engines.
-  # Pinned to eu-west-2 where the spot GPU quota lives; use_spot keeps the
-  # nightly cost low (~$0.40/hr). --retry-until-up in the nightly workflow
-  # rides out momentary spot capacity gaps in the region.
-  instance_type: g6.xlarge
+  # G-family, ~24 GB VRAM, eu-west-2 only — the sole region/family with quota.
+  # Listing both L4 (g6.xlarge) and A10G (g5.xlarge) gives SkyPilot two spot
+  # pools to land in, so acquisition is less likely to churn on
+  # InsufficientInstanceCapacity (the first runs spent ~11 min retrying a single
+  # type). Both are 4 vCPU, within the 16-vCPU spot quota, and fit Qwen3-8B.
+  # NOTE: mid-run spot preemption is not auto-recovered (not using managed jobs)
+  # — re-dispatch the workflow if a run is preempted.
+  accelerators: { L4: 1, A10G: 1 }
   region: eu-west-2
   use_spot: true
   disk_size: 128 # vLLM + CUDA wheels + an 8B model need room
