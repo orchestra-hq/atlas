@@ -34,18 +34,21 @@ export ATLAS_STATE_DIR=${ATLAS_STATE_DIR:-$REPO/.atlas-acceptance}
 export CONF_CLAUDE_CODE_SMOKE=${CONF_CLAUDE_CODE_SMOKE:-1}
 READY_TIMEOUT=${READY_TIMEOUT:-600} # seconds; an 8B vLLM load is minutes-slow
 
-# Capable models per engine. vLLM takes an HF repo id; llama.cpp takes an -hf
-# spec (repo[:quant]) it downloads, or a local .gguf path. The reasoning model
-# may equal the chat model (Qwen3 is hybrid-thinking) — then it is launched once
-# and both the sonnet and opus aliases resolve to it.
-VLLM_MODEL=${VLLM_MODEL:-Qwen/Qwen3-8B}
+# Capable models per engine, served by CATALOG NAME (not a raw -hf/spec). The
+# catalog path threads the model's reasoning flag (so enable_thinking is gated
+# per request — a raw-served hybrid otherwise leaks <think> blocks into
+# non-reasoning replies) and its tool/reasoning parser engine_args (vLLM needs
+# --enable-auto-tool-choice, which a raw spec omitted → engine start failed). The
+# chat and reasoning models are one hybrid model (Qwen3), launched once with both
+# the sonnet and opus aliases resolving to it. See catalog/starter.yaml.
+VLLM_MODEL=${VLLM_MODEL:-qwen3-8b}
 VLLM_REASONING_MODEL=${VLLM_REASONING_MODEL:-$VLLM_MODEL}
-# vLLM needs the model's tool/reasoning parser flags (catalog records these for
-# catalog models; this model is passed directly, so set them here). VALIDATE on
-# first run against the pinned vLLM (internal/runtime.VLLMVersion).
-VLLM_ENGINE_ARGS=${VLLM_ENGINE_ARGS:-"--tool-call-parser hermes --reasoning-parser qwen3"}
+# Parser flags now come from the catalog; this env is for acceptance-GPU memory
+# fit only. Qwen3-8B's full 40960 window would size vLLM's KV cache past a 24 GB
+# card, so cap the served length — ample for conformance (short prompts).
+VLLM_ENGINE_ARGS=${VLLM_ENGINE_ARGS:-"--max-model-len 16384"}
 
-LLAMACPP_MODEL=${LLAMACPP_MODEL:-Qwen/Qwen3-8B-GGUF:Q4_K_M}
+LLAMACPP_MODEL=${LLAMACPP_MODEL:-qwen3-8b-gguf}
 LLAMACPP_REASONING_MODEL=${LLAMACPP_REASONING_MODEL:-$LLAMACPP_MODEL}
 LLAMACPP_ENGINE_ARGS=${LLAMACPP_ENGINE_ARGS:-""}
 

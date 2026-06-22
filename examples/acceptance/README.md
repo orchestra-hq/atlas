@@ -28,7 +28,7 @@ Or let SkyPilot provision the host (needs a cloud account with a GPU quota and `
 sky launch -c atlas-acceptance examples/acceptance/atlas-acceptance.sky.yaml --down -y
 ```
 
-The model refs and vLLM parser flags are overridable via env (`VLLM_MODEL`, `VLLM_ENGINE_ARGS`, `LLAMACPP_MODEL`, …); the defaults target a single ~24GB GPU and are the items [docs/open-questions.md](../../docs/open-questions.md) flags as open until this run first executes.
+The defaults serve **catalog** models (`qwen3-8b` on vLLM, `qwen3-8b-gguf` on llama.cpp) rather than raw specs, so the model's reasoning flag and tool/reasoning parser `engine_args` come from [`catalog/starter.yaml`](../../catalog/starter.yaml) — serving Qwen3 raw leaked `<think>` blocks into non-reasoning replies and omitted vLLM's required `--enable-auto-tool-choice`. The refs are overridable via env (`VLLM_MODEL`, `LLAMACPP_MODEL`, …); `VLLM_ENGINE_ARGS` defaults to `--max-model-len 16384` purely to fit Qwen3-8B's KV cache on a 24 GB acceptance GPU.
 
 ## Nightly automation: one-time AWS setup
 
