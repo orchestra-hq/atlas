@@ -112,6 +112,60 @@ func TestAudited_recordsErrorResult(t *testing.T) {
 	}
 }
 
+// TestAudited_preservesFlusher: the audit middleware wraps the ResponseWriter in
+// statusWriter (which forwards Flush), not a status-only shim, so a handler behind it
+// can still type-assert http.Flusher. A wrapper missing Flush would silently turn a
+// future streaming admin handler into a buffer-to-EOF.
+func TestAudited_preservesFlusher(t *testing.T) {
+	rec := &recordingAudit{}
+	sawFlusher := false
+	mux := auditMux(rec, "POST /admin/deployments", "deployment.set",
+		func(w http.ResponseWriter, _ *http.Request) {
+			_, sawFlusher = w.(http.Flusher)
+			w.WriteHeader(http.StatusOK)
+		})
+
+	mux.ServeHTTP(httptest.NewRecorder(), adminReq(t, "POST", "/admin/deployments", `{"model":"m"}`, true))
+
+	if !sawFlusher {
+		t.Fatal("audited handler could not assert http.Flusher; the middleware stripped streaming support")
+	}
+}
+
+// TestAudited_largeBodyNotTruncated: a mutation body larger than the legacy 64 KiB
+// buffer (but within the handler's own 1 MiB limit) must reach the handler intact.
+// A smaller audit-buffer cap truncates the restored body, corrupting the JSON and
+// turning a valid request into a spurious 400.
+func TestAudited_largeBodyNotTruncated(t *testing.T) {
+	rec := &recordingAudit{}
+	var gotModel string
+	var gotPad int
+	mux := auditMux(rec, "POST /admin/deployments", "deployment.set",
+		func(w http.ResponseWriter, r *http.Request) {
+			var b struct {
+				Model string `json:"model"`
+				Pad   string `json:"pad"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			gotModel, gotPad = b.Model, len(b.Pad)
+			w.WriteHeader(http.StatusOK)
+		})
+
+	pad := strings.Repeat("x", 100<<10) // 100 KiB > legacy 64 KiB cap, < 1 MiB handler limit
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, adminReq(t, "POST", "/admin/deployments", `{"model":"big","pad":"`+pad+`"}`, true))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; the audit buffer truncated a valid large body", w.Code)
+	}
+	if gotModel != "big" || gotPad != 100<<10 {
+		t.Fatalf("handler saw model=%q pad=%d, want big/%d (body was truncated before the handler read it)", gotModel, gotPad, 100<<10)
+	}
+}
+
 // TestAudited_noRecordWhenUnauthorized: a request rejected by the admin gate never
 // reaches the handler and records nothing (the mutation did not happen).
 func TestAudited_noRecordWhenUnauthorized(t *testing.T) {

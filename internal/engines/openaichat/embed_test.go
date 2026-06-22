@@ -88,6 +88,28 @@ func TestEmbed_countMismatchErrors(t *testing.T) {
 	}
 }
 
+// TestEmbed_rejectsNonContiguousIndex: a response whose count matches the input but
+// whose indices duplicate or skip a position (here [0,0,2] for three inputs) cannot be
+// aligned to the inputs. Embed must error rather than return a silently misaligned
+// vector — the count check alone would let this through.
+func TestEmbed_rejectsNonContiguousIndex(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"index": 0, "embedding": []float32{0}},
+				{"index": 0, "embedding": []float32{9}}, // duplicate index 0
+				{"index": 2, "embedding": []float32{2}}, // gap: no index 1
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := NewClient("test", srv.URL, "m", false, srv.Client())
+	if _, err := c.Embed(context.Background(), core.EmbedRequest{Input: []string{"a", "b", "c"}}); err == nil {
+		t.Fatal("expected an error for duplicate/gapped engine indices; vectors would be silently misaligned")
+	}
+}
+
 // TestEmbed_emptyInputShortCircuits: no inputs means no engine call.
 func TestEmbed_emptyInputShortCircuits(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
