@@ -30,9 +30,12 @@ type AuditRecorder interface {
 }
 
 // auditBodyCap bounds how much of a mutation request body the audit middleware
-// buffers to extract a target. Admin bodies are tiny (a deployment spec), so this is
-// generous; a larger body is still served, only its target falls back to empty.
-const auditBodyCap = 64 << 10 // 64 KiB
+// buffers to extract a target. It matches the largest admin handler's own body limit
+// (HandleSetDeployment reads with a 1 MiB MaxBytesReader), so the middleware never
+// truncates a body the handler would have accepted — a smaller cap here would replace
+// the buffered body with a short prefix and make an otherwise-valid large request fail
+// to decode. Admin bodies are tiny in practice; this is just the safe ceiling.
+const auditBodyCap = 1 << 20 // 1 MiB
 
 // adminIdentity authenticates the request as an admin-scoped key, writing the
 // appropriate admin error and returning ok=false when it is not (missing/unknown/
@@ -79,14 +82,16 @@ func RequireAdminAudited(auth Authenticator, rec AuditRecorder, action string, n
 		// which it rejects on its own.
 		body := bufferBody(r)
 
-		sr := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		next(sr, r)
+		// statusWriter (ops.go) captures the status code and forwards Flush, so an
+		// audited handler that ever streams keeps working through this middleware.
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		next(sw, r)
 
 		if rec == nil {
 			return
 		}
 		result := "ok"
-		if sr.status >= http.StatusBadRequest {
+		if sw.status >= http.StatusBadRequest {
 			result = "error"
 		}
 		_ = rec.RecordAudit(r.Context(), AuditEvent{
@@ -94,7 +99,7 @@ func RequireAdminAudited(auth Authenticator, rec AuditRecorder, action string, n
 			Action: action,
 			Target: auditTarget(r, body),
 			Result: result,
-			Detail: strconv.Itoa(sr.status),
+			Detail: strconv.Itoa(sw.status),
 		})
 	}
 }
@@ -134,17 +139,4 @@ func auditTarget(r *http.Request, body []byte) string {
 		}
 	}
 	return ""
-}
-
-// statusRecorder wraps a ResponseWriter to remember the status code written, so the
-// audit middleware can record a mutation's result. A handler that never calls
-// WriteHeader implies 200, the net/http default.
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (s *statusRecorder) WriteHeader(code int) {
-	s.status = code
-	s.ResponseWriter.WriteHeader(code)
 }

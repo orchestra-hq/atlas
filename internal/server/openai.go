@@ -158,6 +158,7 @@ func (g *Gateway) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
+	w.Header().Set(servedByHeader, servedByLocal) // locally served (ADR-0013)
 
 	embedder, ok := model.Exec.(Embedder)
 	if !ok {
@@ -234,6 +235,7 @@ func (g *Gateway) handleRerank(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
+	w.Header().Set(servedByHeader, servedByLocal) // locally served (ADR-0013)
 
 	reranker, ok := model.Exec.(Reranker)
 	if !ok {

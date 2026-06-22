@@ -60,6 +60,17 @@ func (c *Client) Embed(ctx context.Context, req core.EmbedRequest) (core.EmbedRe
 	sort.Slice(out.Data, func(i, j int) bool { return out.Data[i].Index < out.Data[j].Index })
 	vecs := make([][]float32, len(out.Data))
 	for i, d := range out.Data {
+		// The count already matches; requiring index==position after the sort rejects a
+		// duplicate or gapped index set (e.g. [0,0,2]) that would otherwise pass the count
+		// check and silently map the wrong vector to an input. A clean error beats a
+		// misaligned embedding the caller cannot detect.
+		// The count already matches; requiring index==position after the sort rejects a
+		// duplicate or gapped index set (e.g. [0,0,2]) that would otherwise pass the count
+		// check and silently map the wrong vector to an input. A clean error beats a
+		// misaligned embedding the caller cannot detect.
+		if d.Index != i {
+			return core.EmbedResponse{}, fmt.Errorf("%s: embeddings: engine returned non-contiguous index %d at position %d (duplicate or gap)", c.name, d.Index, i)
+		}
 		vecs[i] = d.Embedding
 	}
 	return core.EmbedResponse{

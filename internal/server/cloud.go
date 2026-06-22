@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/orchestra-hq/atlas/internal/api/anthropic"
 )
@@ -121,7 +122,7 @@ func (g *Gateway) spillToCloud(w http.ResponseWriter, r *http.Request, body []by
 		return fmt.Errorf("cloud fallback: rewrite request: %w", err)
 	}
 
-	url := trimTrailingSlash(t.BaseURL) + r.URL.Path
+	url := strings.TrimRight(t.BaseURL, "/") + r.URL.Path
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, url, bytes.NewReader(upstreamBody))
 	if err != nil {
 		return fmt.Errorf("cloud fallback: build request: %w", err)
@@ -227,13 +228,6 @@ func cloudResultLabel(status int) string {
 		return "served"
 	}
 	return "upstream_error"
-}
-
-func trimTrailingSlash(s string) string {
-	for len(s) > 0 && s[len(s)-1] == '/' {
-		s = s[:len(s)-1]
-	}
-	return s
 }
 
 // tokenTokenRE matches the usage token fields of both the Anthropic and OpenAI

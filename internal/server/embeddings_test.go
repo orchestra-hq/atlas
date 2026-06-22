@@ -99,6 +99,20 @@ func TestEmbeddings_roundTrip(t *testing.T) {
 	}
 }
 
+// TestEmbeddings_servedByLocalHeader: a locally-served embeddings response carries
+// the same x-atlas-served-by: local label the chat surfaces set, so a dashboard can
+// attribute it (and tell it apart from a cloud-fallback "cloud" spill).
+func TestEmbeddings_servedByLocalHeader(t *testing.T) {
+	emb := &fakeEmbedder{vecs: [][]float32{{1}}}
+	srv := embeddingsServer(Model{Name: "embed-model", Exec: emb, Class: catalog.ClassEmbedding})
+	defer srv.Close()
+
+	resp, _ := embedPost(t, srv, `{"model":"embed-model","input":["x"]}`)
+	if got := resp.Header.Get("x-atlas-served-by"); got != "local" {
+		t.Fatalf("x-atlas-served-by = %q, want local", got)
+	}
+}
+
 // TestEmbeddings_singleStringInput: the OpenAI SDK also sends input as a bare
 // string, which must normalize to a one-element batch.
 func TestEmbeddings_singleStringInput(t *testing.T) {
