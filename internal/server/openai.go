@@ -171,6 +171,83 @@ func (g *Gateway) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	openai.WriteJSON(w, http.StatusOK, openai.FromCoreEmbeddings(requested, resp))
 }
 
+// handleRerank serves POST /v1/rerank, Atlas's native rerank surface following the
+// Cohere convention (M3 phase 2b, ADR-0012). Like embeddings it reuses the gateway's
+// auth, resolution, and admission, routes only to a reranker-class model (a chat or
+// embedding model is rejected cleanly by dispatchPrep's class check), and dispatches
+// the single-shot Rerank capability. No streaming, no context-window assertion.
+func (g *Gateway) handleRerank(w http.ResponseWriter, r *http.Request) {
+	id, authErr := g.authenticate(r)
+	if authErr != nil {
+		writeOpenAIErr(w, authErr)
+		return
+	}
+
+	body, err := readBody(w, r)
+	if err != nil {
+		openai.WriteError(w, openai.ErrInvalid("could not read request body"))
+		return
+	}
+
+	var req openai.RerankRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		openai.WriteError(w, openai.ErrInvalid("request body is not valid JSON"))
+		return
+	}
+	coreReq := req.ToCore()
+	if coreReq.Model == "" {
+		openai.WriteError(w, openai.ErrInvalid("model is required"))
+		return
+	}
+	if coreReq.Query == "" {
+		openai.WriteError(w, openai.ErrInvalid("query is required"))
+		return
+	}
+	if len(coreReq.Documents) == 0 {
+		openai.WriteError(w, openai.ErrInvalid("documents is required"))
+		return
+	}
+
+	if !g.modelPermitted(id, coreReq.Model) {
+		writeOpenAIErr(w, forbiddenModelErr(coreReq.Model))
+		return
+	}
+
+	model, workerName, release, apiErr := g.dispatchPrep(r.Context(), coreReq.Model, "", catalog.ClassReranker)
+	if apiErr != nil {
+		if apiErr.Type == anthropic.ErrNotFound {
+			writeOpenAIModelNotFound(w, coreReq.Model)
+			return
+		}
+		writeOpenAIErr(w, apiErr)
+		return
+	}
+	defer release()
+
+	reranker, ok := model.Exec.(Reranker)
+	if !ok {
+		writeOpenAIErr(w, core.ErrEngineUnavailable)
+		return
+	}
+
+	requested := coreReq.Model
+	coreReq.Model = model.Name
+	resp, err := reranker.Rerank(r.Context(), coreReq)
+	if err != nil {
+		writeOpenAIErr(w, err)
+		return
+	}
+
+	// return_documents echoes each ranked document's source text, looked up by index.
+	var docs []string
+	if req.ReturnDocuments {
+		docs = req.Documents
+	}
+	tags := usageTags{keyID: id.KeyID, workerID: workerName, model: model.Name, inputTokens: resp.Usage.InputTokens}
+	recordBillableUsage(r.Context(), tags, resp.Usage.InputTokens, 0)
+	openai.WriteJSON(w, http.StatusOK, openai.FromCoreRerank(requested, resp, docs))
+}
+
 // streamChatCompletion serves a streaming POST /v1/chat/completions. It opens
 // the SSE response and drives the executor (native streaming if supported, else
 // a buffered Execute replayed as one stream), applying stop sequences as text

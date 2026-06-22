@@ -58,16 +58,18 @@ const (
 	// Inference, server → worker.
 	MsgExecute     MessageType = "execute"
 	MsgCountTokens MessageType = "count_tokens"
-	MsgEmbed       MessageType = "embed" // run one embeddings request (M3 phase 2a)
+	MsgEmbed       MessageType = "embed"  // run one embeddings request (M3 phase 2a)
+	MsgRerank      MessageType = "rerank" // run one rerank request (M3 phase 2b)
 	MsgCancel      MessageType = "cancel"
 
 	// Inference, worker → server.
-	MsgResponse    MessageType = "response"     // reply to a non-streaming execute
-	MsgChunk       MessageType = "chunk"        // one streamed delta
-	MsgDone        MessageType = "done"         // end of a streamed execute
-	MsgTokenCount  MessageType = "token_count"  // reply to count_tokens
-	MsgEmbedResult MessageType = "embed_result" // reply to embed (M3 phase 2a)
-	MsgError       MessageType = "error"        // a request failed
+	MsgResponse     MessageType = "response"      // reply to a non-streaming execute
+	MsgChunk        MessageType = "chunk"         // one streamed delta
+	MsgDone         MessageType = "done"          // end of a streamed execute
+	MsgTokenCount   MessageType = "token_count"   // reply to count_tokens
+	MsgEmbedResult  MessageType = "embed_result"  // reply to embed (M3 phase 2a)
+	MsgRerankResult MessageType = "rerank_result" // reply to rerank (M3 phase 2b)
+	MsgError        MessageType = "error"         // a request failed
 )
 
 // Error codes carried in ErrorPayload.Code, so the gateway can reconstruct the
@@ -213,6 +215,14 @@ type EmbedPayload struct {
 	Request   core.EmbedRequest `json:"request"`
 }
 
+// RerankPayload runs one rerank request on the worker (server → worker, M3 phase
+// 2b). Single-shot like EmbedPayload; the worker answers with a rerank_result or
+// error frame.
+type RerankPayload struct {
+	RequestID string             `json:"request_id"`
+	Request   core.RerankRequest `json:"request"`
+}
+
 // CancelPayload tells the worker to stop an in-flight request (server → worker),
 // sent when the client disconnects or a stop sequence matches mid-stream.
 type CancelPayload struct {
@@ -252,6 +262,13 @@ type TokenCountPayload struct {
 type EmbedResultPayload struct {
 	RequestID string             `json:"request_id"`
 	Response  core.EmbedResponse `json:"response"`
+}
+
+// RerankResultPayload answers a rerank request with the engine's ranked results and
+// token usage (worker → server, M3 phase 2b).
+type RerankResultPayload struct {
+	RequestID string              `json:"request_id"`
+	Response  core.RerankResponse `json:"response"`
 }
 
 // ErrorPayload reports that a request failed (worker → server). Code is one of

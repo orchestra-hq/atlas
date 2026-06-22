@@ -55,6 +55,20 @@ models:
       sha256: d4e388894e09cf3816e8b0896d81d265b55e7a9fff9ab03fe8bf4ef5e11295ac
       size: 84106624
 
+  # --- Reranker models (M3 phase 2b, ADR-0012) ----------------------------
+  # CPU-bootable on llama.cpp's reranking mode (--reranking), so /v1/rerank is
+  # provable on the per-PR tier. Rerankers, like embedding models, carry no tier.
+  - name: bge-reranker-v2-m3
+    class: reranker
+    engine: llamacpp
+    reasoning: false
+    context_window: 8192
+    source:
+      type: gguf
+      url: https://huggingface.co/gpustack/bge-reranker-v2-m3-GGUF/resolve/main/bge-reranker-v2-m3-Q4_K_M.gguf
+      sha256: e186a244ed455b4ab66ec64339ce7427a6ae13f5c0b5e544de96e50f0f8b3673
+      size: 438376864
+
   # --- vLLM tiers (GPU; cold-boot conformance deferred to phase 11) -------
   - name: qwen3.5-35b-a3b
     engine: vllm

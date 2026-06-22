@@ -63,6 +63,15 @@ type Embedder interface {
 	Embed(ctx context.Context, req core.EmbedRequest) (core.EmbedResponse, error)
 }
 
+// Reranker is an executor that can serve the reranker model class (M3 phase 2b,
+// ADR-0012): query + documents in, relevance-ordered results out, single-shot. Both
+// the in-process and remote workers implement it, so POST /v1/rerank dispatches to
+// either exactly as the chat surfaces dispatch Execute. A route whose executor does
+// not implement it is rejected by the gateway's class check before reaching here.
+type Reranker interface {
+	Rerank(ctx context.Context, req core.RerankRequest) (core.RerankResponse, error)
+}
+
 // Autostarter brings a model online on demand and tracks its activity (M1 phase
 // 4b-2). The gateway calls EnsureModel when a request names a catalog model with
 // no live route — it deploys one replica and blocks until an instance is ready —
@@ -561,6 +570,7 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/messages/count_tokens", g.handleCountTokens)
 	mux.HandleFunc("POST /v1/chat/completions", g.handleChatCompletions)
 	mux.HandleFunc("POST /v1/embeddings", g.handleEmbeddings)
+	mux.HandleFunc("POST /v1/rerank", g.handleRerank)
 	mux.HandleFunc("GET /v1/models", g.handleListModels)
 	mux.HandleFunc("GET /v1/models/{id}", g.handleGetModel)
 	// Liveness: the process is up and serving. Says nothing about whether a

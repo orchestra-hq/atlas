@@ -32,6 +32,10 @@ func (c *captureAdapter) Embed(_ context.Context, _ core.EmbedRequest) (core.Emb
 	return core.EmbedResponse{}, nil
 }
 
+func (c *captureAdapter) Rerank(_ context.Context, _ core.RerankRequest) (core.RerankResponse, error) {
+	return core.RerankResponse{}, nil
+}
+
 func ptr(f float64) *float64 { return &f }
 
 // TestSamplingDefaultsApplied: a request that omits temperature/top_p picks up the

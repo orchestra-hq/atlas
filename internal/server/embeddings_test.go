@@ -173,6 +173,109 @@ func TestEmbeddings_validationErrors(t *testing.T) {
 	}
 }
 
+// fakeReranker is an executor that serves the reranker class: Rerank returns fixed
+// ranked results, while Execute errors so a wrongly-routed chat request fails loudly.
+type fakeReranker struct {
+	results  []core.RerankResult
+	inTokens int
+	gotQuery string
+	gotDocs  []string
+}
+
+func (f *fakeReranker) Execute(context.Context, core.Request) (core.Response, error) {
+	return core.Response{}, errors.New("reranker model cannot serve chat")
+}
+
+func (f *fakeReranker) Rerank(_ context.Context, req core.RerankRequest) (core.RerankResponse, error) {
+	f.gotQuery = req.Query
+	f.gotDocs = req.Documents
+	return core.RerankResponse{Results: f.results, Usage: core.Usage{InputTokens: f.inTokens}}, nil
+}
+
+func rerankPost(t *testing.T, srv *httptest.Server, body string) (*http.Response, map[string]any) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/rerank", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("x-api-key", testKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&decoded)
+	_ = resp.Body.Close()
+	return resp, decoded
+}
+
+// TestRerank_roundTrip is the G20 rerank happy path: a reranker-class model serves
+// POST /v1/rerank in the Cohere shape, returning ranked results with usage, and
+// echoes documents when return_documents is set.
+func TestRerank_roundTrip(t *testing.T) {
+	rr := &fakeReranker{results: []core.RerankResult{{Index: 1, Score: 0.9}, {Index: 0, Score: 0.1}}, inTokens: 7}
+	srv := embeddingsServer(Model{Name: "rr-model", Exec: rr, Class: catalog.ClassReranker})
+	defer srv.Close()
+
+	resp, body := rerankPost(t, srv, `{"model":"rr-model","query":"q","documents":["a","b"],"return_documents":true}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %v)", resp.StatusCode, body)
+	}
+	if body["model"] != "rr-model" {
+		t.Fatalf("model echo = %v, want rr-model", body["model"])
+	}
+	results, _ := body["results"].([]any)
+	if len(results) != 2 {
+		t.Fatalf("results length = %d, want 2", len(results))
+	}
+	top, _ := results[0].(map[string]any)
+	if top["index"].(float64) != 1 || top["relevance_score"].(float64) != 0.9 {
+		t.Fatalf("top result = %v, want index 1 score 0.9", top)
+	}
+	doc, _ := top["document"].(map[string]any)
+	if doc == nil || doc["text"] != "b" {
+		t.Fatalf("return_documents text = %v, want b (index 1)", doc)
+	}
+	if rr.gotQuery != "q" || strings.Join(rr.gotDocs, ",") != "a,b" {
+		t.Fatalf("engine saw query=%q docs=%v", rr.gotQuery, rr.gotDocs)
+	}
+}
+
+// TestRerank_wrongClassEmbeddingModel is the G20 rejection case for rerank: a rerank
+// request against a non-reranker model is a clean 400, not a 5xx.
+func TestRerank_wrongClassEmbeddingModel(t *testing.T) {
+	emb := &fakeEmbedder{vecs: [][]float32{{1}}}
+	srv := embeddingsServer(Model{Name: "embed-model", Exec: emb, Class: catalog.ClassEmbedding})
+	defer srv.Close()
+
+	resp, body := rerankPost(t, srv, `{"model":"embed-model","query":"q","documents":["a"]}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for wrong-class rerank (body %v)", resp.StatusCode, body)
+	}
+	errObj, _ := body["error"].(map[string]any)
+	if errObj == nil || errObj["type"] != "invalid_request_error" {
+		t.Fatalf("error envelope = %v, want invalid_request_error", body)
+	}
+}
+
+// TestRerank_validationErrors: missing model, query, or documents is a clean 400.
+func TestRerank_validationErrors(t *testing.T) {
+	rr := &fakeReranker{}
+	srv := embeddingsServer(Model{Name: "rr-model", Exec: rr, Class: catalog.ClassReranker})
+	defer srv.Close()
+
+	for _, body := range []string{
+		`{"query":"q","documents":["a"]}`,
+		`{"model":"rr-model","documents":["a"]}`,
+		`{"model":"rr-model","query":"q","documents":[]}`,
+	} {
+		resp, _ := rerankPost(t, srv, body)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("body %s: status = %d, want 400", body, resp.StatusCode)
+		}
+	}
+}
+
 // TestRouteClass_defaultsToChat: a route registered with no class reads back as
 // chat, so a pre-class model routes to the chat surfaces unchanged.
 func TestRouteClass_defaultsToChat(t *testing.T) {

@@ -97,6 +97,19 @@ func TestEmbeddingClassValid(t *testing.T) {
 	}
 }
 
+// TestRerankerClassValid: a reranker-class entry is valid without a tier, like an
+// embedding entry.
+func TestRerankerClassValid(t *testing.T) {
+	doc := `models: [{name: rr, class: reranker, engine: llamacpp, context_window: 512, source: {type: gguf, url: u, sha256: ` + strings.Repeat("a", 64) + `}}]`
+	c, err := parse([]byte(doc))
+	if err != nil {
+		t.Fatalf("reranker entry without a tier should be valid: %v", err)
+	}
+	if e, ok := c.Lookup("rr"); !ok || e.ClassOrChat() != ClassReranker {
+		t.Fatalf("ClassOrChat = %q (ok=%v), want reranker", e.ClassOrChat(), ok)
+	}
+}
+
 func TestDuplicateNameRejected(t *testing.T) {
 	doc := `models:
   - {name: dup, engine: llamacpp, tier: haiku, context_window: 1, source: {type: gguf, url: u, sha256: ` + strings.Repeat("a", 64) + `}}

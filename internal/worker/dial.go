@@ -37,6 +37,7 @@ type Inferencer interface {
 	ExecuteStream(ctx context.Context, req core.Request, sink core.StreamSink) error
 	CountTokens(ctx context.Context, req core.Request) (int, error)
 	Embed(ctx context.Context, req core.EmbedRequest) (core.EmbedResponse, error)
+	Rerank(ctx context.Context, req core.RerankRequest) (core.RerankResponse, error)
 }
 
 // ServedModel binds a model name clients address to the engine that answers it
@@ -488,6 +489,15 @@ func (s *session) dispatch(ctx context.Context, data []byte) {
 			return
 		}
 		go s.handleEmbed(ctx, p)
+	case wire.MsgRerank:
+		var p wire.RerankPayload
+		if err := json.Unmarshal(m.Payload, &p); err != nil {
+			return
+		}
+		if s.refuseIfDraining(ctx, p.RequestID) {
+			return
+		}
+		go s.handleRerank(ctx, p)
 	case wire.MsgCancel:
 		var p wire.CancelPayload
 		if err := json.Unmarshal(m.Payload, &p); err != nil {
@@ -733,6 +743,34 @@ func (s *session) handleEmbed(ctx context.Context, p wire.EmbedPayload) {
 		return
 	}
 	_ = s.enqueue(reqCtx, wire.MsgEmbedResult, wire.EmbedResultPayload{RequestID: p.RequestID, Response: resp})
+}
+
+// handleRerank answers a rerank request with the engine's ranked results (M3 phase
+// 2b). It mirrors handleEmbed: single-shot, cancellable, replying with a
+// rerank_result on success or an error frame on failure.
+func (s *session) handleRerank(ctx context.Context, p wire.RerankPayload) {
+	model, ok := s.lookupModel(p.Request.Model)
+	if !ok {
+		_ = s.enqueue(ctx, wire.MsgError, wire.ErrorPayload{
+			RequestID: p.RequestID, Code: wire.CodeInternal,
+			Message: "worker does not serve model " + p.Request.Model,
+		})
+		return
+	}
+
+	reqCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.register(p.RequestID, cancel)
+	defer s.unregister(p.RequestID)
+
+	resp, err := model.Engine.Rerank(reqCtx, p.Request)
+	if err != nil {
+		if reqCtx.Err() == nil {
+			_ = s.enqueue(ctx, wire.MsgError, wire.ErrorPayload{RequestID: p.RequestID, Code: errorCode(err), Message: err.Error()})
+		}
+		return
+	}
+	_ = s.enqueue(reqCtx, wire.MsgRerankResult, wire.RerankResultPayload{RequestID: p.RequestID, Response: resp})
 }
 
 // enqueue hands a frame to the main loop for writing, returning ctx.Err() if the
