@@ -4,69 +4,53 @@ The capable/GPU acceptance run is what flips **M0 to "done"** (see [docs/roadmap
 
 ## Three decoupled stages
 
-The run is deliberately split so SkyPilot stays a removable convenience, never an Atlas dependency (ADR-0006):
+The run is split so the provisioner stays a removable convenience, never an Atlas dependency (ADR-0006):
 
-| Stage             | What                                             | Where                                                                      |
-| ----------------- | ------------------------------------------------ | -------------------------------------------------------------------------- |
-| 1. provision host | bring up a spot GPU, sync the repo, install deps | [`atlas-acceptance.sky.yaml`](atlas-acceptance.sky.yaml) (or by hand)      |
-| 2. run acceptance | `atlas up` + the harness, per engine             | [`scripts/acceptance.sh`](../../scripts/acceptance.sh) — provider-agnostic |
-| 3. tear down      | `sky down`                                       | the caller                                                                 |
+| Stage             | What                                                  | Where                                                                                  |
+| ----------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| 1. provision host | bring up a GPU box as an ephemeral self-hosted runner | [`nightly-gpu.yml`](../../.github/workflows/nightly-gpu.yml) via machulav (or by hand) |
+| 2. run acceptance | `atlas up` + the harness, per engine                  | [`scripts/acceptance.sh`](../../scripts/acceptance.sh) — provider-agnostic             |
+| 3. tear down      | terminate the instance                                | the workflow's `stop-runner` job (always runs)                                         |
 
-Only stages 1 and 3 know about SkyPilot. Stage 2 runs identically on a SkyPilot VM, an [ephemeral EC2 runner](#fallback-ephemeral-ec2-runner), or a box you launched yourself.
+Only stages 1 and 3 know how the host was provisioned. **Stage 2 (`scripts/acceptance.sh`) runs identically** on a machulav-launched runner, a box you launched yourself, or any GPU host — that decoupling is the point.
+
+> **Why not SkyPilot?** Earlier revisions provisioned with SkyPilot. It was dropped for acceptance: vLLM 0.23.0's CUDA-13 wheels need a recent NVIDIA driver, and the driver AMI that supplies it ships a Python/Ray stack that clashes with SkyPilot's own Ray bootstrap. Provisioning the instance directly (machulav) sidesteps that entirely and lets us pick the AMI. SkyPilot is still the canonical **serve** recipe ([`examples/serve`](../serve/)).
 
 ## Running it by hand
 
-On any GPU host with Go, uv, Node, and (for the smoke) the `claude` binary installed:
+On any GPU host (recent NVIDIA driver — see the AMI note below) with Go, uv, Node, and the `claude` binary installed:
 
 ```bash
 ACCEPTANCE_ENGINES="vllm llamacpp" CONF_CLAUDE_CODE_SMOKE=1 bash scripts/acceptance.sh
 ```
 
-Or let SkyPilot provision the host (needs a cloud account with a GPU quota and `pip install 'skypilot[aws]'` + `sky check`):
+The defaults serve **catalog** models (`qwen3-8b` on vLLM; `qwen2.5-7b-instruct-gguf` + `qwen3-8b-gguf` on llama.cpp) rather than raw specs, so each model's reasoning flag and tool/reasoning parser `engine_args` come from [`catalog/starter.yaml`](../../catalog/starter.yaml) — serving Qwen3 raw leaked `<think>` blocks into non-reasoning replies and omitted vLLM's required `--enable-auto-tool-choice`. Refs are overridable via env (`VLLM_MODEL`, `LLAMACPP_MODEL`, …); `VLLM_ENGINE_ARGS` defaults to `--max-model-len 16384` to fit Qwen3-8B's KV cache on a 24 GB GPU, and `CONF_CLAUDE_CODE_TIMEOUT` (default 600) bounds the smoke.
 
-```bash
-sky launch -c atlas-acceptance examples/acceptance/atlas-acceptance.sky.yaml --down -y
-```
+## Nightly automation: one-time setup
 
-The defaults serve **catalog** models (`qwen3-8b` on vLLM, `qwen3-8b-gguf` on llama.cpp) rather than raw specs, so the model's reasoning flag and tool/reasoning parser `engine_args` come from [`catalog/starter.yaml`](../../catalog/starter.yaml) — serving Qwen3 raw leaked `<think>` blocks into non-reasoning replies and omitted vLLM's required `--enable-auto-tool-choice`. The refs are overridable via env (`VLLM_MODEL`, `LLAMACPP_MODEL`, …); `VLLM_ENGINE_ARGS` defaults to `--max-model-len 16384` purely to fit Qwen3-8B's KV cache on a 24 GB acceptance GPU.
+[`.github/workflows/nightly-gpu.yml`](../../.github/workflows/nightly-gpu.yml) launches an **on-demand** GPU instance as an ephemeral [self-hosted runner](https://github.com/machulav/ec2-github-runner) (MIT), runs `acceptance.sh` as native steps on it, then always terminates it. On-demand (not spot) avoids the mid-run preemptions spot suffered. It authenticates to AWS with **GitHub OIDC** — no static keys — and stays **dormant until enabled**. One-time setup by the repo owner:
 
-## Nightly automation: one-time AWS setup
+1. **On-demand GPU quota.** In your region, ensure "Running On-Demand G and VT instances" covers one `g6.xlarge` (4 vCPU).
 
-[`.github/workflows/nightly-gpu.yml`](../../.github/workflows/nightly-gpu.yml) runs stage 1→3 nightly (and on manual dispatch). It authenticates to AWS with **GitHub OIDC** — no long-lived access keys in the repo — and stays **dormant until you enable it**. The repo owner does this once:
+2. **OIDC provider + IAM role.** Add the GitHub OIDC provider (`token.actions.githubusercontent.com`, audience `sts.amazonaws.com`) if absent, and a role trusting `repo:orchestra-hq/atlas:*`. The role needs EC2 permissions for `RunInstances` / `TerminateInstances` / `CreateTags` / `Describe*` (machulav launches and tears down the instance — no keypair or instance profile required; the runner dials out to GitHub).
 
-1. **GPU quota.** In the AWS region you'll use, request quota for spot GPU instances — the "All G and VT Spot Instance Requests" service quota in EC2, raised to at least the vCPUs of one `g5`/`g6` instance (a single `g6.xlarge`/`g5.xlarge` is enough). Quota increases can take a day or two to approve.
-
-2. **OIDC provider.** In IAM → Identity providers, add an OpenID Connect provider for `https://token.actions.githubusercontent.com` (audience `sts.amazonaws.com`). (Skip if one already exists.)
-
-3. **IAM role.** Create a role this workflow assumes, trusting only this repo's OIDC subject:
-
-   ```json
-   {
-     "Effect": "Allow",
-     "Principal": {
-       "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com"
-     },
-     "Action": "sts:AssumeRoleWithWebIdentity",
-     "Condition": {
-       "StringEquals": {
-         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
-       },
-       "StringLike": {
-         "token.actions.githubusercontent.com:sub": "repo:orchestra-hq/atlas:*"
-       }
-     }
-   }
-   ```
-
-   Attach the permissions SkyPilot needs on AWS (EC2 provisioning + the supporting IAM/STS calls) — use SkyPilot's documented minimal AWS policy: <https://docs.skypilot.co/en/latest/cloud-setup/cloud-permissions/aws.html>.
+3. **GitHub PAT.** machulav registers the ephemeral runner via the GitHub API, so it needs a token with the `repo` scope (classic) or a fine-grained token with **Administration: read/write** on this repo. Store it as the `GH_PAT` secret.
 
 4. **Repo config** (Settings → Secrets and variables → Actions):
-   - Secret `AWS_ROLE_ARN` = the role ARN from step 3.
-   - Variable `AWS_REGION` = your region (optional; defaults to `us-east-1`).
-   - Variable `GPU_ACCEPTANCE_ENABLED` = `true` — **this is the switch that arms the nightly.** Leave it unset to keep the workflow dormant.
+   - Secret `AWS_ROLE_ARN` = the OIDC role ARN.
+   - Secret `GH_PAT` = the runner-registration token.
+   - Variables `ACCEPTANCE_SUBNET_ID` + `ACCEPTANCE_SECURITY_GROUP_ID` = a subnet and security group in the region (a default-VPC subnet and the default SG work; the SG only needs outbound).
+   - Variable `AWS_REGION` (defaults to `eu-west-2`).
+   - Variable `GPU_ACCEPTANCE_ENABLED` = `true` — **the switch that arms the nightly.** Unset keeps it dormant.
 
-Then trigger a manual **Run workflow** (workflow_dispatch) once to validate before relying on the nightly schedule. The first run is also where the open model/flag choices get confirmed.
+Then trigger a manual **Run workflow** once to validate before trusting the schedule.
 
-## Fallback: ephemeral EC2 runner
+### AMI note
 
-If SkyPilot spot availability becomes a problem, [`machulav/ec2-github-runner`](https://github.com/machulav/ec2-github-runner) (MIT) is the documented equal-weight alternative: it starts an ephemeral GPU EC2 instance as a self-hosted runner, you run `scripts/acceptance.sh` on it directly (stage 2 is unchanged), then stop it. Same three stages, different stage-1/3 mechanism — exactly the decoupling ADR-0006 calls for.
+The workflow pins a recent **AWS Deep Learning Base OSS Nvidia Driver GPU AMI** (Ubuntu 22.04) — its driver is current enough for vLLM 0.23.0's CUDA-13 wheels (the stock SkyPilot/Ubuntu driver was not). Refresh the pinned id with:
+
+```bash
+aws ssm get-parameter --region eu-west-2 \
+  --name /aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-22.04/latest/ami-id \
+  --query Parameter.Value --output text
+```
