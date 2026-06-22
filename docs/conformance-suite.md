@@ -152,7 +152,7 @@ A deployed embedding model serves `POST /v1/embeddings` with correct-dimension v
 
 ### G21 — Audit log (M3 phase 3)
 
-Every control-plane mutation — key create/revoke, model deploy/scale/stop, worker drain/remove, runtime upgrade — produces an audit record carrying the acting admin key id, the action, the target, a timestamp, and the result. Records are append-only (no API mutates or deletes them) and durable across a control-plane restart. `atlas audit` lists them and filters by actor, action, target, and time window.
+Every control-plane mutation — model deploy/scale/stop, worker drain/remove, and API key create/revoke — produces an audit record carrying the actor (the admin key id for an HTTP action, `cli`/`system` for local key management), the action, the target, a timestamp, and the result. Records are append-only (no API mutates or deletes them) and durable across a control-plane restart. `atlas audit` (and the `GET /admin/audit` read API) lists them and filters by actor, action, target, and time window. Runtime upgrade is a worker-local operation outside the control plane, so it is not captured.
 
 ### G22 — Cloud-fallback passthrough (M3 phase 4)
 

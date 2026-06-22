@@ -56,6 +56,11 @@ func newKeysCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Audit the mutation (M3 phase 3). `atlas keys` runs locally against the
+			// store, so the actor is the local operator ("cli"), not an admin API key.
+			_ = store.RecordAudit(cmd.Context(), db.AuditEntry{
+				Actor: "cli", Action: "key.create", Target: k.ID, Result: "ok", Detail: scopeLabel(k.Admin),
+			})
 			if quiet {
 				// Print only the secret, on stdout, for `KEY=$(atlas keys create
 				// --quiet)`. cobra's cmd.Print* default to stderr, so write to
@@ -131,6 +136,10 @@ func newKeysRevokeCmd() *cobra.Command {
 
 			switch err := store.RevokeKey(cmd.Context(), args[0]); {
 			case err == nil:
+				// Audit the mutation (M3 phase 3); local operator is the actor.
+				_ = store.RecordAudit(cmd.Context(), db.AuditEntry{
+					Actor: "cli", Action: "key.revoke", Target: args[0], Result: "ok",
+				})
 				cmd.Printf("Revoked key %s.\n", args[0])
 				return nil
 			case errors.Is(err, db.ErrKeyNotFound):

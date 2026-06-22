@@ -92,9 +92,13 @@ func bootstrapDefaultKey(ctx context.Context, d *db.DB) (secret string, created 
 	if len(keys) > 0 {
 		return "", false, nil
 	}
-	secret, _, err = d.CreateKey(ctx, nil, true)
+	secret, k, err := d.CreateKey(ctx, nil, true)
 	if err != nil {
 		return "", false, err
 	}
+	// Audit the default key's creation (M3 phase 3): it is the one key not minted
+	// through `atlas keys create`, so without this its existence would be unrecorded.
+	// actor "system" marks an automatic, non-operator action.
+	_ = d.RecordAudit(ctx, db.AuditEntry{Actor: "system", Action: "key.create", Target: k.ID, Result: "ok", Detail: "bootstrap default admin key"})
 	return secret, true, nil
 }
