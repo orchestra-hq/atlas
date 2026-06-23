@@ -63,7 +63,11 @@ jobs:
           #   aws ssm get-parameter --region eu-west-2 \
           #     --name /aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-22.04/latest/ami-id
           ec2-image-id: ami-0c5fe80eabe9a6a1f
-          ec2-instance-type: g6.xlarge
+          # g6.2xlarge (not xlarge): same L4 24 GB GPU, but 32 GB system RAM vs
+          # 16 GB. The 16 GB host OOM-killed both engines staging weights through
+          # RAM — Qwen3-8B's bf16 checkpoint alone is 15.3 GB ("Available RAM:
+          # 11.49 GiB"). VRAM was never the limit; host RAM was.
+          ec2-instance-type: g6.2xlarge
           # The AMI's 75 GB root fills up — vLLM venv + Qwen3-8B weights (~16 GB) +
           # the GGUFs + HF download temp blew past it ("No space left on device").
           ec2-volume-size: 200
