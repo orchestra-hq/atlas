@@ -56,11 +56,12 @@ export VLLM_USE_FLASHINFER_SAMPLER=${VLLM_USE_FLASHINFER_SAMPLER:-0}
 VLLM_MODEL=${VLLM_MODEL:-qwen3-8b}
 VLLM_REASONING_MODEL=${VLLM_REASONING_MODEL:-$VLLM_MODEL}
 # Parser flags now come from the catalog; this env is for acceptance-GPU memory
-# fit only. On a 24 GB card a 15.3 GB Qwen3-8B leaves little headroom, so cap the
-# served length (8192 is ample for conformance's short prompts) and use
-# --enforce-eager: CUDA-graph capture is VRAM-hungry and was where vLLM was
-# OOM-killed right after model load.
-VLLM_ENGINE_ARGS=${VLLM_ENGINE_ARGS:-"--max-model-len 8192 --enforce-eager"}
+# fit only. --enforce-eager skips CUDA-graph capture (VRAM-hungry; was OOM-killing
+# vLLM right after model load on the 24 GB card). --max-model-len 32768 fits the
+# real Claude Code smoke — its system prompt + tool definitions are ~24k tokens,
+# so the earlier 8192 gave "Prompt is too long" before the loop could start; the
+# KV cache holds ~34k tokens at this util, so 32768 fits one sequence.
+VLLM_ENGINE_ARGS=${VLLM_ENGINE_ARGS:-"--max-model-len 32768 --enforce-eager"}
 
 # llama.cpp deploys TWO models (both Q4 fit a 24 GB card easily): a capable
 # non-reasoning chat model for the sonnet/haiku aliases — which also drives the
