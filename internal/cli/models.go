@@ -3,8 +3,10 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -13,6 +15,20 @@ import (
 	"github.com/orchestra-hq/atlas/internal/store"
 	"github.com/orchestra-hq/atlas/internal/worker"
 )
+
+// engineReadyTimeout returns the engine-startup timeout override from
+// ATLAS_ENGINE_READY_TIMEOUT (a Go duration, e.g. "20m"), or 0 to use the worker
+// default (3m). A vLLM cold start — multi-GB weight download plus load — routinely
+// exceeds the default, so the GPU acceptance run raises it; llama.cpp is ready in
+// seconds and is unaffected either way.
+func engineReadyTimeout() time.Duration {
+	if v := os.Getenv("ATLAS_ENGINE_READY_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return 0
+}
 
 // logFileName builds the per-model engine-log filename. The served name can be a
 // raw Hugging Face repo id (e.g. mlx-community/Qwen2.5-0.5B-Instruct-4bit), whose
@@ -96,6 +112,7 @@ func (r *engineRuntime) start(ctx context.Context, spec string) (startedModel, e
 		Reasoning:     rm.reasoning, // gates the thinking kwarg (M2 phase 4b)
 		Class:         rm.class,     // embedding launches engine in embedding mode (M3 phase 2a)
 		LogPath:       filepath.Join(r.stateDir, logFileName(r.engine, rm.served)),
+		ReadyTimeout:  engineReadyTimeout(), // 0 = worker default; raised for vLLM cold start
 	})
 	if err != nil {
 		return startedModel{}, err

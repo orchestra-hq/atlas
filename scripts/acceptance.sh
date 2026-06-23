@@ -35,7 +35,11 @@ export CONF_CLAUDE_CODE_SMOKE=${CONF_CLAUDE_CODE_SMOKE:-1}
 # The Claude Code smoke drives a full agentic loop; a capable model on a GPU
 # still needs minutes, so give it more wall-clock than the per-PR default (300s).
 export CONF_CLAUDE_CODE_TIMEOUT=${CONF_CLAUDE_CODE_TIMEOUT:-600}
-READY_TIMEOUT=${READY_TIMEOUT:-600} # seconds; an 8B vLLM load is minutes-slow
+READY_TIMEOUT=${READY_TIMEOUT:-900} # seconds the script polls /readyz for
+# atlas's own per-engine startup timeout (worker default is 3m). vLLM cold start
+# downloads + loads a multi-GB model, which exceeds 3m, so raise it; the script's
+# READY_TIMEOUT poll above must stay >= this.
+export ATLAS_ENGINE_READY_TIMEOUT=${ATLAS_ENGINE_READY_TIMEOUT:-15m}
 
 # Capable models per engine, served by CATALOG NAME (not a raw -hf/spec). The
 # catalog path threads the model's reasoning flag (so enable_thinking is gated
