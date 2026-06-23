@@ -64,6 +64,11 @@ jobs:
           #     --name /aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-22.04/latest/ami-id
           ec2-image-id: ami-0c5fe80eabe9a6a1f
           ec2-instance-type: g6.xlarge
+          # The AMI's 75 GB root fills up — vLLM venv + Qwen3-8B weights (~16 GB) +
+          # the GGUFs + HF download temp blew past it ("No space left on device").
+          ec2-volume-size: 200
+          ec2-device-name: /dev/sda1
+          ec2-volume-type: gp3
           subnet-id: ${{ vars.ACCEPTANCE_SUBNET_ID }}
           security-group-id: ${{ vars.ACCEPTANCE_SECURITY_GROUP_ID }}
           aws-resource-tags: >-
