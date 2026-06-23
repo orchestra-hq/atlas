@@ -47,9 +47,11 @@ READY_TIMEOUT=${READY_TIMEOUT:-600} # seconds; an 8B vLLM load is minutes-slow
 VLLM_MODEL=${VLLM_MODEL:-qwen3-8b}
 VLLM_REASONING_MODEL=${VLLM_REASONING_MODEL:-$VLLM_MODEL}
 # Parser flags now come from the catalog; this env is for acceptance-GPU memory
-# fit only. Qwen3-8B's full 40960 window would size vLLM's KV cache past a 24 GB
-# card, so cap the served length — ample for conformance (short prompts).
-VLLM_ENGINE_ARGS=${VLLM_ENGINE_ARGS:-"--max-model-len 16384"}
+# fit only. On a 24 GB card a 15.3 GB Qwen3-8B leaves little headroom, so cap the
+# served length (8192 is ample for conformance's short prompts) and use
+# --enforce-eager: CUDA-graph capture is VRAM-hungry and was where vLLM was
+# OOM-killed right after model load.
+VLLM_ENGINE_ARGS=${VLLM_ENGINE_ARGS:-"--max-model-len 8192 --enforce-eager"}
 
 # llama.cpp deploys TWO models (both Q4 fit a 24 GB card easily): a capable
 # non-reasoning chat model for the sonnet/haiku aliases — which also drives the

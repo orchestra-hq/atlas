@@ -87,8 +87,11 @@ jobs:
     # The machulav runner starts (from cloud-init, as root) without HOME set, so
     # Go's cache, uv's ~/.local, npm, and the claude config dir have nowhere to
     # live — setup-go's `go env` fails outright. Set it for the whole job.
+    # IS_SANDBOX lets Claude Code accept --dangerously-skip-permissions as root
+    # (it otherwise refuses); the ephemeral single-job runner IS the sandbox.
     env:
       HOME: /root
+      IS_SANDBOX: "1"
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
