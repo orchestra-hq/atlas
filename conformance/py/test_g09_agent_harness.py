@@ -119,8 +119,11 @@ def test_claude_code_smoke(base_url, api_key, model):
     is capped (CLAUDE_CODE_MAX_OUTPUT_TOKENS) to fit — the task needs only a
     few tokens. Retried once: the run is model-stochastic (suite principle 4).
     """
-    if not os.environ.get("CONF_CLAUDE_CODE_SMOKE"):
-        pytest.skip("CONF_CLAUDE_CODE_SMOKE not set — real Claude Code smoke is the capable-tier gate")
+    # Treated as a boolean: 1/true/yes enables, anything else (incl. "0", empty,
+    # unset) skips — so a caller can explicitly disable it with "0", e.g. the
+    # CPU acceptance track where a 7B can't drive the loop in budget.
+    if os.environ.get("CONF_CLAUDE_CODE_SMOKE", "").strip().lower() not in ("1", "true", "yes"):
+        pytest.skip("CONF_CLAUDE_CODE_SMOKE not enabled — real Claude Code smoke is the capable-tier gate")
     claude = _claude_code_bin()
     if claude is None:
         pytest.skip("claude binary not found (set CONF_CLAUDE_CODE_BIN) — drop-in smoke needs it")

@@ -35,7 +35,16 @@ export CONF_CLAUDE_CODE_SMOKE=${CONF_CLAUDE_CODE_SMOKE:-1}
 # The Claude Code smoke drives a full agentic loop; a capable model on a GPU
 # still needs minutes, so give it more wall-clock than the per-PR default (300s).
 export CONF_CLAUDE_CODE_TIMEOUT=${CONF_CLAUDE_CODE_TIMEOUT:-600}
-READY_TIMEOUT=${READY_TIMEOUT:-600} # seconds; an 8B vLLM load is minutes-slow
+READY_TIMEOUT=${READY_TIMEOUT:-900} # seconds the script polls /readyz for
+# atlas's own per-engine startup timeout (worker default is 3m). vLLM cold start
+# downloads + loads a multi-GB model, which exceeds 3m, so raise it; the script's
+# READY_TIMEOUT poll above must stay >= this.
+export ATLAS_ENGINE_READY_TIMEOUT=${ATLAS_ENGINE_READY_TIMEOUT:-15m}
+# vLLM's FlashInfer sampler JIT-compiles a CUDA kernel at startup via `ninja`,
+# which the runner has no build toolchain for ("FileNotFoundError: 'ninja'").
+# Force the native PyTorch sampler instead — no JIT, identical sampling. Harmless
+# for the other engines (vLLM-only env).
+export VLLM_USE_FLASHINFER_SAMPLER=${VLLM_USE_FLASHINFER_SAMPLER:-0}
 
 # Capable models per engine, served by CATALOG NAME (not a raw -hf/spec). The
 # catalog path threads the model's reasoning flag (so enable_thinking is gated
@@ -47,9 +56,11 @@ READY_TIMEOUT=${READY_TIMEOUT:-600} # seconds; an 8B vLLM load is minutes-slow
 VLLM_MODEL=${VLLM_MODEL:-qwen3-8b}
 VLLM_REASONING_MODEL=${VLLM_REASONING_MODEL:-$VLLM_MODEL}
 # Parser flags now come from the catalog; this env is for acceptance-GPU memory
-# fit only. Qwen3-8B's full 40960 window would size vLLM's KV cache past a 24 GB
-# card, so cap the served length — ample for conformance (short prompts).
-VLLM_ENGINE_ARGS=${VLLM_ENGINE_ARGS:-"--max-model-len 16384"}
+# fit only. On a 24 GB card a 15.3 GB Qwen3-8B leaves little headroom, so cap the
+# served length (8192 is ample for conformance's short prompts) and use
+# --enforce-eager: CUDA-graph capture is VRAM-hungry and was where vLLM was
+# OOM-killed right after model load.
+VLLM_ENGINE_ARGS=${VLLM_ENGINE_ARGS:-"--max-model-len 8192 --enforce-eager"}
 
 # llama.cpp deploys TWO models (both Q4 fit a 24 GB card easily): a capable
 # non-reasoning chat model for the sonnet/haiku aliases — which also drives the

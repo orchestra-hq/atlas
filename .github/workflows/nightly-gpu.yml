@@ -1,39 +1,41 @@
-name: Nightly GPU acceptance
+name: Nightly acceptance
 
-# The capable/GPU acceptance run that flips M0 to "done" (M0.5, ADR-0006):
-# provision an on-demand GPU box, run the full conformance gate (G1–G10) + the
-# real Claude Code smoke on both engines via scripts/acceptance.sh, tear it down.
+# The capable acceptance run that flips M0 to "done" (M0.5, ADR-0006): provision
+# ephemeral on-demand boxes, run the full conformance gate (G1–G10) + the real
+# Claude Code smoke per engine via scripts/acceptance.sh, tear them down.
 #
-# Provisioning is machulav/ec2-github-runner (not SkyPilot): it launches an
-# ephemeral EC2 instance as a self-hosted runner, so acceptance.sh runs as native
-# workflow steps on the GPU box — logs stream live, exit codes propagate, and the
-# instance is always terminated by stop-runner. This replaced SkyPilot, whose Ray
-# bootstrap clashed with the recent-driver AMI vLLM needs. On-demand (not spot)
-# avoids the mid-run preemptions that repeatedly killed the SkyPilot runs.
+# Two independent tracks (run in parallel), because the engines want different
+# hardware (ADR-0001: llama.cpp is the portable/CPU engine, vLLM the GPU path):
+#   • GPU track  — g6.2xlarge (L4 24 GB), serves vLLM.
+#   • CPU track  — c7i.4xlarge (compute-optimised, no GPU), serves llama.cpp.
+# llama.cpp ships no Linux CUDA prebuilt, so it stays CPU-only here; GPU is vLLM's
+# lane. Each track provisions its own ephemeral self-hosted runner via
+# machulav/ec2-github-runner (on-demand, no spot preemption) and always tears it
+# down. acceptance.sh is identical on both — only ACCEPTANCE_ENGINES differs.
 #
-# Dormant until enabled: start-runner is gated on GPU_ACCEPTANCE_ENABLED=true.
+# Dormant until enabled: start jobs are gated on GPU_ACCEPTANCE_ENABLED=true.
 # Requires (see examples/acceptance/README.md): secret AWS_ROLE_ARN (OIDC); a
 # GitHub App (Administration:write on this repo) via secrets ACCEPTANCE_APP_ID +
-# ACCEPTANCE_APP_PRIVATE_KEY (mints the short-lived token that registers the
-# self-hosted runner); vars ACCEPTANCE_SUBNET_ID, ACCEPTANCE_SECURITY_GROUP_ID,
-# AWS_REGION.
+# ACCEPTANCE_APP_PRIVATE_KEY (mints the short-lived runner-registration token);
+# vars ACCEPTANCE_SUBNET_ID, ACCEPTANCE_SECURITY_GROUP_ID, AWS_REGION.
 
 on:
   schedule:
     - cron: "0 7 * * *" # 07:00 UTC nightly
   workflow_dispatch:
     inputs:
-      engines:
-        description: Engines to run (space-separated)
-        default: vllm llamacpp
+      tracks:
+        description: Tracks to run (space-separated; "gpu", "cpu", or both)
+        default: gpu cpu
 
 jobs:
-  start-runner:
+  # ----------------------------------------------------------------- GPU: vLLM
+  start-gpu-runner:
     name: Start GPU runner
-    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' }}
+    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu', 'gpu') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
-      id-token: write # mint the OIDC token AWS exchanges for short-lived creds
+      id-token: write
       contents: read
     outputs:
       label: ${{ steps.start.outputs.label }}
@@ -43,9 +45,6 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'eu-west-2' }}
-      # Mint a short-lived (~1 h) installation token scoped to this repo's
-      # Administration permission — the minimum GitHub requires to register a
-      # self-hosted runner. Narrower than a PAT: one repo, no long-lived secret.
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: app-token
         with:
@@ -57,35 +56,40 @@ jobs:
         with:
           mode: start
           github-token: ${{ steps.app-token.outputs.token }}
-          # On-demand g6.xlarge (1× L4, 24 GB). The Base OSS Nvidia Driver AMI
-          # (Ubuntu 22.04, eu-west-2) carries a recent driver — required for
-          # vLLM 0.23.0's CUDA-13 wheels. Refresh via:
+          # Base OSS Nvidia Driver AMI (Ubuntu 22.04, eu-west-2) — recent driver
+          # for vLLM 0.23.0's CUDA-13 wheels. Refresh via:
           #   aws ssm get-parameter --region eu-west-2 \
           #     --name /aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-22.04/latest/ami-id
           ec2-image-id: ami-0c5fe80eabe9a6a1f
-          ec2-instance-type: g6.xlarge
+          # g6.2xlarge: L4 24 GB + 32 GB RAM (16 GB OOM-killed weight staging).
+          ec2-instance-type: g6.2xlarge
+          ec2-volume-size: 200 # 75 GB AMI default ran out of space (venv + weights)
+          ec2-device-name: /dev/sda1
+          ec2-volume-type: gp3
           subnet-id: ${{ vars.ACCEPTANCE_SUBNET_ID }}
           security-group-id: ${{ vars.ACCEPTANCE_SECURITY_GROUP_ID }}
           aws-resource-tags: >-
-            [{"Key": "Name", "Value": "atlas-gpu-acceptance"},
+            [{"Key": "Name", "Value": "atlas-acceptance-gpu"},
              {"Key": "atlas-acceptance", "Value": "nightly"}]
 
-  acceptance:
-    name: GPU acceptance
-    needs: start-runner
-    runs-on: ${{ needs.start-runner.outputs.label }}
+  vllm-acceptance:
+    name: vLLM acceptance (GPU)
+    needs: start-gpu-runner
+    runs-on: ${{ needs.start-gpu-runner.outputs.label }}
     timeout-minutes: 120
     # The machulav runner starts (from cloud-init, as root) without HOME set, so
     # Go's cache, uv's ~/.local, npm, and the claude config dir have nowhere to
-    # live — setup-go's `go env` fails outright. Set it for the whole job.
+    # live. IS_SANDBOX lets Claude Code accept --dangerously-skip-permissions as
+    # root (the ephemeral single-job runner is the sandbox).
     env:
       HOME: /root
+      IS_SANDBOX: "1"
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: false # ephemeral one-shot box; nothing to cache across runs
+          cache: false # ephemeral one-shot box
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -93,21 +97,19 @@ jobs:
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          sudo npm i -g @anthropic-ai/claude-code
-      - name: Run acceptance (G1–G10 + Claude Code smoke, both engines)
+          npm i -g @anthropic-ai/claude-code
+      - name: Run acceptance (vLLM)
         env:
-          ACCEPTANCE_ENGINES: ${{ github.event.inputs.engines || 'vllm llamacpp' }}
+          ACCEPTANCE_ENGINES: vllm
         run: |
           nvidia-smi || { echo "no GPU visible on the host" >&2; exit 1; }
           bash scripts/acceptance.sh
 
-  stop-runner:
+  stop-gpu-runner:
     name: Stop GPU runner
-    needs: [start-runner, acceptance]
+    needs: [start-gpu-runner, vllm-acceptance]
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    # Always terminate a started runner — even if acceptance failed — so a GPU
-    # instance is never leaked. Skips only when start-runner did not start one.
-    if: ${{ always() && needs.start-runner.result == 'success' }}
+    if: ${{ always() && needs.start-gpu-runner.result == 'success' }}
     permissions:
       id-token: write
       contents: read
@@ -126,5 +128,105 @@ jobs:
         with:
           mode: stop
           github-token: ${{ steps.app-token.outputs.token }}
-          label: ${{ needs.start-runner.outputs.label }}
-          ec2-instance-id: ${{ needs.start-runner.outputs.ec2-instance-id }}
+          label: ${{ needs.start-gpu-runner.outputs.label }}
+          ec2-instance-id: ${{ needs.start-gpu-runner.outputs.ec2-instance-id }}
+
+  # ------------------------------------------------------------ CPU: llama.cpp
+  start-cpu-runner:
+    name: Start CPU runner
+    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu', 'cpu') }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      label: ${{ steps.start.outputs.label }}
+      ec2-instance-id: ${{ steps.start.outputs.ec2-instance-id }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.ACCEPTANCE_APP_ID }}
+          private-key: ${{ secrets.ACCEPTANCE_APP_PRIVATE_KEY }}
+      - name: Start EC2 runner
+        id: start
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ steps.app-token.outputs.token }}
+          # Same AMI as the GPU track (it already carries the runner prereqs); the
+          # NVIDIA bits go unused on a CPU instance. c7i.4xlarge = 16 fast vCPU,
+          # 32 GB RAM — enough to give the capable-model llama.cpp run (and its
+          # Claude Code smoke) a real chance on CPU.
+          ec2-image-id: ami-0c5fe80eabe9a6a1f
+          ec2-instance-type: c7i.4xlarge
+          ec2-volume-size: 100 # Q4 GGUFs (~10 GB) + base image
+          ec2-device-name: /dev/sda1
+          ec2-volume-type: gp3
+          subnet-id: ${{ vars.ACCEPTANCE_SUBNET_ID }}
+          security-group-id: ${{ vars.ACCEPTANCE_SECURITY_GROUP_ID }}
+          aws-resource-tags: >-
+            [{"Key": "Name", "Value": "atlas-acceptance-cpu"},
+             {"Key": "atlas-acceptance", "Value": "nightly"}]
+
+  llama-acceptance:
+    name: llama.cpp acceptance (CPU)
+    needs: start-cpu-runner
+    runs-on: ${{ needs.start-cpu-runner.outputs.label }}
+    timeout-minutes: 120
+    env:
+      HOME: /root
+      IS_SANDBOX: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install uv + Claude Code
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          npm i -g @anthropic-ai/claude-code
+      - name: Run acceptance (llama.cpp, CPU)
+        env:
+          ACCEPTANCE_ENGINES: llamacpp
+          # The Claude Code smoke is a GPU/capable-tier cell: a 7B on CPU can't
+          # drive the agentic loop within the budget (it times out even on a fast
+          # 16-vCPU c7i), so it's skipped here and gated on the vLLM/GPU track.
+          # This track validates the capable model's full API conformance on CPU.
+          CONF_CLAUDE_CODE_SMOKE: "0"
+        run: bash scripts/acceptance.sh
+
+  stop-cpu-runner:
+    name: Stop CPU runner
+    needs: [start-cpu-runner, llama-acceptance]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    if: ${{ always() && needs.start-cpu-runner.result == 'success' }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.ACCEPTANCE_APP_ID }}
+          private-key: ${{ secrets.ACCEPTANCE_APP_PRIVATE_KEY }}
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ steps.app-token.outputs.token }}
+          label: ${{ needs.start-cpu-runner.outputs.label }}
+          ec2-instance-id: ${{ needs.start-cpu-runner.outputs.ec2-instance-id }}
