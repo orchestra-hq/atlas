@@ -198,6 +198,11 @@ jobs:
       - name: Run acceptance (llama.cpp, CPU)
         env:
           ACCEPTANCE_ENGINES: llamacpp
+          # The Claude Code smoke is a GPU/capable-tier cell: a 7B on CPU can't
+          # drive the agentic loop within the budget (it times out even on a fast
+          # 16-vCPU c7i), so it's skipped here and gated on the vLLM/GPU track.
+          # This track validates the capable model's full API conformance on CPU.
+          CONF_CLAUDE_CODE_SMOKE: "0"
         run: bash scripts/acceptance.sh
 
   stop-cpu-runner:
