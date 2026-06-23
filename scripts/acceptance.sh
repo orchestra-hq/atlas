@@ -40,6 +40,11 @@ READY_TIMEOUT=${READY_TIMEOUT:-900} # seconds the script polls /readyz for
 # downloads + loads a multi-GB model, which exceeds 3m, so raise it; the script's
 # READY_TIMEOUT poll above must stay >= this.
 export ATLAS_ENGINE_READY_TIMEOUT=${ATLAS_ENGINE_READY_TIMEOUT:-15m}
+# vLLM's FlashInfer sampler JIT-compiles a CUDA kernel at startup via `ninja`,
+# which the runner has no build toolchain for ("FileNotFoundError: 'ninja'").
+# Force the native PyTorch sampler instead — no JIT, identical sampling. Harmless
+# for the other engines (vLLM-only env).
+export VLLM_USE_FLASHINFER_SAMPLER=${VLLM_USE_FLASHINFER_SAMPLER:-0}
 
 # Capable models per engine, served by CATALOG NAME (not a raw -hf/spec). The
 # catalog path threads the model's reasoning flag (so enable_thinking is gated
