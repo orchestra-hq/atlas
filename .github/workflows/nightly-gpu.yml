@@ -104,6 +104,19 @@ jobs:
         run: |
           nvidia-smi || { echo "no GPU visible on the host" >&2; exit 1; }
           bash scripts/acceptance.sh
+      # Always upload — the per-cell matrix (with failure messages) is most useful
+      # exactly when the gate is red, and vitest runs --silent so a failing TS cell
+      # prints nothing to the logs.
+      - name: Upload conformance matrix
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-vllm
+          path: |
+            conformance/results/matrix-*.json
+            conformance/results/capability-matrix.json
+            conformance/results/CAPABILITY.md
+          if-no-files-found: warn
 
   stop-gpu-runner:
     name: Stop GPU runner
@@ -204,6 +217,19 @@ jobs:
           # This track validates the capable model's full API conformance on CPU.
           CONF_CLAUDE_CODE_SMOKE: "0"
         run: bash scripts/acceptance.sh
+      # Always upload — the per-cell matrix (with failure messages) is most useful
+      # exactly when the gate is red, and vitest runs --silent so a failing TS cell
+      # prints nothing to the logs.
+      - name: Upload conformance matrix
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-llamacpp
+          path: |
+            conformance/results/matrix-*.json
+            conformance/results/capability-matrix.json
+            conformance/results/CAPABILITY.md
+          if-no-files-found: warn
 
   stop-cpu-runner:
     name: Stop CPU runner
