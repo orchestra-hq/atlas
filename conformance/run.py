@@ -140,7 +140,11 @@ def main() -> int:
         print(f"harness error: unknown group(s) in --require: {', '.join(unknown)}", file=sys.stderr)
         return 2
 
-    results_dir = args.output.parent
+    # Resolve to absolute: vitest runs with cwd=ts/ and resolves a relative
+    # --outputFile against that dir, but the existence check here resolves
+    # against run.py's cwd — a relative --output made them disagree and turned
+    # green runs red ("vitest produced no results file").
+    results_dir = args.output.parent.resolve()
     results_dir.mkdir(parents=True, exist_ok=True)
 
     stub = None

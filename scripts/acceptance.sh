@@ -63,14 +63,16 @@ VLLM_REASONING_MODEL=${VLLM_REASONING_MODEL:-$VLLM_MODEL}
 # KV cache holds ~34k tokens at this util, so 32768 fits one sequence.
 VLLM_ENGINE_ARGS=${VLLM_ENGINE_ARGS:-"--max-model-len 32768 --enforce-eager"}
 
-# llama.cpp deploys TWO models (both Q4 fit a 24 GB card easily): a capable
-# non-reasoning chat model for the sonnet/haiku aliases — which also drives the
-# Claude Code smoke (G9) and satisfies G4's non-reasoning-graceful assertion that
-# a hybrid model cannot — and the reasoning Qwen3-8B for opus (G4 reasoning half).
-# vLLM stays single-model: two 7-8B bf16 models exceed 24 GB, so its non-reasoning
-# coverage waits on quantized weights (tracked separately).
+# llama.cpp deploys TWO models on the CPU track (both Q4, fit the c7i's 32 GB):
+# a capable non-reasoning chat model (qwen2.5-7b) for sonnet/haiku — satisfying
+# G4's non-reasoning-graceful assertion a hybrid model cannot — and the reasoning
+# **gemma-4-12b-coder** for opus, which gets full G1–G10 coverage incl. its
+# thinking path (validated locally: thinking blocks + tool calls both work on
+# llama.cpp, unlike Qwen3's truncated-reasoning gap on vLLM's parser). gemma is
+# GGUF-only, so llama.cpp/CPU is its home (no clean GPU path) — hence it lives on
+# this track. Override to qwen3-8b-gguf if you want the Qwen reasoning model back.
 LLAMACPP_MODEL=${LLAMACPP_MODEL:-qwen2.5-7b-instruct-gguf}
-LLAMACPP_REASONING_MODEL=${LLAMACPP_REASONING_MODEL:-qwen3-8b-gguf}
+LLAMACPP_REASONING_MODEL=${LLAMACPP_REASONING_MODEL:-gemma-4-12b-coder}
 LLAMACPP_ENGINE_ARGS=${LLAMACPP_ENGINE_ARGS:-""}
 
 # Aliases are constant across engines, so the harness always addresses the same
