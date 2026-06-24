@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash scripts/nightly.sh status*)",
+      "Bash(bash scripts/nightly.sh watch*)",
+      "Bash(bash scripts/nightly.sh logs*)",
+      "Bash(bash scripts/nightly.sh fetch*)",
+      "Bash(python3 scripts/engine-raw.py *)"
+    ]
+  }
+}
