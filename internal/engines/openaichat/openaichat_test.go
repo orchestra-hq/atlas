@@ -252,6 +252,34 @@ func TestExecuteEmitsThinkingBlock(t *testing.T) {
 	}
 }
 
+// vLLM (0.23.0) returns the reasoning trace in `reasoning`, not the
+// `reasoning_content` llama.cpp/SGLang use. Atlas must surface either as a
+// thinking block (otherwise the trace is dropped and only the answer shows —
+// the real G4 failure on vLLM).
+func TestExecuteEmitsThinkingBlockFromReasoningField(t *testing.T) {
+	srv := fakeServer(t, http.StatusOK, `{
+		"choices":[{"message":{"role":"assistant","reasoning":"let me think","content":"the answer"},"finish_reason":"stop"}],
+		"usage":{"prompt_tokens":5,"completion_tokens":6}
+	}`, nil)
+	defer srv.Close()
+
+	resp, err := client(srv).Execute(context.Background(), core.Request{
+		Model:     "m",
+		MaxTokens: 64,
+		Thinking:  &core.ThinkingConfig{Enabled: true, BudgetTokens: 1024},
+		Messages:  []core.Message{{Role: core.RoleUser, Blocks: []core.ContentBlock{core.TextBlock("q")}}},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(resp.Blocks) != 2 || resp.Blocks[0].Type != core.BlockThinking || resp.Blocks[1].Type != core.BlockText {
+		t.Fatalf("blocks = %+v", resp.Blocks)
+	}
+	if resp.Blocks[0].Thinking != "let me think" {
+		t.Errorf("thinking = %q", resp.Blocks[0].Thinking)
+	}
+}
+
 func TestExecuteDropsReasoningWhenThinkingOff(t *testing.T) {
 	var got Request
 	// Engine still returned reasoning_content, but the client did not ask for it.
@@ -406,6 +434,33 @@ func (s *recordSink) Done(reason core.StopReason, usage core.Usage) error {
 func TestExecuteStreamForwardsThinking(t *testing.T) {
 	body := "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"hmm \"},\"finish_reason\":null}]}\n\n" +
 		"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"ok\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: [DONE]\n\n"
+	srv := sseServer(t, body, nil)
+	defer srv.Close()
+
+	sink := &recordSink{}
+	if err := client(srv).ExecuteStream(context.Background(), core.Request{
+		Model:     "m",
+		MaxTokens: 16,
+		Thinking:  &core.ThinkingConfig{Enabled: true},
+		Messages:  []core.Message{{Role: core.RoleUser, Blocks: []core.ContentBlock{core.TextBlock("q")}}},
+	}, sink); err != nil {
+		t.Fatalf("ExecuteStream: %v", err)
+	}
+	if sink.thinking != "hmm ok" {
+		t.Errorf("thinking = %q", sink.thinking)
+	}
+	if len(sink.deltas) != 1 || sink.deltas[0] != "done" {
+		t.Errorf("text deltas = %v", sink.deltas)
+	}
+}
+
+// vLLM streams thinking deltas under `reasoning`, not `reasoning_content`.
+func TestExecuteStreamForwardsThinkingFromReasoningField(t *testing.T) {
+	body := "data: {\"choices\":[{\"delta\":{\"reasoning\":\"hmm \"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"reasoning\":\"ok\"},\"finish_reason\":null}]}\n\n" +
 		"data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\n" +
 		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
 		"data: [DONE]\n\n"

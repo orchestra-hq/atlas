@@ -166,8 +166,8 @@ func (c *Client) ExecuteStream(ctx context.Context, req core.Request, sink core.
 			continue // usage-only final chunk
 		}
 		choice := chunk.Choices[0]
-		if wantThinking && choice.Delta.ReasoningContent != "" {
-			if stop, err := pump(sink.Thinking(choice.Delta.ReasoningContent)); err != nil {
+		if reasoning := reasoningOf(choice.Delta.ReasoningContent, choice.Delta.Reasoning); wantThinking && reasoning != "" {
+			if stop, err := pump(sink.Thinking(reasoning)); err != nil {
 				return err
 			} else if stop {
 				return nil
