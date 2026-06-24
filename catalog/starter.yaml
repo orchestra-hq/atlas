@@ -82,6 +82,26 @@ models:
       temperature: 0.6
       top_p: 0.95
 
+  # --- Coder model (gemma4, thinking) -------------------------------------
+  # Gemma-4-12B coder finetune (Apache-2.0), GGUF. A reasoning model — it thinks
+  # in Gemma's native thought channel (enable_thinking handled by the chat
+  # template), so reasoning=true. gemma4 arch is supported by the pinned
+  # llama.cpp (b9611). Q4_K_M ~7.4 GB. Author-recommended sampling: temp 1.0 /
+  # top_p 0.95. 256K context window per the model card.
+  - name: gemma-4-12b-coder
+    engine: llamacpp
+    tier: sonnet
+    reasoning: true
+    context_window: 262144
+    source:
+      type: gguf
+      url: https://huggingface.co/yuxinlu1/gemma-4-12B-coder-fable5-composer2.5-v1-GGUF/resolve/main/gemma4-coding-Q4_K_M.gguf
+      sha256: 1fe90b72e105d7bc71650aa59883edece3e84751af489075217a7ae717b1fe8d
+      size: 7381381664
+    sampling:
+      temperature: 1.0
+      top_p: 0.95
+
   # --- Embedding models (M3 phase 2a, ADR-0012) ---------------------------
   # CPU-bootable on llama.cpp's embedding mode (--embedding), so /v1/embeddings
   # is provable on the per-PR tier alongside chat. Embedding models carry no tier

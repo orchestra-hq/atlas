@@ -99,7 +99,7 @@ func runRun(ctx context.Context, cmd *cobra.Command, opts *runOptions, model str
 		Temperature:   rm.sampling.Temperature, // catalog sampling defaults (M2 phase 4a)
 		TopP:          rm.sampling.TopP,
 		Reasoning:     rm.reasoning, // gates the thinking kwarg (M2 phase 4b)
-		LogPath:       filepath.Join(opts.stateDir, string(engine)+"-"+rm.served+".log"),
+		LogPath:       filepath.Join(opts.stateDir, logFileName(engine, rm.served)),
 	})
 	if err != nil {
 		return err
