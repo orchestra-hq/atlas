@@ -79,6 +79,14 @@ Phase 4b made the `enable_thinking` kwarg catalog-driven: `ThinkingKwargs` (`int
 
 The shed-vs-spill decision (`shouldSpill` + `spillToCloud`, `internal/server/cloud.go`) is wired into both `handleMessages` (`internal/server/gateway.go`) and `handleChatCompletions` (`internal/server/openai.go`) as near-identical blocks differing only in the unreachable-upstream error renderer (`overloadedErr` vs `writeOpenAIErr`). A change to the spill trigger set (e.g. adding a status) or to the relay must be made in both, and a miss means a model is covered by cloud-fallback on one API surface but sheds on the other. Fold the decision into one wrapper around `dispatchPrep`'s error path, parameterized by a surface-specific error writer. Altitude only — both copies are correct today.
 
+## Conformance / engine behavior
+
+### Budget-truncated reasoning on vLLM's qwen3 parser surfaces nothing
+
+**Suggested:** when the vLLM/GPU tier is being iterated anyway (needs a GPU to repro). **Surfaced:** 2026-06-24, diagnosing the vLLM G4 failures ([open-questions.md](open-questions.md)).
+
+When a Qwen3 thinking turn on vLLM hits `max_tokens` before emitting `</think>`, the response comes back with empty `content` _and_ empty `reasoning_content` despite a full `output_tokens` count — so neither Atlas nor any OpenAI client sees the generated text. This is why the G4 thinking tests failed at `max_tokens=128`; M0 now gates on a realistic budget instead (the model completes its trace), so this is no longer blocking. But it remains a real edge: vLLM 0.23.0 contains the upstream #35221 fix (which should route truncated output to `reasoning_content` when `enable_thinking=True`) and Atlas does send `chat_template_kwargs.enable_thinking=true` (`internal/engines/openaichat/wire.go`, `ThinkingKwargs`), yet the truncated trace still vanishes. Worth confirming on a GPU box whether the parser honors `enable_thinking` as passed (capture vLLM's raw `/v1/chat/completions` for a deliberately-truncated thinking request), and whether a short streamed budget reproduces it. Contrast: llama.cpp surfaces a partial `reasoning_content` in the same situation, so the two engines diverge on truncated reasoning.
+
 ## Minor refinements (M2 review)
 
 Low-severity items from the M2 review, none blocking. **Suggested:** opportunistically, when next touching each area.

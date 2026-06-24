@@ -24,11 +24,18 @@ pytestmark = [
     pytest.mark.client("anthropic-py"),
 ]
 
+# A reasoning turn needs room to finish: the model must complete its trace and
+# emit `</think>` before the answer. Criterion 9 is about that realistic path,
+# not the budget-truncation edge (a too-small budget cuts the model off
+# mid-think, and engines diverge on how they surface a truncated trace — see
+# docs/open-questions.md). 2048 comfortably fits these short prompts' reasoning.
+THINKING_MAX_TOKENS = 2048
+
 
 def test_thinking_block_before_text(anthropic_client, reasoning_model):
     message = anthropic_client.messages.create(
         model=reasoning_model,
-        max_tokens=128,
+        max_tokens=THINKING_MAX_TOKENS,
         temperature=0,
         thinking={"type": "enabled", "budget_tokens": 1024},
         messages=[{"role": "user", "content": "What is 17 times 19? Reason it through."}],
@@ -58,7 +65,7 @@ def test_thinking_multiturn_echo(anthropic_client, reasoning_model):
     history = [{"role": "user", "content": "What is 8 times 7? Reason it through."}]
     first = anthropic_client.messages.create(
         model=reasoning_model,
-        max_tokens=128,
+        max_tokens=THINKING_MAX_TOKENS,
         temperature=0,
         thinking={"type": "enabled", "budget_tokens": 1024},
         messages=history,
@@ -69,7 +76,7 @@ def test_thinking_multiturn_echo(anthropic_client, reasoning_model):
     history.append({"role": "user", "content": "Now double that."})
     second = anthropic_client.messages.create(
         model=reasoning_model,
-        max_tokens=128,
+        max_tokens=THINKING_MAX_TOKENS,
         temperature=0,
         thinking={"type": "enabled", "budget_tokens": 1024},
         messages=history,
@@ -85,7 +92,7 @@ def test_thinking_delta_streams(base_url, api_key, reasoning_model):
         api_key,
         {
             "model": reasoning_model,
-            "max_tokens": 128,
+            "max_tokens": THINKING_MAX_TOKENS,
             "temperature": 0,
             "thinking": {"type": "enabled", "budget_tokens": 1024},
             "messages": [{"role": "user", "content": "What is 17 times 19? Reason it through."}],
@@ -113,11 +120,14 @@ def test_thinking_delta_streams(base_url, api_key, reasoning_model):
     assert "".join(fragments).strip(), "thinking_delta fragments were empty"
 
 
-def test_non_reasoning_model_graceful(anthropic_client, model):
+def test_non_reasoning_model_graceful(anthropic_client, nonreasoning_model):
     # A non-reasoning model must succeed with thinking enabled, returning no
-    # thinking blocks and no error (ADR-0005 point 2).
+    # thinking blocks and no error (ADR-0005 point 2). Uses the dedicated
+    # nonreasoning_model fixture (skips when none is deployed) — the default
+    # `model` may itself be reasoning-capable on a single-hybrid-model
+    # deployment (e.g. the vLLM track serves only Qwen3 for every tier).
     message = anthropic_client.messages.create(
-        model=model,
+        model=nonreasoning_model,
         max_tokens=128,
         temperature=0,
         thinking={"type": "enabled", "budget_tokens": 1024},

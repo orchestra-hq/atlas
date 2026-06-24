@@ -92,7 +92,11 @@ it.skipIf(!reasoningModel)(
   async () => {
     const stream = client.messages.stream({
       model: reasoningModel!,
-      max_tokens: 512,
+      // A reasoning turn needs room to finish (complete its trace + `</think>`
+      // before the answer); criterion 9 is that realistic path, not the
+      // budget-truncation edge. Matches py THINKING_MAX_TOKENS. See
+      // docs/open-questions.md.
+      max_tokens: 2048,
       temperature: 0,
       thinking: { type: "enabled", budget_tokens: 1024 },
       messages: [{ role: "user", content: "What is 17 times 19? Reason it through." }],

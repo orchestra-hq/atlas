@@ -148,12 +148,22 @@ run_engine() {
   done
   echo "==> Ready after ${waited}s"
 
+  # G4's graceful-degradation case needs a genuinely non-reasoning model. When
+  # the chat model differs from the reasoning model (the CPU track serves a
+  # distinct non-reasoning chat model, e.g. qwen2.5-7b, for sonnet/haiku), the
+  # sonnet alias IS that model — point the case at it. When one hybrid serves
+  # every tier (the vLLM track: Qwen3 for all aliases), there is no non-reasoning
+  # model, so the arg is omitted and the case skips rather than false-failing.
+  local -a nonreasoning_arg=()
+  if [[ "$model" != "$rmodel" ]]; then nonreasoning_arg=(--nonreasoning-model "$SONNET_ALIAS"); fi
+
   local rc=0
   ( cd conformance && uv run --locked python run.py \
       --base-url "http://${ADDR}" \
       --engine "$engine" \
       --model "$SONNET_ALIAS" \
       --reasoning-model "$OPUS_ALIAS" \
+      "${nonreasoning_arg[@]}" \
       --require G1,G2,G3,G4,G5,G6,G7,G8,G9,G10 \
       --output "results/matrix-${engine}.json" ) || rc=$?
 
