@@ -79,14 +79,6 @@ Phase 4b made the `enable_thinking` kwarg catalog-driven: `ThinkingKwargs` (`int
 
 The shed-vs-spill decision (`shouldSpill` + `spillToCloud`, `internal/server/cloud.go`) is wired into both `handleMessages` (`internal/server/gateway.go`) and `handleChatCompletions` (`internal/server/openai.go`) as near-identical blocks differing only in the unreachable-upstream error renderer (`overloadedErr` vs `writeOpenAIErr`). A change to the spill trigger set (e.g. adding a status) or to the relay must be made in both, and a miss means a model is covered by cloud-fallback on one API surface but sheds on the other. Fold the decision into one wrapper around `dispatchPrep`'s error path, parameterized by a surface-specific error writer. Altitude only — both copies are correct today.
 
-## Conformance / acceptance diagnosability
-
-### Nightly uploads no conformance matrix artifact
-
-**Suggested:** alongside the M0 G4 diagnosis work ([open-questions.md](open-questions.md), the 2026-06-24 acceptance correction). **Surfaced:** 2026-06-24, diagnosing the gemma G4 failure.
-
-The nightly workflow (`.github/workflows/nightly-gpu.yml`) runs `scripts/acceptance.sh`, which writes a per-engine `conformance/results/matrix-<engine>.json` (every cell with its `failure.message`) plus `results/CAPABILITY.md`, but uploads none of them as a run artifact. After a run those files are gone with the ephemeral box, so a failing cell's detail must be reconstructed from console logs — and vitest runs `--silent`, so a failing TS cell prints nothing there at all (the gemma G4 failure had to be inferred from the matrix counts plus the test source). Add an `actions/upload-artifact` step for `conformance/results/matrix-*.json` and `CAPABILITY.md` on both tracks. Operability only — does not change the gate verdict.
-
 ## Minor refinements (M2 review)
 
 Low-severity items from the M2 review, none blocking. **Suggested:** opportunistically, when next touching each area.
