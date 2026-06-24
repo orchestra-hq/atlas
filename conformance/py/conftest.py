@@ -60,6 +60,19 @@ def reasoning_model() -> str:
     return value
 
 
+@pytest.fixture(scope="session")
+def nonreasoning_model() -> str:
+    # A genuinely non-reasoning model (G4's graceful-degradation case). Optional
+    # and explicit rather than reusing the default `model`: on a single-hybrid-
+    # model deployment the default tier may itself be reasoning-capable (e.g. the
+    # vLLM track serves only Qwen3), so the case skips unless a non-reasoning
+    # model is deployed for it.
+    value = os.environ.get("ATLAS_NONREASONING_MODEL")
+    if not value:
+        pytest.skip("ATLAS_NONREASONING_MODEL not set — no non-reasoning model deployed")
+    return value
+
+
 # max_retries=0 everywhere: retry behavior is itself under test (G7), and
 # the suite's own flake-retry policy lives in the runner, not the clients.
 @pytest.fixture(scope="session")

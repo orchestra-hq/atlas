@@ -130,6 +130,11 @@ def main() -> int:
         default=os.environ.get("ATLAS_REASONING_MODEL", ""),
         help="reasoning-capable model name for G4 (omit to skip reasoning cases)",
     )
+    parser.add_argument(
+        "--nonreasoning-model",
+        default=os.environ.get("ATLAS_NONREASONING_MODEL", ""),
+        help="genuinely non-reasoning model for G4's graceful case (omit to skip it)",
+    )
     parser.add_argument("--require", default="", metavar="G1[,G2...]", help="groups that must be green (exit 1 otherwise)")
     parser.add_argument("--skip-ts", action="store_true", help="skip the vitest (anthropic-ts) suite")
     parser.add_argument("--output", type=Path, default=CONF_DIR / "results" / "matrix.json")
@@ -158,6 +163,8 @@ def main() -> int:
     env.update({"ATLAS_BASE_URL": base_url, "ATLAS_API_KEY": args.api_key, "ATLAS_MODEL": args.model})
     if args.reasoning_model:
         env["ATLAS_REASONING_MODEL"] = args.reasoning_model
+    if args.nonreasoning_model:
+        env["ATLAS_NONREASONING_MODEL"] = args.nonreasoning_model
 
     try:
         cells = run_pytest(env, results_dir / "pytest-results.json")
