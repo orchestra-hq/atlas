@@ -76,6 +76,8 @@ The literal M0 demo — real Claude Code drop-in on a capable model on your own 
 
 **De-scoped follow-up (tracked in [follow-ups.md](follow-ups.md)):** the budget-truncation edge — what vLLM's qwen3 parser returns when `max_tokens` is hit before `</think>`, given Atlas already sends `enable_thinking` correctly. Not M0-blocking.
 
+**TRUE ROOT CAUSE FOUND + FIXED — 2026-06-24 (GPU diagnostic run 28129633966).** Raising the budget to 2048 changed the vLLM G4 symptom from `blocks: []` to `blocks: ['text']` — the turn _completed_ with an answer but still no thinking block, so this was never really about truncation. A temporary raw-engine-response capture (a gated `slog` in the openaichat client) showed why: **vLLM 0.23.0 returns the reasoning trace in a field named `reasoning`, not `reasoning_content`.** Atlas read only `reasoning_content` (empty on vLLM), so it dropped the trace — the answer surfaced as the lone text block. llama.cpp/SGLang use `reasoning_content` (why gemma always worked). **Fix:** `internal/engines/openaichat` now reads `reasoning` as a fallback to `reasoning_content` (`reasoningOf`) in both the non-streaming response and the streaming delta; unit-tested with vLLM-shaped payloads. This — not the budget — was the actual vLLM G4 blocker (the 128-token budget double-masked it by also emptying `content`). The realistic-budget change still stands as the correct scope for criterion 9. A GPU run confirms vLLM G4 green.
+
 ## Catalog data the gateway records but does not yet apply (phase 9)
 
 The starter catalog (`/catalog`) carries fields the build wires through to **storage**; M2 phase 4 applies them to **request handling**:

@@ -74,10 +74,13 @@ type Response struct {
 	Choices []struct {
 		Message struct {
 			Content string `json:"content"`
-			// ReasoningContent is the model's reasoning trace, separated by the
-			// engine's reasoning parser (the de-facto field name shared by
-			// llama.cpp, vLLM, and SGLang). Empty for non-reasoning models.
+			// ReasoningContent / Reasoning hold the model's reasoning trace,
+			// separated by the engine's reasoning parser. The field name is NOT
+			// standardized: llama.cpp and SGLang use `reasoning_content`, while
+			// vLLM (0.23.0) uses `reasoning`. Read whichever is populated via
+			// reasoningOf; empty for non-reasoning models.
 			ReasoningContent string     `json:"reasoning_content"`
+			Reasoning        string     `json:"reasoning"`
 			ToolCalls        []ToolCall `json:"tool_calls"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
@@ -95,7 +98,8 @@ type StreamChunk struct {
 	Choices []struct {
 		Delta struct {
 			Content          string `json:"content"`
-			ReasoningContent string `json:"reasoning_content"`
+			ReasoningContent string `json:"reasoning_content"` // llama.cpp / SGLang
+			Reasoning        string `json:"reasoning"`         // vLLM 0.23.0
 			ToolCalls        []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
@@ -251,13 +255,23 @@ func MapFinishReason(reason string) core.StopReason {
 	}
 }
 
+// reasoningOf returns the reasoning trace from whichever field the engine
+// populated: reasoning_content (llama.cpp / SGLang) or reasoning (vLLM 0.23.0).
+// The field name is not standardized across OpenAI-compatible reasoning parsers.
+func reasoningOf(reasoningContent, reasoning string) string {
+	if reasoningContent != "" {
+		return reasoningContent
+	}
+	return reasoning
+}
+
 // ParseResponse maps a non-streaming engine response back to core, surfacing
 // reasoning only when the client asked for thinking (ADR-0005).
 func ParseResponse(req core.Request, resp Response) core.Response {
 	choice := resp.Choices[0]
 	blocks := make([]core.ContentBlock, 0, 2+len(choice.Message.ToolCalls))
-	if EmitThinking(req) && choice.Message.ReasoningContent != "" {
-		blocks = append(blocks, core.ThinkingBlock(choice.Message.ReasoningContent, ""))
+	if reasoning := reasoningOf(choice.Message.ReasoningContent, choice.Message.Reasoning); EmitThinking(req) && reasoning != "" {
+		blocks = append(blocks, core.ThinkingBlock(reasoning, ""))
 	}
 	if choice.Message.Content != "" {
 		blocks = append(blocks, core.TextBlock(choice.Message.Content))
