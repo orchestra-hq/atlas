@@ -35,6 +35,11 @@ export CONF_CLAUDE_CODE_SMOKE=${CONF_CLAUDE_CODE_SMOKE:-1}
 # The Claude Code smoke drives a full agentic loop; a capable model on a GPU
 # still needs minutes, so give it more wall-clock than the per-PR default (300s).
 export CONF_CLAUDE_CODE_TIMEOUT=${CONF_CLAUDE_CODE_TIMEOUT:-600}
+# Per-test bound for the TS (vitest) conformance suite, in seconds. A 12B reasoning
+# model on the CPU track streams one thinking response in ~30s+ (it was tripping
+# vitest's 30s default — a timeout there looks identical to "no thinking block"),
+# so give the slow tracks ample headroom. Consumed by conformance/ts/vitest.config.ts.
+export CONF_TS_TIMEOUT=${CONF_TS_TIMEOUT:-300}
 READY_TIMEOUT=${READY_TIMEOUT:-900} # seconds the script polls /readyz for
 # atlas's own per-engine startup timeout (worker default is 3m). vLLM cold start
 # downloads + loads a multi-GB model, which exceeds 3m, so raise it; the script's
