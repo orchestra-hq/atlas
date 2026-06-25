@@ -1,5 +1,7 @@
 # M0 acceptance spec
 
+> **✅ Accepted — M0 declared done 2026-06-25.** The scheduled nightly acceptance run (both engines, on `main` after the vLLM `reasoning`-field fix) is green: **vLLM** (GPU) 50 pass / 0 fail / 3 skip and **llama.cpp** (CPU) 50 pass / 0 fail / 3 skip across G1–G10, with the real Claude Code drop-in (criterion 1) passing on vLLM. The three skips per engine are legitimate and cross-covered: G7 engine-down 529 (a placeholder needing harness lifecycle control), the G4 non-reasoning-graceful case (skipped on vLLM where one hybrid serves every tier — it passes on llama.cpp), the G10 token-counts-in-log cell (asserted green per-PR in CI, redundant in the nightly), and the llama.cpp Claude Code smoke (a GPU/capable-tier cell, green on vLLM). The criteria below stay the definition of done for the API surface.
+
 Derived from the API usage of the project owner's existing app (questionnaire answered 2026-06-12) plus the M0 demo bar. This is the definition of done for M0's API surface.
 
 The reference app is a scoping instrument and dogfood tripwire, not the design target: it sets where the scope boundary sits (what M0 may cut), while the acceptance criteria below are generic conformance against the real Anthropic/OpenAI SDKs and Claude Code. It is an n=1 sample — where its profile diverges from typical Agent SDK apps, don't read its answers as representative (e.g. the app doesn't use extended thinking, yet thinking blocks are supported anyway per ADR-0005, because Claude Code enables thinking by default).

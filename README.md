@@ -2,7 +2,7 @@
 
 Atlas is an open source, self-hosted LLM inference platform. It lets you run open-weight models on hardware **you** control — a laptop, a single GPU box, or a fleet of GPU machines across clouds — and exposes the APIs that agents and apps already speak, so you can point existing tooling (the Claude Agent SDK, Claude Code, OpenAI-compatible clients) at your own infrastructure with a one-line config change.
 
-**Status: building M0.** The design in `docs/` is the source of truth; code is landing in the phase order of [docs/m0-build-plan.md](docs/m0-build-plan.md).
+**Status: M0 done (2026-06-25), building M2.** M0 ("Claude Code on your own box") and M0.5 ("Release & prove") are complete — acceptance is green on both engines, with the real Claude Code drop-in proven on a GPU ([docs/m0-acceptance.md](docs/m0-acceptance.md)). M1 and M2 are code-complete; design truth in `docs/` is the source of truth.
 
 ## Why
 
@@ -30,7 +30,7 @@ Teams building on LLMs increasingly want control over where the model runs and w
 | [docs/roadmap.md](docs/roadmap.md)                                                                         | Phased milestones from single-node MVP to fleet                   |
 | [docs/m0-acceptance.md](docs/m0-acceptance.md)                                                             | Definition of done for M0's API surface                           |
 | [docs/conformance-suite.md](docs/conformance-suite.md)                                                     | Executable spec of the compat promise: harness, test groups       |
-| [examples/acceptance/](examples/acceptance/README.md)                                                      | GPU acceptance run that flips M0 to done (M0.5) + AWS setup       |
+| [examples/acceptance/](examples/acceptance/README.md)                                                      | GPU acceptance run that closed out M0 (M0.5) + AWS setup          |
 | [docs/m0-build-plan.md](docs/m0-build-plan.md)                                                             | M0 phased build order, repo layout, and build-time decisions      |
 | [docs/m1-build-plan.md](docs/m1-build-plan.md)                                                             | M1 phased build order (fleet: worker channel, scheduler, auth)    |
 | [docs/m2-build-plan.md](docs/m2-build-plan.md)                                                             | M2 phased build order (operate: metrics, backpressure, engines)   |
