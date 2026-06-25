@@ -61,4 +61,3 @@ What is **already proven per-PR** (so the nightly only needs to add the cross-ho
 - **Apple-Silicon / MLX worker leg** — deferred with the Apple-Silicon runner (open M2 item, [open-questions.md](open-questions.md)).
 - **ACME / public-DNS TLS** — self-signed + pin is the M1 transport; ACME `:443` reconciliation is an M5 follow-up ([follow-ups.md](follow-ups.md)).
 - **Cross-machine sharding, HA control plane** — never in M1's scope ([roadmap.md](roadmap.md)).
-  </content>
