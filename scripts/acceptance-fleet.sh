@@ -100,12 +100,12 @@ API="https://127.0.0.1:$PORT"
 WSS="wss://${PRIVATE_IP}:${PORT}/workers/connect"
 CERT="$ATLAS_STATE_DIR/tls/cert.pem"
 
-# SDKs verify TLS against the self-signed cert via these standard env vars (httpx
-# / requests honour *_CA_*; Node honours NODE_EXTRA_CA_CERTS). Set once the cert
-# exists; run.py inherits them for pytest + vitest.
-set_ca_env() {
-  export SSL_CERT_FILE="$CERT" REQUESTS_CA_BUNDLE="$CERT" NODE_EXTRA_CA_CERTS="$CERT"
-}
+# The conformance harness (pytest httpx/requests + vitest node) verifies TLS to the
+# gateway against the self-signed cert via these standard env vars. They are passed
+# INLINE to the run.py invocation only — NOT exported — because pointing the process
+# CA bundle at the self-signed cert would make the `aws` CLI (botocore) reject the
+# real SSM endpoint ("unable to get local issuer certificate"). curls use --cacert.
+CA_ENV=(SSL_CERT_FILE="$CERT" REQUESTS_CA_BUNDLE="$CERT" NODE_EXTRA_CA_CERTS="$CERT")
 
 # --- build + key -------------------------------------------------------------
 echo "==> Building atlas"
@@ -162,7 +162,6 @@ done
 [[ -n "$PIN" ]] || { echo "no TLS pin in server banner:" >&2; cat "$SERVER_LOG" >&2; exit 1; }
 echo "    pin=$PIN"
 [[ -f "$CERT" ]] || { echo "self-signed cert not found at $CERT" >&2; exit 1; }
-set_ca_env
 
 # --- publish the join bundle for host B --------------------------------------
 if [[ "$FLEET_REMOTE_WORKER" == "1" ]]; then
@@ -238,7 +237,7 @@ fail() { echo "::error::$*" >&2; overall=1; }
 # --- (1) Full surface over the cross-host worker: G1–G10 --------------------
 echo
 echo "==> [criterion 1] G1–G10 over the fleet (aliases → cross-host vLLM worker)"
-( cd conformance && uv run --locked python run.py \
+( cd conformance && env "${CA_ENV[@]}" uv run --locked python run.py \
     --base-url "$API" \
     --engine vllm \
     --model "$SONNET_ALIAS" \
