@@ -75,6 +75,11 @@ OPUS_ALIAS=claude-opus-4-1
 READY_TIMEOUT=${READY_TIMEOUT:-1200} # seconds host A polls for both models
 export CONF_TS_TIMEOUT=${CONF_TS_TIMEOUT:-300}
 HEARTBEAT_WINDOW=${HEARTBEAT_WINDOW:-60} # max seconds a kill-9 may take to unblock
+# Conformance groups the G1–G10 gate requires. The cloud fleet serves a capable
+# hybrid (qwen3-8b) for every tier, so it gates the full set; a single-box smoke on
+# tiny models can drop the groups no tiny model satisfies (G4 needs reasoning + G1
+# needs a capable model — no tiny model is both), e.g. FLEET_REQUIRE=G1,G2,G3,G5,G6,G7,G8,G10.
+FLEET_REQUIRE=${FLEET_REQUIRE:-G1,G2,G3,G4,G5,G6,G7,G8,G9,G10}
 
 # --- prerequisites -----------------------------------------------------------
 need() { command -v "$1" >/dev/null 2>&1 || { echo "acceptance-fleet: missing prerequisite '$1'" >&2; exit 2; }; }
@@ -87,7 +92,9 @@ if [[ "$FLEET_REMOTE_WORKER" == "1" ]]; then need aws; fi
 
 # Endpoints. The harness + scenarios reach the gateway over https on loopback; the
 # worker(s) dial the advertised private IP so the wss + pinned-cert path is real.
-PRIVATE_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+# hostname -I is Linux-only (the EC2 hosts); on macOS / when it fails it yields
+# empty and we fall back to loopback. The `|| true` keeps set -e/pipefail happy.
+PRIVATE_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
 [[ -n "$PRIVATE_IP" ]] || PRIVATE_IP=127.0.0.1
 API="https://127.0.0.1:$PORT"
 WSS="wss://${PRIVATE_IP}:${PORT}/workers/connect"
@@ -236,7 +243,7 @@ echo "==> [criterion 1] G1–G10 over the fleet (aliases → cross-host vLLM wor
     --engine vllm \
     --model "$SONNET_ALIAS" \
     --reasoning-model "$OPUS_ALIAS" \
-    --require G1,G2,G3,G4,G5,G6,G7,G8,G9,G10 \
+    --require "$FLEET_REQUIRE" \
     --output "results/matrix-fleet.json" ) || fail "G1–G10 gate failed over the fleet"
 
 # --- (3) G12 auth over the real https endpoint ------------------------------

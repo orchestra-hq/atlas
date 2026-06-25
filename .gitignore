@@ -13,6 +13,10 @@ coverage.out
 # Local e2e: downloaded model weights and engine state
 /models/
 /.atlas-state/
+# Acceptance runs (scripts/acceptance*.sh) — engine logs + state dirs they write
+# into the repo root when run locally (on CI the runner is ephemeral).
+/atlas-*.log
+/.atlas-acceptance*/
 
 # Conformance harness
 node_modules/
