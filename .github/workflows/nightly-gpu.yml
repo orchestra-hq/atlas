@@ -10,8 +10,8 @@ name: Nightly acceptance
 #   • CPU track   — c7i.4xlarge (compute-optimised, no GPU), serves llama.cpp.
 #   • fleet track — TWO boxes (a c7i.4xlarge control plane + co-located llama.cpp
 #     worker, and a g6.2xlarge cross-host vLLM worker) exercising G1–G14 across
-#     genuinely separate machines: the multi-host run that closes out M1
-#     (docs/m1-acceptance.md). Opt-in (not in the default tracks) until enabled.
+#     genuinely separate machines: the multi-host run that guards M1
+#     (docs/m1-acceptance.md). In the default tracks — runs on the nightly schedule.
 # llama.cpp ships no Linux CUDA prebuilt, so it stays CPU-only here; GPU is vLLM's
 # lane. Each track provisions its own ephemeral self-hosted runner(s) via
 # machulav/ec2-github-runner (on-demand, no spot preemption) and always tears them
@@ -38,13 +38,13 @@ on:
     inputs:
       tracks:
         description: Tracks to run (space-separated; "gpu", "cpu", "fleet", or any combination)
-        default: gpu cpu
+        default: gpu cpu fleet
 
 jobs:
   # ----------------------------------------------------------------- GPU: vLLM
   start-gpu-runner:
     name: Start GPU runner
-    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu', 'gpu') }}
+    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu fleet', 'gpu') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       id-token: write
@@ -159,7 +159,7 @@ jobs:
   # ------------------------------------------------------------ CPU: llama.cpp
   start-cpu-runner:
     name: Start CPU runner
-    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu', 'cpu') }}
+    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu fleet', 'cpu') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       id-token: write
@@ -277,7 +277,7 @@ jobs:
   # stays up until host A signals done. See docs/m1-acceptance.md.
   start-fleet-server-runner:
     name: Start fleet server runner (host A)
-    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu', 'fleet') }}
+    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu fleet', 'fleet') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       id-token: write
@@ -314,7 +314,7 @@ jobs:
 
   start-fleet-worker-runner:
     name: Start fleet worker runner (host B, GPU)
-    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu', 'fleet') }}
+    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu fleet', 'fleet') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       id-token: write
