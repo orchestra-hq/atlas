@@ -28,7 +28,7 @@ TLS-ALPN-01 validation requires the server reachable on `:443`, but nothing chec
 
 ### Per-request token-count probe on MLX & SGLang doubles prefill
 
-**Suggested:** the MLX/SGLang capable-runner tier (the dormant Apple-Silicon + CUDA runners in [open-questions.md](open-questions.md)) — not exercisable in CI until then. **Surfaced:** M2 milestone review.
+**Suggested:** the MLX/SGLang capable-runner tier (the Apple-Silicon runner is still dormant; the CUDA runner now exists for the vLLM nightly but the SGLang cell is not yet wired up — see [open-questions.md](open-questions.md)) — not exercisable in CI until then. **Surfaced:** M2 milestone review.
 
 `assertContextFits` (`internal/server/gateway.go`) runs on every inference request and, when the model's context window is known, calls `CountTokens` for a pre-dispatch fit check. For llama.cpp and vLLM that is a cheap `/tokenize` call, but MLX and SGLang expose no tokenizer endpoint, so their adapters implement `CountTokens` as a one-token `Execute` probe — a full prefill. So every request to an MLX/SGLang model pays a second prefill before dispatch (and in fleet mode an extra wire round-trip), roughly doubling prefill cost. Both adapters' doc comments already warn the probe is "not for the hot path." Efficiency only — counts are correct and requests still serve — so it is deferred, but it bites every request once those engines run in anger.
 

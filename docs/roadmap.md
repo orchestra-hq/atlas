@@ -4,6 +4,8 @@ Phased so every milestone ends in something demoable and marketable. Dates inten
 
 ## M0 — Single-node MVP: "Claude Code on your own box"
 
+**Status: ✅ done (2026-06-25).** All acceptance criteria green on both engines — vLLM (GPU) and llama.cpp (CPU) — with the real Claude Code drop-in proven on vLLM. See the result banner in [m0-acceptance.md](m0-acceptance.md).
+
 **Demo:** install one binary, `atlas up`, `atlas pull <model>`, point Claude Code at `http://localhost:9090`, complete a real coding task on a local open model. Definition of done: [m0-acceptance.md](m0-acceptance.md). Build order: [m0-build-plan.md](m0-build-plan.md).
 
 - `atlas` CLI + daemon (`up`, `pull`, `run`, `ps`, `serve` equivalents)
@@ -20,7 +22,9 @@ Cut from M0: web console, multi-node, API key management, usage metering (log co
 
 ## M0.5 — Release & prove: "Installable, and proven on a real GPU"
 
-**Demo:** `docker run … ghcr.io/orchestra-hq/atlas` on a laptop, or `sky launch atlas-serve.yaml` to bring up Atlas on a cheapest-available cloud GPU, then point Claude Code at it; meanwhile a nightly job proves the full suite green on both engines. Closes out M0: a green GPU acceptance run is what flips M0 to _done_. Rationale + survey: [research/distribution-deployment-and-gpu-ci.md](research/distribution-deployment-and-gpu-ci.md); decisions: [ADR-0006](decisions/0006-packaging-and-deployment.md). The polished public-install channels (one-line installer, Homebrew) are deliberately deferred to [M4](#m4--deliverability-the-frictionless-install).
+**Status: ✅ done (2026-06-25).** The scheduled nightly acceptance run is green on both engines (vLLM on an on-demand GPU box, llama.cpp on a CPU box); the green GPU run is what flipped M0 to _done_. Docker images, the deploy recipes, and the acceptance machinery are all in place.
+
+**Demo:** `docker run … ghcr.io/orchestra-hq/atlas` on a laptop, or `sky launch atlas-serve.yaml` to bring up Atlas on a cheapest-available cloud GPU, then point Claude Code at it; meanwhile a nightly job proves the full suite green on both engines. Closed out M0: a green GPU acceptance run is what flipped M0 to _done_. Rationale + survey: [research/distribution-deployment-and-gpu-ci.md](research/distribution-deployment-and-gpu-ci.md); decisions: [ADR-0006](decisions/0006-packaging-and-deployment.md). The polished public-install channels (one-line installer, Homebrew) are deliberately deferred to [M4](#m4--deliverability-the-frictionless-install).
 
 - **Docker images** to GHCR (pulled forward from M2): one image, role by subcommand; slim + CUDA "batteries-included" (vLLM) variants
 - **Nightly GPU acceptance** — SkyPilot recipe from a CPU runner spins up a spot GPU, runs `G1–G10` + the real Claude Code smoke (`CONF_CLAUDE_CODE_SMOKE=1`) on **llama.cpp and vLLM**, tears down (machulav/ephemeral-EC2 as fallback). This is the deferred capable/GPU tier from [open-questions.md](open-questions.md)
