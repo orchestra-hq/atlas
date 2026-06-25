@@ -2,7 +2,7 @@
 
 Atlas is an open source, self-hosted LLM inference platform. It lets you run open-weight models on hardware **you** control — a laptop, a single GPU box, or a fleet of GPU machines across clouds — and exposes the APIs that agents and apps already speak, so you can point existing tooling (the Claude Agent SDK, Claude Code, OpenAI-compatible clients) at your own infrastructure with a one-line config change.
 
-**Status: M0 done (2026-06-25), building M2.** M0 ("Claude Code on your own box") and M0.5 ("Release & prove") are complete — acceptance is green on both engines, with the real Claude Code drop-in proven on a GPU ([docs/m0-acceptance.md](docs/m0-acceptance.md)). M1 and M2 are code-complete; design truth in `docs/` is the source of truth.
+**Status: M0–M1 done (2026-06-25), building M2.** M0 ("Claude Code on your own box"), M0.5 ("Release & prove"), and M1 ("Fleet") are complete — M0/M0.5 acceptance is green on both engines with the real Claude Code drop-in proven on a GPU ([docs/m0-acceptance.md](docs/m0-acceptance.md)), and M1's multi-host fleet acceptance (G1–G14 across two machines, two engines) is green ([docs/m1-acceptance.md](docs/m1-acceptance.md)). M2 is code-complete; design truth in `docs/` is the source of truth.
 
 ## Why
 

@@ -37,6 +37,8 @@ SkyPilot is fenced to one CI workflow + one optional `examples/` recipe; the Atl
 
 ## M1 — Fleet: "Join three machines, one endpoint"
 
+**Status: ✅ done (2026-06-25).** The multi-host fleet acceptance run is green — `atlas server` on one host + a cross-host vLLM worker on a separate GPU host, G1–G14 across the two machines (full surface over the wss channel, multi-worker routing, auth, usage attribution, drain/timeout). See [m1-acceptance.md](m1-acceptance.md).
+
 **Demo:** `atlas server` on a VPS; `atlas worker --join <url> --token <token>` on a 4090 box and a Mac; deploy two models; one authenticated endpoint serves both. Build order: [m1-build-plan.md](m1-build-plan.md).
 
 - `atlas server` (control plane only) + `atlas worker --join` (outbound WebSocket channel — ADR-0007)
