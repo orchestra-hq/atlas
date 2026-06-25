@@ -12,11 +12,17 @@ name: Nightly acceptance
 #     worker, and a g6.2xlarge cross-host vLLM worker) exercising G1–G14 across
 #     genuinely separate machines: the multi-host run that guards M1
 #     (docs/m1-acceptance.md). In the default tracks — runs on the nightly schedule.
+#   • sglang track — g6.2xlarge (same AMI as GPU), serves SGLang. The M2 engine-
+#     breadth cell (G17): G1–G8+G10 on a second NVIDIA-GPU server (docs/m2-acceptance.md).
+#   • mlx track — a blacksmith-6vcpu-macos-latest HOSTED runner (Apple Silicon /
+#     Metal), serves MLX. The other M2 G17 cell — no machulav/EC2 (the runner is
+#     managed), so it has no start/stop jobs.
 # llama.cpp ships no Linux CUDA prebuilt, so it stays CPU-only here; GPU is vLLM's
-# lane. Each track provisions its own ephemeral self-hosted runner(s) via
-# machulav/ec2-github-runner (on-demand, no spot preemption) and always tears them
-# down. acceptance.sh is identical on the GPU/CPU tracks — only ACCEPTANCE_ENGINES
-# differs; the fleet track runs scripts/acceptance-fleet.sh (host A) +
+# (and SGLang's) lane. Each EC2 track provisions its own ephemeral self-hosted
+# runner(s) via machulav/ec2-github-runner (on-demand, no spot preemption) and
+# always tears them down. acceptance.sh is identical on the GPU/CPU/sglang/mlx
+# tracks — only ACCEPTANCE_ENGINES (and CONF_REQUIRE for the G17 cells) differs;
+# the fleet track runs scripts/acceptance-fleet.sh (host A) +
 # scripts/acceptance-fleet-worker.sh (host B).
 #
 # Dormant until enabled: start jobs are gated on GPU_ACCEPTANCE_ENABLED=true.
@@ -37,14 +43,14 @@ on:
   workflow_dispatch:
     inputs:
       tracks:
-        description: Tracks to run (space-separated; "gpu", "cpu", "fleet", or any combination)
-        default: gpu cpu fleet
+        description: Tracks to run (space-separated; "gpu", "cpu", "fleet", "sglang", "mlx", or any combination)
+        default: gpu cpu fleet sglang mlx
 
 jobs:
   # ----------------------------------------------------------------- GPU: vLLM
   start-gpu-runner:
     name: Start GPU runner
-    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu fleet', 'gpu') }}
+    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu fleet sglang mlx', 'gpu') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       id-token: write
@@ -159,7 +165,7 @@ jobs:
   # ------------------------------------------------------------ CPU: llama.cpp
   start-cpu-runner:
     name: Start CPU runner
-    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu fleet', 'cpu') }}
+    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu fleet sglang mlx', 'cpu') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       id-token: write
@@ -277,7 +283,7 @@ jobs:
   # stays up until host A signals done. See docs/m1-acceptance.md.
   start-fleet-server-runner:
     name: Start fleet server runner (host A)
-    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu fleet', 'fleet') }}
+    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu fleet sglang mlx', 'fleet') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       id-token: write
@@ -314,7 +320,7 @@ jobs:
 
   start-fleet-worker-runner:
     name: Start fleet worker runner (host B, GPU)
-    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu fleet', 'fleet') }}
+    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu fleet sglang mlx', 'fleet') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       id-token: write
@@ -471,3 +477,153 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
           label: ${{ needs.start-fleet-worker-runner.outputs.label }}
           ec2-instance-id: ${{ needs.start-fleet-worker-runner.outputs.ec2-instance-id }}
+
+  # --------------------------------------------------- sglang (M2 G17, NVIDIA)
+  # A second NVIDIA-GPU server alongside vLLM. Same on-demand g6 + AMI as the GPU
+  # track; acceptance.sh is identical, only ACCEPTANCE_ENGINES + the G17 gate
+  # scope (CONF_REQUIRE=G1–G8,G10, no agent smoke) differ. See docs/m2-acceptance.md.
+  start-sglang-runner:
+    name: Start SGLang runner (GPU)
+    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu fleet sglang mlx', 'sglang') }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      label: ${{ steps.start.outputs.label }}
+      ec2-instance-id: ${{ steps.start.outputs.ec2-instance-id }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.ACCEPTANCE_APP_ID }}
+          private-key: ${{ secrets.ACCEPTANCE_APP_PRIVATE_KEY }}
+      - name: Start EC2 runner
+        id: start
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ steps.app-token.outputs.token }}
+          ec2-image-id: ami-0c5fe80eabe9a6a1f
+          ec2-instance-type: g6.2xlarge # L4 24 GB — same as the vLLM GPU track
+          ec2-volume-size: 200
+          ec2-device-name: /dev/sda1
+          ec2-volume-type: gp3
+          subnet-id: ${{ vars.ACCEPTANCE_SUBNET_ID }}
+          security-group-id: ${{ vars.ACCEPTANCE_SECURITY_GROUP_ID }}
+          aws-resource-tags: >-
+            [{"Key": "Name", "Value": "atlas-acceptance-sglang"},
+             {"Key": "atlas-acceptance", "Value": "nightly"}]
+
+  sglang-acceptance:
+    name: SGLang acceptance (GPU)
+    needs: start-sglang-runner
+    runs-on: ${{ needs.start-sglang-runner.outputs.label }}
+    timeout-minutes: 120
+    env:
+      HOME: /root
+      IS_SANDBOX: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Run acceptance (SGLang)
+        env:
+          ACCEPTANCE_ENGINES: sglang
+          # G17 scope: G1–G8,G10 (no G9 agent harness — 7–8B models drive the
+          # agentic loop only intermittently) and no Claude Code smoke.
+          CONF_REQUIRE: G1,G2,G3,G4,G5,G6,G7,G8,G10
+          CONF_CLAUDE_CODE_SMOKE: "0"
+        run: |
+          nvidia-smi || { echo "no GPU visible on the host" >&2; exit 1; }
+          bash scripts/acceptance.sh
+      - name: Upload conformance matrix
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-sglang
+          path: |
+            conformance/results/matrix-*.json
+            conformance/results/capability-matrix.json
+            conformance/results/CAPABILITY.md
+          if-no-files-found: warn
+
+  stop-sglang-runner:
+    name: Stop SGLang runner
+    needs: [start-sglang-runner, sglang-acceptance]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    if: ${{ always() && needs.start-sglang-runner.result == 'success' }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.ACCEPTANCE_APP_ID }}
+          private-key: ${{ secrets.ACCEPTANCE_APP_PRIVATE_KEY }}
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ steps.app-token.outputs.token }}
+          label: ${{ needs.start-sglang-runner.outputs.label }}
+          ec2-instance-id: ${{ needs.start-sglang-runner.outputs.ec2-instance-id }}
+
+  # ------------------------------------------- mlx (M2 G17, Apple Silicon/Metal)
+  # The other M2 engine-breadth cell. MLX runs only on darwin/arm64, so this uses
+  # a Blacksmith HOSTED macOS runner (managed — no machulav start/stop jobs). The
+  # runner is a normal user (HOME set; not root cloud-init), so no HOME/IS_SANDBOX
+  # overrides. acceptance.sh is identical; the MLX catalog tier is non-reasoning,
+  # so G4 thinking skips and its graceful case runs. See docs/m2-acceptance.md.
+  mlx-acceptance:
+    name: MLX acceptance (Apple Silicon)
+    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu fleet sglang mlx', 'mlx') }}
+    runs-on: blacksmith-6vcpu-macos-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Run acceptance (MLX)
+        env:
+          ACCEPTANCE_ENGINES: mlx
+          CONF_REQUIRE: G1,G2,G3,G4,G5,G6,G7,G8,G10
+          CONF_CLAUDE_CODE_SMOKE: "0"
+        run: bash scripts/acceptance.sh
+      - name: Upload conformance matrix
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-mlx
+          path: |
+            conformance/results/matrix-*.json
+            conformance/results/capability-matrix.json
+            conformance/results/CAPABILITY.md
+          if-no-files-found: warn
