@@ -1,6 +1,6 @@
 # M1 acceptance spec
 
-> **Status: in progress.** M1's build is code-complete (phases 1–7, G11–G14 green per-PR on a same-machine two-process deployment — see [m1-build-plan.md](m1-build-plan.md)). What remains to declare M1 _done_ is the **full-matrix tier**: G11–G14 observed on a genuine **multi-machine** deployment, which the per-PR loopback fleet job does not prove. This doc is the definition of done for that run, mirroring [m0-acceptance.md](m0-acceptance.md).
+> **✅ Accepted — M1 declared done 2026-06-25.** The multi-host fleet acceptance run (the `fleet` track of [nightly-gpu.yml](../.github/workflows/nightly-gpu.yml)) is green on real separate machines: host A (`atlas server --tls-self-signed` + a co-located llama.cpp worker on a c7i) and host B (a cross-host vLLM worker serving `qwen3-8b` on a g6 GPU box, joined over `wss://` with a pinned self-signed cert). All criteria below passed — G1–G10 over the wss channel against the cross-host vLLM worker (incl. G4 thinking), G11 multi-worker routing across hosts, G12 auth, G13 usage attributed to both remote workers, and G14 drain + heartbeat-timeout — with the two hosts rendezvousing on SSM. The criteria below stay the definition of done.
 
 ## What M1 done means
 
