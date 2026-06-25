@@ -4,20 +4,32 @@ name: Nightly acceptance
 # ephemeral on-demand boxes, run the full conformance gate (G1–G10) + the real
 # Claude Code smoke per engine via scripts/acceptance.sh, tear them down.
 #
-# Two independent tracks (run in parallel), because the engines want different
+# Independent tracks (run in parallel), because the engines want different
 # hardware (ADR-0001: llama.cpp is the portable/CPU engine, vLLM the GPU path):
-#   • GPU track  — g6.2xlarge (L4 24 GB), serves vLLM.
-#   • CPU track  — c7i.4xlarge (compute-optimised, no GPU), serves llama.cpp.
+#   • GPU track   — g6.2xlarge (L4 24 GB), serves vLLM (closed out M0).
+#   • CPU track   — c7i.4xlarge (compute-optimised, no GPU), serves llama.cpp.
+#   • fleet track — TWO boxes (a c7i.4xlarge control plane + co-located llama.cpp
+#     worker, and a g6.2xlarge cross-host vLLM worker) exercising G1–G14 across
+#     genuinely separate machines: the multi-host run that closes out M1
+#     (docs/m1-acceptance.md). Opt-in (not in the default tracks) until enabled.
 # llama.cpp ships no Linux CUDA prebuilt, so it stays CPU-only here; GPU is vLLM's
-# lane. Each track provisions its own ephemeral self-hosted runner via
-# machulav/ec2-github-runner (on-demand, no spot preemption) and always tears it
-# down. acceptance.sh is identical on both — only ACCEPTANCE_ENGINES differs.
+# lane. Each track provisions its own ephemeral self-hosted runner(s) via
+# machulav/ec2-github-runner (on-demand, no spot preemption) and always tears them
+# down. acceptance.sh is identical on the GPU/CPU tracks — only ACCEPTANCE_ENGINES
+# differs; the fleet track runs scripts/acceptance-fleet.sh (host A) +
+# scripts/acceptance-fleet-worker.sh (host B).
 #
 # Dormant until enabled: start jobs are gated on GPU_ACCEPTANCE_ENABLED=true.
 # Requires (see examples/acceptance/README.md): secret AWS_ROLE_ARN (OIDC); a
 # GitHub App (Administration:write on this repo) via secrets ACCEPTANCE_APP_ID +
 # ACCEPTANCE_APP_PRIVATE_KEY (mints the short-lived runner-registration token);
 # vars ACCEPTANCE_SUBNET_ID, ACCEPTANCE_SECURITY_GROUP_ID, AWS_REGION.
+# The fleet track adds two account-side prerequisites (project owner's call,
+# 2026-06-25): (a) the security group must allow the server's wss port (9443) FROM
+# ITSELF, so host B can dial host A's private IP within the VPC; (b) the OIDC role
+# (AWS_ROLE_ARN) needs ssm:PutParameter/GetParameter/DeleteParameter on
+# arn:aws:ssm:*:*:parameter/atlas/nightly/* plus kms:Encrypt/Decrypt on the aws/ssm
+# managed key — the two hosts rendezvous on an SSM SecureString (pin/token/key).
 
 on:
   schedule:
@@ -25,7 +37,7 @@ on:
   workflow_dispatch:
     inputs:
       tracks:
-        description: Tracks to run (space-separated; "gpu", "cpu", or both)
+        description: Tracks to run (space-separated; "gpu", "cpu", "fleet", or any combination)
         default: gpu cpu
 
 jobs:
@@ -256,3 +268,206 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
           label: ${{ needs.start-cpu-runner.outputs.label }}
           ec2-instance-id: ${{ needs.start-cpu-runner.outputs.ec2-instance-id }}
+
+  # ------------------------------------------- fleet: multi-host (M1 acceptance)
+  # Two ephemeral boxes in the same VPC/SG: host A (c7i, control plane + a
+  # co-located llama.cpp worker) and host B (g6, a cross-host vLLM worker). They
+  # run concurrently and rendezvous on SSM — host A publishes the join bundle
+  # (private IP, wss pin, token, key) and host B reads it, joins over wss://, and
+  # stays up until host A signals done. See docs/m1-acceptance.md.
+  start-fleet-server-runner:
+    name: Start fleet server runner (host A)
+    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu', 'fleet') }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      label: ${{ steps.start.outputs.label }}
+      ec2-instance-id: ${{ steps.start.outputs.ec2-instance-id }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.ACCEPTANCE_APP_ID }}
+          private-key: ${{ secrets.ACCEPTANCE_APP_PRIVATE_KEY }}
+      - name: Start EC2 runner
+        id: start
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ steps.app-token.outputs.token }}
+          ec2-image-id: ami-0c5fe80eabe9a6a1f
+          ec2-instance-type: c7i.4xlarge # control plane + co-located llama.cpp worker
+          ec2-volume-size: 100
+          ec2-device-name: /dev/sda1
+          ec2-volume-type: gp3
+          subnet-id: ${{ vars.ACCEPTANCE_SUBNET_ID }}
+          security-group-id: ${{ vars.ACCEPTANCE_SECURITY_GROUP_ID }}
+          aws-resource-tags: >-
+            [{"Key": "Name", "Value": "atlas-acceptance-fleet-server"},
+             {"Key": "atlas-acceptance", "Value": "nightly"}]
+
+  start-fleet-worker-runner:
+    name: Start fleet worker runner (host B, GPU)
+    if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu', 'fleet') }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      label: ${{ steps.start.outputs.label }}
+      ec2-instance-id: ${{ steps.start.outputs.ec2-instance-id }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.ACCEPTANCE_APP_ID }}
+          private-key: ${{ secrets.ACCEPTANCE_APP_PRIVATE_KEY }}
+      - name: Start EC2 runner
+        id: start
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ steps.app-token.outputs.token }}
+          ec2-image-id: ami-0c5fe80eabe9a6a1f
+          ec2-instance-type: g6.2xlarge # cross-host vLLM worker
+          ec2-volume-size: 200
+          ec2-device-name: /dev/sda1
+          ec2-volume-type: gp3
+          subnet-id: ${{ vars.ACCEPTANCE_SUBNET_ID }}
+          security-group-id: ${{ vars.ACCEPTANCE_SECURITY_GROUP_ID }}
+          aws-resource-tags: >-
+            [{"Key": "Name", "Value": "atlas-acceptance-fleet-worker"},
+             {"Key": "atlas-acceptance", "Value": "nightly"}]
+
+  fleet-worker:
+    name: Fleet vLLM worker (host B)
+    needs: start-fleet-worker-runner
+    runs-on: ${{ needs.start-fleet-worker-runner.outputs.label }}
+    timeout-minutes: 120
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      HOME: /root
+      SSM_PREFIX: /atlas/nightly/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      - name: Join the fleet (vLLM, cross-host)
+        run: bash scripts/acceptance-fleet-worker.sh
+
+  fleet-server:
+    name: Fleet control plane + gate (host A)
+    needs: start-fleet-server-runner
+    runs-on: ${{ needs.start-fleet-server-runner.outputs.label }}
+    timeout-minutes: 120
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      HOME: /root
+      IS_SANDBOX: "1"
+      FLEET_REMOTE_WORKER: "1"
+      SSM_PREFIX: /atlas/nightly/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      - name: Run fleet acceptance (G1–G14 across hosts)
+        run: bash scripts/acceptance-fleet.sh
+      - name: Upload conformance matrix
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-fleet
+          path: |
+            conformance/results/matrix-*.json
+            conformance/results/capability-matrix.json
+            conformance/results/CAPABILITY.md
+          if-no-files-found: warn
+
+  stop-fleet-server-runner:
+    name: Stop fleet server runner (host A)
+    needs: [start-fleet-server-runner, fleet-server]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    if: ${{ always() && needs.start-fleet-server-runner.result == 'success' }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.ACCEPTANCE_APP_ID }}
+          private-key: ${{ secrets.ACCEPTANCE_APP_PRIVATE_KEY }}
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ steps.app-token.outputs.token }}
+          label: ${{ needs.start-fleet-server-runner.outputs.label }}
+          ec2-instance-id: ${{ needs.start-fleet-server-runner.outputs.ec2-instance-id }}
+
+  stop-fleet-worker-runner:
+    name: Stop fleet worker runner (host B)
+    needs: [start-fleet-worker-runner, fleet-worker]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    if: ${{ always() && needs.start-fleet-worker-runner.result == 'success' }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.ACCEPTANCE_APP_ID }}
+          private-key: ${{ secrets.ACCEPTANCE_APP_PRIVATE_KEY }}
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ steps.app-token.outputs.token }}
+          label: ${{ needs.start-fleet-worker-runner.outputs.label }}
+          ec2-instance-id: ${{ needs.start-fleet-worker-runner.outputs.ec2-instance-id }}

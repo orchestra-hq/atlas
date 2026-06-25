@@ -4,7 +4,9 @@
 #
 #   scripts/nightly.sh run [tracks]   dispatch the workflow, watch it to completion,
 #                                     then download + summarize the conformance matrix
-#                                     (tracks: "gpu", "cpu", or "gpu cpu" — default both)
+#                                     (tracks: "gpu", "cpu", "fleet", or any combination;
+#                                     default "gpu cpu" — "fleet" is the multi-host M1
+#                                     run and is opt-in, e.g. `nightly.sh run fleet`)
 #   scripts/nightly.sh watch [run]    watch a run to completion (default: latest)
 #   scripts/nightly.sh logs  [run]    print the logs of failed steps (default: latest)
 #   scripts/nightly.sh fetch [run]    download + summarize the conformance matrix (default: latest)

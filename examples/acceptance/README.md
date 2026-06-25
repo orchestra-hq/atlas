@@ -1,6 +1,8 @@
 # GPU acceptance run
 
-The capable/GPU acceptance run is what flips **M0 to "done"** (see [docs/roadmap.md](../../docs/roadmap.md) M0.5, [ADR-0006](../../docs/decisions/0006-packaging-and-deployment.md), and [docs/open-questions.md](../../docs/open-questions.md)). It runs the full conformance gate (`G1–G10`) plus the real Claude Code drop-in smoke (`CONF_CLAUDE_CODE_SMOKE=1`) on a capable model, on **both** the llama.cpp and vLLM engines, on a real GPU.
+The capable/GPU acceptance run is what flipped **M0 to "done"** (2026-06-25; see [docs/roadmap.md](../../docs/roadmap.md) M0.5, [ADR-0006](../../docs/decisions/0006-packaging-and-deployment.md), and [docs/m0-acceptance.md](../../docs/m0-acceptance.md)). It runs the full conformance gate (`G1–G10`) plus the real Claude Code drop-in smoke (`CONF_CLAUDE_CODE_SMOKE=1`) on a capable model, on **both** the llama.cpp and vLLM engines, on a real GPU.
+
+A third, opt-in **fleet track** ([see below](#fleet-track-m1-multi-host-acceptance)) reuses this same machinery across **two** boxes to close out **M1** — `G1–G14` on a genuine multi-host deployment ([docs/m1-acceptance.md](../../docs/m1-acceptance.md)).
 
 ## Three decoupled stages
 
@@ -45,6 +47,17 @@ The defaults serve **catalog** models (`qwen3-8b` on vLLM; `qwen2.5-7b-instruct-
    - Variable `GPU_ACCEPTANCE_ENABLED` = `true` — **the switch that arms the nightly.** Unset keeps it dormant.
 
 Then trigger a manual **Run workflow** once to validate before trusting the schedule.
+
+## Fleet track (M1 multi-host acceptance)
+
+The `fleet` track ([`docs/m1-acceptance.md`](../../docs/m1-acceptance.md)) is the multi-host run that closes out **M1**. It provisions **two** ephemeral boxes in the same VPC/SG — host A (`c7i.4xlarge`: `atlas server --tls-self-signed` + a co-located llama.cpp worker) and host B (`g6.2xlarge`: a cross-host vLLM worker) — and runs `G1–G14` across them. Stage 2 is split in two: [`scripts/acceptance-fleet.sh`](../../scripts/acceptance-fleet.sh) on host A and [`scripts/acceptance-fleet-worker.sh`](../../scripts/acceptance-fleet-worker.sh) on host B.
+
+The two hosts run concurrently and **rendezvous on AWS SSM Parameter Store**: host A publishes a SecureString join bundle (private IP, wss cert pin, join token, API key) and host B reads it to dial host A's `wss://` endpoint, then waits for host A's "done" flag.
+
+It is **opt-in** — not in the default `tracks`. Dispatch it with `scripts/nightly.sh run fleet` (or **Run workflow** → `tracks: fleet`). Two account-side prerequisites on top of the GPU setup above (the project owner's calls, 2026-06-25):
+
+- **Security group:** add a self-referencing inbound rule allowing TCP **9443** (the server's wss port) from the SG itself, so host B can dial host A's private IP within the VPC. (The GPU/CPU tracks need outbound only; the fleet track adds this one inbound rule.)
+- **IAM (the `AWS_ROLE_ARN` role):** add `ssm:PutParameter`, `ssm:GetParameter`, `ssm:DeleteParameter` on `arn:aws:ssm:*:*:parameter/atlas/nightly/*`, plus `kms:Encrypt` / `kms:Decrypt` on the `aws/ssm` managed key (the join bundle is a SecureString). The parameters are short-lived and deleted at the end of each run.
 
 ### AMI note
 
