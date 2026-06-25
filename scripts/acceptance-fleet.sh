@@ -55,8 +55,12 @@ AWS_REGION=${AWS_REGION:-eu-west-2}
 # The join token host B must present. Generated if unset; published via SSM.
 FLEET_TOKEN=${ATLAS_JOIN_TOKEN:-fleet-$(date +%s)-$RANDOM}
 
-# Host A's local engine: a llama.cpp gguf model (the co-located worker).
-LLAMACPP_MODEL=${LLAMACPP_MODEL:-qwen2.5-7b-instruct-gguf}
+# Host A's local engine: a llama.cpp gguf model (the co-located worker). It is only
+# scenario fodder — the G1–G10 gate runs against host B's vLLM model via aliases —
+# so a small fast model is right here: it keeps the G14 drain in-flight request well
+# under the worker's ~30s drain timeout (a 7B on CPU does not finish 512 tokens in
+# time → force-close → 529) and makes host-A readiness near-instant.
+LLAMACPP_MODEL=${LLAMACPP_MODEL:-qwen2.5-1.5b-instruct}
 # Host B's engine: the vLLM model the cross-host GPU worker serves. Host A only
 # needs the NAME (to alias to it and to wait for its route); host B serves it.
 VLLM_MODEL=${VLLM_MODEL:-qwen3-8b}
@@ -116,6 +120,13 @@ export ATLAS_API_KEY=$("$REPO/atlas" keys create --state-dir "$ATLAS_STATE_DIR" 
 
 echo "==> Installing conformance TS deps"
 ( cd conformance/ts && npm ci --no-fund --no-audit --loglevel=error )
+
+# Warm uv (download CPython + sync deps) NOW, with the system CA — before the gate
+# runs it under CA_ENV (which points the CA bundle at the self-signed gateway cert
+# and would make uv reject github.com when fetching the interpreter). After this the
+# gate runs fully cached (UV_OFFLINE), so CA_ENV only affects the SDK TLS to the gateway.
+echo "==> Warming uv (CPython + conformance deps)"
+( cd conformance && uv sync --locked )
 
 # --- teardown ----------------------------------------------------------------
 SERVER_PID="" ; declare -a WORKER_PIDS=()
@@ -237,7 +248,7 @@ fail() { echo "::error::$*" >&2; overall=1; }
 # --- (1) Full surface over the cross-host worker: G1–G10 --------------------
 echo
 echo "==> [criterion 1] G1–G10 over the fleet (aliases → cross-host vLLM worker)"
-( cd conformance && env "${CA_ENV[@]}" uv run --locked python run.py \
+( cd conformance && env UV_OFFLINE=1 "${CA_ENV[@]}" uv run --locked python run.py \
     --base-url "$API" \
     --engine vllm \
     --model "$SONNET_ALIAS" \
@@ -292,7 +303,7 @@ payload() { printf '{"model":"%s","max_tokens":%s,"messages":[{"role":"user","co
 echo "    -- drain: in-flight completes, new requests refused --"
 ( curl -sS -m 120 -o /tmp/drain_body.txt -w '%{http_code}' --cacert "$CERT" \
     -H "x-api-key: $ATLAS_API_KEY" -H 'content-type: application/json' \
-    "$API/v1/messages" -d "$(payload 512 'Write a long detailed paragraph about the history of computing.')" \
+    "$API/v1/messages" -d "$(payload 256 'Write a long detailed paragraph about the history of computing.')" \
     > /tmp/drain_code.txt ) &
 DRAIN_REQ=$!
 sleep 3
