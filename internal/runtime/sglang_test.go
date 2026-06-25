@@ -47,4 +47,17 @@ func TestEnsureSGLangProvisions(t *testing.T) {
 		t.Errorf("bin = %q, want %q", got, wantBin)
 	}
 	venvCallAsserts(t, calls, dir, uvBin, "sglang", SGLangVersion, sglangPython, "sglang[all]=="+SGLangVersion)
+
+	// sglang[all] pulls a prerelease-only flash-attn-4, so the install must allow
+	// prereleases or uv's resolution fails (see EnsureSGLang).
+	pip := calls[1]
+	var sawPrerelease bool
+	for _, a := range pip {
+		if a == "--prerelease=allow" {
+			sawPrerelease = true
+		}
+	}
+	if !sawPrerelease {
+		t.Errorf("sglang install call = %v, want --prerelease=allow", pip)
+	}
 }

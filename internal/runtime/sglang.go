@@ -32,5 +32,10 @@ func (p *Provisioner) EnsureSGLang(ctx context.Context, goos, goarch string) (st
 		python:     sglangPython,
 		pkg:        "sglang[all]==" + SGLangVersion,
 		entrypoint: filepath.Join("venv", "bin", "python"),
+		// sglang[all] pins flash-attn-4>=4.0.0b4, which has no stable release, so
+		// uv's default prerelease policy makes the resolution unsatisfiable. Allow
+		// prereleases for this install (uv's own hint); the pinned version is what
+		// the conformance matrix then validates.
+		pipArgs: []string{"--prerelease=allow"},
 	})
 }

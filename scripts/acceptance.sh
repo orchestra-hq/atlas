@@ -195,21 +195,19 @@ run_engine() {
   # reasoning tier (has_reasoning==0). A single hybrid (model==rmodel, reasoning)
   # omits it and the case skips. --reasoning-model is omitted entirely when the
   # engine has no reasoning model, so G4's thinking cases skip rather than fail.
-  local -a nonreasoning_arg=() reasoning_arg=()
+  # Build one never-empty argv. The optional --reasoning-model/--nonreasoning-model
+  # are appended in place rather than splatting separate arrays: macOS ships bash
+  # 3.2 (the MLX runner), where expanding an *empty* array under `set -u` errors
+  # ("unbound variable") — appending to a single non-empty array sidesteps that.
+  local -a run_args=(--base-url "http://${ADDR}" --engine "$engine" --model "$SONNET_ALIAS")
+  if [[ "$has_reasoning" -eq 1 ]]; then run_args+=(--reasoning-model "$OPUS_ALIAS"); fi
   if [[ "$model" != "$rmodel" || "$has_reasoning" -eq 0 ]]; then
-    nonreasoning_arg=(--nonreasoning-model "$SONNET_ALIAS")
+    run_args+=(--nonreasoning-model "$SONNET_ALIAS")
   fi
-  if [[ "$has_reasoning" -eq 1 ]]; then reasoning_arg=(--reasoning-model "$OPUS_ALIAS"); fi
+  run_args+=(--require "$CONF_REQUIRE" --output "results/matrix-${engine}.json")
 
   local rc=0
-  ( cd conformance && uv run --locked python run.py \
-      --base-url "http://${ADDR}" \
-      --engine "$engine" \
-      --model "$SONNET_ALIAS" \
-      "${reasoning_arg[@]}" \
-      "${nonreasoning_arg[@]}" \
-      --require "$CONF_REQUIRE" \
-      --output "results/matrix-${engine}.json" ) || rc=$?
+  ( cd conformance && uv run --locked python run.py "${run_args[@]}" ) || rc=$?
 
   kill "$pid" 2>/dev/null || true
   trap - RETURN
