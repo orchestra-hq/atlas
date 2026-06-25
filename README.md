@@ -35,6 +35,7 @@ Teams building on LLMs increasingly want control over where the model runs and w
 | [docs/m1-build-plan.md](docs/m1-build-plan.md)                                                             | M1 phased build order (fleet: worker channel, scheduler, auth)    |
 | [docs/m1-acceptance.md](docs/m1-acceptance.md)                                                             | Definition of done for M1: the multi-host fleet acceptance run    |
 | [docs/m2-build-plan.md](docs/m2-build-plan.md)                                                             | M2 phased build order (operate: metrics, backpressure, engines)   |
+| [docs/m2-acceptance.md](docs/m2-acceptance.md)                                                             | Definition of done for M2: the MLX + SGLang engine-breadth runs   |
 | [docs/m3-build-plan.md](docs/m3-build-plan.md)                                                             | M3 phased build order (affinity, embeddings/rerank, audit, spill) |
 | [docs/positioning.md](docs/positioning.md)                                                                 | Marketing differentiators and the proof each one requires         |
 | [docs/decisions/](docs/decisions/)                                                                         | Architecture decision records (ADRs)                              |

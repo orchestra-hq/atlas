@@ -32,6 +32,11 @@ ENGINES=${ACCEPTANCE_ENGINES:-"vllm llamacpp"}
 ADDR=${ATLAS_ADDR:-127.0.0.1:8080}
 export ATLAS_STATE_DIR=${ATLAS_STATE_DIR:-$REPO/.atlas-acceptance}
 export CONF_CLAUDE_CODE_SMOKE=${CONF_CLAUDE_CODE_SMOKE:-1}
+# Conformance groups the gate requires. The single-node GPU/CPU tracks prove the
+# full M0 surface incl. the G9 agent harness; the MLX/SGLang G17 cells scope to
+# G1–G8,G10 (no G9 — their 7–8B models drive an agent loop only intermittently)
+# and run with CONF_CLAUDE_CODE_SMOKE=0. See docs/m2-acceptance.md.
+CONF_REQUIRE=${CONF_REQUIRE:-G1,G2,G3,G4,G5,G6,G7,G8,G9,G10}
 # The Claude Code smoke drives a full agentic loop; a capable model on a GPU
 # still needs minutes, so give it more wall-clock than the per-PR default (300s).
 export CONF_CLAUDE_CODE_TIMEOUT=${CONF_CLAUDE_CODE_TIMEOUT:-600}
@@ -80,6 +85,29 @@ LLAMACPP_MODEL=${LLAMACPP_MODEL:-qwen2.5-7b-instruct-gguf}
 LLAMACPP_REASONING_MODEL=${LLAMACPP_REASONING_MODEL:-gemma-4-12b-coder}
 LLAMACPP_ENGINE_ARGS=${LLAMACPP_ENGINE_ARGS:-""}
 
+# SGLang (NVIDIA GPU nightly cell, M2 G17). Like the vLLM track it deploys a
+# non-reasoning chat model (qwen2.5-7b, for sonnet/haiku — gives G4 a real
+# non-reasoning model) plus the reasoning qwen3-8b for opus, so G4's thinking
+# path is covered on SGLang. The catalog entries carry SGLang's --tool-call-parser
+# (qwen25) and --reasoning-parser (qwen3); SGLANG_ENGINE_ARGS is for GPU memory
+# fit on the 24 GB L4 only. --mem-fraction-static caps the KV-cache pool;
+# --context-length matches the smaller chat model's window so both fit one card.
+SGLANG_MODEL=${SGLANG_MODEL:-qwen2.5-7b-instruct-sglang}
+SGLANG_REASONING_MODEL=${SGLANG_REASONING_MODEL:-qwen3-8b-sglang}
+SGLANG_ENGINE_ARGS=${SGLANG_ENGINE_ARGS:-"--mem-fraction-static 0.85 --context-length 32768"}
+
+# MLX (Apple-Silicon nightly cell, M2 G17). The shipped MLX catalog tier is
+# non-reasoning only, so there is no distinct reasoning model: the 7B serves
+# every alias and G4's thinking cases skip (reasoning_model fixture), while its
+# graceful-degradation case and every other group run. mlx_lm.server takes no
+# extra args here.
+# MLX_REASONING_MODEL is intentionally empty: no reasoning tier in the catalog,
+# so run_engine omits --reasoning-model (G4 thinking skips) and points G4's
+# graceful case at the lone non-reasoning 7B.
+MLX_MODEL=${MLX_MODEL:-qwen2.5-7b-instruct-mlx}
+MLX_REASONING_MODEL=${MLX_REASONING_MODEL:-}
+MLX_ENGINE_ARGS=${MLX_ENGINE_ARGS:-""}
+
 # Aliases are constant across engines, so the harness always addresses the same
 # logical names regardless of which engine is serving them.
 SONNET_ALIAS=claude-sonnet-4-6
@@ -122,6 +150,14 @@ run_engine() {
   echo "  Acceptance: engine=$engine model=$model reasoning=$rmodel"
   echo "===================================================================="
 
+  # An empty <ENGINE>_REASONING_MODEL means the engine has no reasoning model
+  # (the MLX catalog tier is non-reasoning only). The opus alias then resolves to
+  # the chat model, --reasoning-model is omitted (so G4's thinking cases skip via
+  # the reasoning_model fixture), and the lone non-reasoning model drives G4's
+  # graceful-degradation case instead.
+  local has_reasoning=1
+  if [[ -z "$rmodel" ]]; then has_reasoning=0; rmodel=$model; fi
+
   # Unique --model list (the reasoning model is the same model when hybrid).
   local -a up_args=(up --engine "$engine" --addr "$ADDR")
   up_args+=(--model "$model")
@@ -154,17 +190,25 @@ run_engine() {
   # sonnet alias IS that model — point the case at it. When one hybrid serves
   # every tier (the vLLM track: Qwen3 for all aliases), there is no non-reasoning
   # model, so the arg is omitted and the case skips rather than false-failing.
-  local -a nonreasoning_arg=()
-  if [[ "$model" != "$rmodel" ]]; then nonreasoning_arg=(--nonreasoning-model "$SONNET_ALIAS"); fi
+  # G4 gets a non-reasoning model when one is deployed: either a distinct chat
+  # model (model != rmodel) or the lone non-reasoning model of an engine with no
+  # reasoning tier (has_reasoning==0). A single hybrid (model==rmodel, reasoning)
+  # omits it and the case skips. --reasoning-model is omitted entirely when the
+  # engine has no reasoning model, so G4's thinking cases skip rather than fail.
+  local -a nonreasoning_arg=() reasoning_arg=()
+  if [[ "$model" != "$rmodel" || "$has_reasoning" -eq 0 ]]; then
+    nonreasoning_arg=(--nonreasoning-model "$SONNET_ALIAS")
+  fi
+  if [[ "$has_reasoning" -eq 1 ]]; then reasoning_arg=(--reasoning-model "$OPUS_ALIAS"); fi
 
   local rc=0
   ( cd conformance && uv run --locked python run.py \
       --base-url "http://${ADDR}" \
       --engine "$engine" \
       --model "$SONNET_ALIAS" \
-      --reasoning-model "$OPUS_ALIAS" \
+      "${reasoning_arg[@]}" \
       "${nonreasoning_arg[@]}" \
-      --require G1,G2,G3,G4,G5,G6,G7,G8,G9,G10 \
+      --require "$CONF_REQUIRE" \
       --output "results/matrix-${engine}.json" ) || rc=$?
 
   kill "$pid" 2>/dev/null || true
