@@ -89,12 +89,18 @@ LLAMACPP_ENGINE_ARGS=${LLAMACPP_ENGINE_ARGS:-""}
 # non-reasoning chat model (qwen2.5-7b, for sonnet/haiku — gives G4 a real
 # non-reasoning model) plus the reasoning qwen3-8b for opus, so G4's thinking
 # path is covered on SGLang. The catalog entries carry SGLang's --tool-call-parser
-# (qwen25) and --reasoning-parser (qwen3); SGLANG_ENGINE_ARGS is for GPU memory
-# fit on the 24 GB L4 only. --mem-fraction-static caps the KV-cache pool;
-# --context-length matches the smaller chat model's window so both fit one card.
+# (qwen25) and --reasoning-parser (qwen3). SGLANG_ENGINE_ARGS covers GPU memory
+# fit and the no-build-toolchain runner. --mem-fraction-static caps the KV-cache
+# pool; --context-length matches the smaller chat model's window so both fit one
+# card. SGLang defaults to the flashinfer attention + sampling backends, which
+# JIT-compile CUDA kernels via `ninja` during CUDA-graph capture — and the
+# driver-only AMI has no build toolchain (the same reason vLLM runs with
+# VLLM_USE_FLASHINFER_SAMPLER=0). The triton attention + pytorch sampling
+# backends avoid that JIT entirely (Triton compiles through its own runtime), so
+# the server starts on a stock GPU host.
 SGLANG_MODEL=${SGLANG_MODEL:-qwen2.5-7b-instruct-sglang}
 SGLANG_REASONING_MODEL=${SGLANG_REASONING_MODEL:-qwen3-8b-sglang}
-SGLANG_ENGINE_ARGS=${SGLANG_ENGINE_ARGS:-"--mem-fraction-static 0.85 --context-length 32768"}
+SGLANG_ENGINE_ARGS=${SGLANG_ENGINE_ARGS:-"--mem-fraction-static 0.85 --context-length 32768 --attention-backend triton --sampling-backend pytorch"}
 
 # MLX (Apple-Silicon nightly cell, M2 G17). The shipped MLX catalog tier is
 # non-reasoning only, so there is no distinct reasoning model: the 7B serves
