@@ -84,12 +84,14 @@ Deferred from M3 (revisit by traction):
 
 ## M4 — Deliverability: "the frictionless install"
 
-**Demo:** a newcomer runs `brew install atlas` (or `curl get.atlas.dev | sh`) and is serving a model in one command. The polished, owned-channel public install — held until the project is worth installing that frictionlessly, and until the owner is ready to take on the domain + tap-repo upkeep these imply. Until then the binary is installed from GitHub Releases / the container image (M0.5, [ADR-0006](decisions/0006-packaging-and-deployment.md)).
+**Demo:** a newcomer runs `brew install orchestra-hq/tap/atlas` (or `curl -fsSL <install.sh> | sh`) and is serving a model in one command. Build order + decisions: [m4-build-plan.md](m4-build-plan.md). Until M4 the binary is installed from GitHub Releases / the container image (M0.5, [ADR-0006](decisions/0006-packaging-and-deployment.md)).
 
-- **One-line installer** at an owned domain (`get.atlas.dev | sh`): detects OS/arch, fetches the pinned signed release, verifies checksums, drops `atlas` on `PATH`. (Needs a domain the owner controls.)
-- **Homebrew tap** (`orchestra-hq/homebrew-tap`, GoReleaser-published formula). (Needs a separate tap repo.)
-- Install/upgrade UX polish: `atlas --version` self-update hint, scriptable non-interactive install, checksum/signature verification documented.
-- Optional Linux packaging (`.deb`/`.rpm`, GoReleaser nfpm) if there's demand.
+- **Homebrew tap** — a public, reusable `orchestra-hq/homebrew-tap` repo; GoReleaser publishes the formula on each release, pushing via a dedicated "Atlas Release" GitHub App (short-lived token, no PAT).
+- **One-line installer** (`install.sh`): detects OS/arch, fetches the pinned signed release, verifies checksum + cosign signature, drops `atlas` on `PATH`. Served from the repo / GitHub Releases — **no custom domain** (owner's call, 2026-06-26); a vanity URL can be added later as a doc-only change.
+- **Release signing** with cosign keyless (GitHub OIDC, no key to manage), so both channels verify what they download.
+- Install/upgrade UX polish: `atlas --version` upgrade hint, scriptable non-interactive install, documented verification.
+- Optional Linux packaging (`.deb`/`.rpm`, GoReleaser nfpm) deferred until there's demand.
+- **Public go-live is gated on the `atlas` repo going public** (the release binaries must be anonymously downloadable); the machinery is built + snapshot-validated ahead of that.
 
 ## M5 — Packaging & deployment
 
