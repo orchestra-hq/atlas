@@ -52,6 +52,8 @@ SkyPilot is fenced to one CI workflow + one optional `examples/` recipe; the Atl
 
 ## M2 — Operate: "Run a real fleet from the terminal"
 
+**Status: ✅ done (2026-06-26).** Observability (`/metrics`, `atlas status`/`top`) and load-balancing/backpressure (least-in-flight, bounded admission queue, retryable 429/529) are proven per-PR; the engine-breadth acceptance is green on real hardware — MLX on an Apple-Silicon runner and SGLang on a GPU box both pass `G1–G8,G10` and feed the agent-capability matrix. See [m2-acceptance.md](m2-acceptance.md).
+
 **Demo:** SSH to the gateway box and `atlas top` to watch the fleet live; push concurrent load past capacity and watch requests queue then shed with clean 429/529 instead of timing out; add an Apple-Silicon worker running MLX. Build order: [m2-build-plan.md](m2-build-plan.md).
 
 - Observability: Prometheus `/metrics` endpoint + structured logs

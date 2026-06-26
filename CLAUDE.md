@@ -6,7 +6,7 @@ Atlas is an open source self-hosted LLM inference platform: a control plane + pe
 
 ## Current phase
 
-**Build (M2).** M0, M0.5, and M1 are **done** (declared 2026-06-25 — M0/M0.5's GPU acceptance is green on both engines per `docs/m0-acceptance.md`; M1's multi-host fleet acceptance is green per `docs/m1-acceptance.md`). M2 is code-complete; M2 ("operate a real fleet from the terminal") is the active milestone, with code landing in the phase order of `docs/m2-build-plan.md`. Design truth still lives in `docs/`; when code and a design doc diverge, fix one or the other in the same change.
+**M0–M2 done; M3 next.** M0, M0.5, and M1 were declared done 2026-06-25 (M0/M0.5's GPU acceptance green on both engines per `docs/m0-acceptance.md`; M1's multi-host fleet acceptance per `docs/m1-acceptance.md`). **M2 ("operate a real fleet from the terminal") was declared done 2026-06-26** — observability + backpressure proven per-PR, and the MLX (Apple Silicon) + SGLang (GPU) engine-breadth acceptance green on real hardware per `docs/m2-acceptance.md`. M3 (`docs/m3-build-plan.md`: affinity, embeddings/rerank, audit, spill) is the next milestone. Design truth still lives in `docs/`; when code and a design doc diverge, fix one or the other in the same change.
 
 ## Rules
 
