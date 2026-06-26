@@ -85,20 +85,19 @@ LLAMACPP_MODEL=${LLAMACPP_MODEL:-qwen2.5-7b-instruct-gguf}
 LLAMACPP_REASONING_MODEL=${LLAMACPP_REASONING_MODEL:-gemma-4-12b-coder}
 LLAMACPP_ENGINE_ARGS=${LLAMACPP_ENGINE_ARGS:-""}
 
-# SGLang (NVIDIA GPU nightly cell, M2 G17). Like the vLLM track it deploys a
-# non-reasoning chat model (qwen2.5-7b, for sonnet/haiku — gives G4 a real
-# non-reasoning model) plus the reasoning qwen3-8b for opus, so G4's thinking
-# path is covered on SGLang. The catalog entries carry SGLang's --tool-call-parser
-# (qwen25) and --reasoning-parser (qwen3). SGLANG_ENGINE_ARGS covers GPU memory
-# fit and the no-build-toolchain runner. --mem-fraction-static caps the KV-cache
-# pool; --context-length matches the smaller chat model's window so both fit one
-# card. SGLang defaults to the flashinfer attention + sampling backends, which
-# JIT-compile CUDA kernels via `ninja` during CUDA-graph capture — and the
-# driver-only AMI has no build toolchain (the same reason vLLM runs with
-# VLLM_USE_FLASHINFER_SAMPLER=0). The triton attention + pytorch sampling
-# backends avoid that JIT entirely (Triton compiles through its own runtime), so
-# the server starts on a stock GPU host.
-SGLANG_MODEL=${SGLANG_MODEL:-qwen2.5-7b-instruct-sglang}
+# SGLang (NVIDIA GPU nightly cell, M2 G17). A single 24 GB L4 can't hold two
+# unquantized 7–8B models (≈30 GB combined → CUDA OOM loading the second), so —
+# exactly like the vLLM track — SGLang serves ONE hybrid reasoning model
+# (qwen3-8b) for every tier alias. G4's thinking path is covered; its
+# non-reasoning graceful case skips (no separate non-reasoning model), as on vLLM.
+# The catalog entry carries SGLang's --tool-call-parser (qwen25) + --reasoning-parser
+# (qwen3). SGLANG_ENGINE_ARGS covers GPU fit and the no-build-toolchain runner:
+# --mem-fraction-static caps the KV-cache pool, --context-length sets the window.
+# SGLang JIT-compiles core kernels (fused RoPE, attention) at startup via `ninja`
+# regardless of backend — the nightly job installs ninja for that — and the
+# triton attention + pytorch sampling backends avoid the *extra* flashinfer JIT
+# (Triton compiles through its own runtime).
+SGLANG_MODEL=${SGLANG_MODEL:-qwen3-8b-sglang}
 SGLANG_REASONING_MODEL=${SGLANG_REASONING_MODEL:-qwen3-8b-sglang}
 SGLANG_ENGINE_ARGS=${SGLANG_ENGINE_ARGS:-"--mem-fraction-static 0.85 --context-length 32768 --attention-backend triton --sampling-backend pytorch"}
 
