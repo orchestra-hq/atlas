@@ -1,6 +1,6 @@
 # M2 acceptance spec
 
-> **⏳ Pending.** M2's code is complete (all four phases of [m2-build-plan.md](m2-build-plan.md) shipped; G15–G18 land per-PR as Go + integration + CPU-conformance gates). What remains to flip M2 to _done_ is the **real-hardware breadth** of G17/G18: the G1–G8+G10 suite observed on **MLX** (Apple Silicon) and **SGLang** (NVIDIA GPU), feeding the published capability matrix. The criteria below are the definition of done; the banner flips when the two new nightly tracks are green.
+> **✅ Accepted — M2 declared done 2026-06-26.** The two engine-breadth tracks are green on real hardware in one nightly run on `main` ([run 28223896986](https://github.com/orchestra-hq/atlas/actions/runs/28223896986)): **SGLang acceptance (GPU)** on an L4 g6 serving the hybrid `qwen3-8b-sglang`, and **MLX acceptance (Apple Silicon)** on a `blacksmith-6vcpu-macos-latest` runner serving `qwen2.5-7b-instruct-mlx`. Both passed `G1–G8,G10` (incl. G4 thinking on SGLang; G4's thinking cases skip on the non-reasoning MLX tier) and each contributed a **ready** cell to the agent-capability matrix. Combined with the per-PR G15/G16 (observability, backpressure) and G18 (matrix tooling, sampling/reasoning config) gates, all M2 conformance is now proven. The criteria below stay the definition of done.
 
 ## What M2 done means
 
