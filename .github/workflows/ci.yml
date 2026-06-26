@@ -68,8 +68,14 @@ jobs:
           go-version-file: go.mod
       - uses: goreleaser/goreleaser-action@v6
         with:
-          version: "~> v2"
-          args: release --snapshot --clean
+          version: "2.16.0" # pinned; keep in sync with release.yml
+          # --skip=sign: cosign keyless needs OIDC, only granted on the tagged
+          # release run, so the dry-run skips signing. The dummy TAP token lets
+          # the brews stanza's template resolve; skip_upload:auto means the
+          # snapshot renders the formula into dist/ without pushing.
+          args: release --snapshot --clean --skip=sign
+        env:
+          TAP_GITHUB_TOKEN: dry-run-not-used
 
   conformance:
     name: Conformance (llama.cpp)
