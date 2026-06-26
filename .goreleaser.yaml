@@ -41,3 +41,40 @@ changelog:
 
 release:
   draft: true # publish manually after sanity-checking artifacts
+
+# Cosign keyless signing (M4, docs/m4-build-plan.md). Signs checksums.txt using
+# GitHub Actions OIDC — no key to manage — producing checksums.txt.{sig,pem}
+# release assets. Signing OIDC is only available on the tagged release run (which
+# grants id-token: write); the per-PR `release --snapshot` dry-run skips it
+# (--skip=sign). install.sh and the documented manual path verify these.
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    output: true
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes"
+    certificate: "${artifact}.pem"
+
+# Homebrew tap (M4). On a real release GoReleaser renders the formula and pushes
+# it to the public orchestra-hq/homebrew-tap registry, authenticating with a
+# short-lived token minted from the dedicated "Atlas Release" GitHub App (never a
+# PAT; see release.yml). skip_upload: auto means snapshots/prereleases render the
+# formula into dist/ without pushing — so the per-PR dry-run validates it offline.
+brews:
+  - name: atlas
+    repository:
+      owner: orchestra-hq
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/orchestra-hq/atlas"
+    description: "Self-hosted LLM inference platform — Anthropic & OpenAI compatible APIs on your own hardware"
+    license: "Apache-2.0"
+    skip_upload: auto
+    install: |
+      bin.install "atlas"
+    test: |
+      system "#{bin}/atlas", "--version"
