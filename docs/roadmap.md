@@ -66,6 +66,8 @@ Web console and packaging/IaC, which earlier drafts had in M2, are split out to 
 
 ## M3 — Ecosystem & differentiation deepeners (pick by traction)
 
+**Status: ✅ done (2026-06-26).** The four chosen threads — prefix/session-affinity routing, embeddings + reranker model classes, the control-plane audit log, and cloud-fallback passthrough — shipped and are proven end-to-end: the per-PR `Conformance (M3)` job (G19–G22) is green on a real two-process llama.cpp deployment. The two heaviest candidates (full HA control plane, hosted offering) stay deferred. See [m3-acceptance.md](m3-acceptance.md).
+
 **Demo:** run a multi-turn agent against the fleet and watch each turn stick to its warm replica; deploy an embedding + a reranker model and point a RAG stack's OpenAI client at the same endpoint; flip on cloud-fallback and watch a capacity spike spill to a provider, clearly labeled, instead of shedding. Build order: [m3-build-plan.md](m3-build-plan.md).
 
 Of the candidate threads below, M3 takes the four that compound M2's runtime depth and serve the self-hosted-agent thesis, and defers the two heaviest (full HA, and the hosted offering):
