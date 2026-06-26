@@ -17,6 +17,7 @@ coverage.out
 # into the repo root when run locally (on CI the runner is ephemeral).
 /atlas-*.log
 /.atlas-acceptance*/
+/.atlas-m3/
 
 # Conformance harness
 node_modules/
