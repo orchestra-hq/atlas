@@ -135,7 +135,8 @@ type venvRuntime struct {
 	version    string
 	python     string
 	pkg        string
-	entrypoint string // relative to <Dir>/<engine>/<version>, e.g. venv/bin/vllm
+	entrypoint string   // relative to <Dir>/<engine>/<version>, e.g. venv/bin/vllm
+	pipArgs    []string // extra `uv pip install` flags inserted before pkg (e.g. --prerelease=allow)
 }
 
 // ensureVenv provisions a uv-managed engine venv atomically and returns its
@@ -173,7 +174,10 @@ func (p *Provisioner) ensureVenv(ctx context.Context, goos, goarch string, r ven
 	if err := p.runCmd(ctx, uv, "venv", venv, "--python", r.python, "--relocatable"); err != nil {
 		return "", err
 	}
-	if err := p.runCmd(ctx, uv, "pip", "install", "--python", venv, r.pkg); err != nil {
+	installArgs := []string{"pip", "install", "--python", venv}
+	installArgs = append(installArgs, r.pipArgs...)
+	installArgs = append(installArgs, r.pkg)
+	if err := p.runCmd(ctx, uv, installArgs...); err != nil {
 		return "", err
 	}
 	if _, err := os.Stat(filepath.Join(staging, r.entrypoint)); err != nil {

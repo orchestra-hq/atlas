@@ -85,16 +85,21 @@ LLAMACPP_MODEL=${LLAMACPP_MODEL:-qwen2.5-7b-instruct-gguf}
 LLAMACPP_REASONING_MODEL=${LLAMACPP_REASONING_MODEL:-gemma-4-12b-coder}
 LLAMACPP_ENGINE_ARGS=${LLAMACPP_ENGINE_ARGS:-""}
 
-# SGLang (NVIDIA GPU nightly cell, M2 G17). Like the vLLM track it deploys a
-# non-reasoning chat model (qwen2.5-7b, for sonnet/haiku — gives G4 a real
-# non-reasoning model) plus the reasoning qwen3-8b for opus, so G4's thinking
-# path is covered on SGLang. The catalog entries carry SGLang's --tool-call-parser
-# (qwen25) and --reasoning-parser (qwen3); SGLANG_ENGINE_ARGS is for GPU memory
-# fit on the 24 GB L4 only. --mem-fraction-static caps the KV-cache pool;
-# --context-length matches the smaller chat model's window so both fit one card.
-SGLANG_MODEL=${SGLANG_MODEL:-qwen2.5-7b-instruct-sglang}
+# SGLang (NVIDIA GPU nightly cell, M2 G17). A single 24 GB L4 can't hold two
+# unquantized 7–8B models (≈30 GB combined → CUDA OOM loading the second), so —
+# exactly like the vLLM track — SGLang serves ONE hybrid reasoning model
+# (qwen3-8b) for every tier alias. G4's thinking path is covered; its
+# non-reasoning graceful case skips (no separate non-reasoning model), as on vLLM.
+# The catalog entry carries SGLang's --tool-call-parser (qwen25) + --reasoning-parser
+# (qwen3). SGLANG_ENGINE_ARGS covers GPU fit and the no-build-toolchain runner:
+# --mem-fraction-static caps the KV-cache pool, --context-length sets the window.
+# SGLang JIT-compiles core kernels (fused RoPE, attention) at startup via `ninja`
+# regardless of backend — the nightly job installs ninja for that — and the
+# triton attention + pytorch sampling backends avoid the *extra* flashinfer JIT
+# (Triton compiles through its own runtime).
+SGLANG_MODEL=${SGLANG_MODEL:-qwen3-8b-sglang}
 SGLANG_REASONING_MODEL=${SGLANG_REASONING_MODEL:-qwen3-8b-sglang}
-SGLANG_ENGINE_ARGS=${SGLANG_ENGINE_ARGS:-"--mem-fraction-static 0.85 --context-length 32768"}
+SGLANG_ENGINE_ARGS=${SGLANG_ENGINE_ARGS:-"--mem-fraction-static 0.85 --context-length 32768 --attention-backend triton --sampling-backend pytorch"}
 
 # MLX (Apple-Silicon nightly cell, M2 G17). The shipped MLX catalog tier is
 # non-reasoning only, so there is no distinct reasoning model: the 7B serves
@@ -195,21 +200,19 @@ run_engine() {
   # reasoning tier (has_reasoning==0). A single hybrid (model==rmodel, reasoning)
   # omits it and the case skips. --reasoning-model is omitted entirely when the
   # engine has no reasoning model, so G4's thinking cases skip rather than fail.
-  local -a nonreasoning_arg=() reasoning_arg=()
+  # Build one never-empty argv. The optional --reasoning-model/--nonreasoning-model
+  # are appended in place rather than splatting separate arrays: macOS ships bash
+  # 3.2 (the MLX runner), where expanding an *empty* array under `set -u` errors
+  # ("unbound variable") — appending to a single non-empty array sidesteps that.
+  local -a run_args=(--base-url "http://${ADDR}" --engine "$engine" --model "$SONNET_ALIAS")
+  if [[ "$has_reasoning" -eq 1 ]]; then run_args+=(--reasoning-model "$OPUS_ALIAS"); fi
   if [[ "$model" != "$rmodel" || "$has_reasoning" -eq 0 ]]; then
-    nonreasoning_arg=(--nonreasoning-model "$SONNET_ALIAS")
+    run_args+=(--nonreasoning-model "$SONNET_ALIAS")
   fi
-  if [[ "$has_reasoning" -eq 1 ]]; then reasoning_arg=(--reasoning-model "$OPUS_ALIAS"); fi
+  run_args+=(--require "$CONF_REQUIRE" --output "results/matrix-${engine}.json")
 
   local rc=0
-  ( cd conformance && uv run --locked python run.py \
-      --base-url "http://${ADDR}" \
-      --engine "$engine" \
-      --model "$SONNET_ALIAS" \
-      "${reasoning_arg[@]}" \
-      "${nonreasoning_arg[@]}" \
-      --require "$CONF_REQUIRE" \
-      --output "results/matrix-${engine}.json" ) || rc=$?
+  ( cd conformance && uv run --locked python run.py "${run_args[@]}" ) || rc=$?
 
   kill "$pid" 2>/dev/null || true
   trap - RETURN

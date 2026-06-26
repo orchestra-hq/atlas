@@ -540,6 +540,17 @@ jobs:
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install ninja (SGLang JIT-compiles core CUDA kernels at startup)
+        # Unlike vLLM (whose only JIT path we disable via VLLM_USE_FLASHINFER_SAMPLER=0),
+        # SGLang 0.5.10 JIT-compiles core kernels — fused RoPE, attention — at server
+        # startup via `ninja` (sglang.jit_kernel/tvm_ffi), regardless of attention
+        # backend. The driver AMI ships gcc + the CUDA toolkit (nvcc) but not ninja,
+        # so install it and put nvcc on PATH for the compile.
+        run: |
+          apt-get update -y && apt-get install -y ninja-build
+          ninja --version
+          if [ -d /usr/local/cuda/bin ]; then echo "/usr/local/cuda/bin" >> "$GITHUB_PATH"; fi
+          command -v nvcc && nvcc --version || echo "WARN: nvcc not on PATH; the JIT compile may fail"
       - name: Run acceptance (SGLang)
         env:
           ACCEPTANCE_ENGINES: sglang
