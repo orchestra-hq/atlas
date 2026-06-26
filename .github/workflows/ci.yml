@@ -580,6 +580,48 @@ jobs:
           name: conformance-fleet-matrix
           path: conformance/results/matrix.json
 
+  conformance-m3:
+    name: Conformance (M3)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # The per-PR M3 conformance tier (docs/m3-acceptance.md): G19 affinity, G20
+    # embeddings + reranker classes, G21 audit log, G22 cloud-fallback — driven
+    # end to end against a real two-process llama.cpp deployment + a stub upstream
+    # by scripts/conformance-m3.sh (which builds atlas, pulls the models, mints a
+    # key, and runs all four groups). CPU-only; the GPU-engine breadth (prefix-
+    # cache reuse on SGLang, embeddings/rerank on a GPU engine) is the nightly tier.
+    env:
+      ATLAS_STATE_DIR: ${{ github.workspace }}/.atlas-m3
+      ATLAS_ADDR: 127.0.0.1:9092
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Content-addressed store keyed on the catalog; the M3 job pulls the chat,
+      # embedding, and reranker models, so it keeps its own key from the chat-only
+      # conformance jobs.
+      - name: Cache model store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ATLAS_STATE_DIR }}/store
+          key: conf-m3-store-${{ hashFiles('catalog/starter.yaml') }}
+      - name: Cache llama.cpp runtime
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ATLAS_STATE_DIR }}/runtimes
+          key: llamacpp-runtime-${{ runner.os }}-${{ runner.arch }}-b9611
+      - name: M3 conformance (G19-G22)
+        run: bash scripts/conformance-m3.sh
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: conformance-m3-logs
+          path: |
+            atlas-m3-server.log
+            atlas-m3-w1.log
+            atlas-m3-w2.log
+          if-no-files-found: ignore
+
   docs:
     name: Docs lint
     runs-on: blacksmith-2vcpu-ubuntu-2404
