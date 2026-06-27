@@ -1,0 +1,45 @@
+---
+title: Atlas
+description: Self-hosted LLM inference platform — point Claude Code and OpenAI SDKs at hardware you control.
+template: splash
+hero:
+  tagline: Run open-weight models on hardware you control — a laptop, a single GPU box, or a fleet across clouds — behind the APIs your agents already speak.
+  actions:
+    - text: Get started
+      link: /atlas/get-started/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/orchestra-hq/atlas
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+Atlas is an open source, self-hosted LLM inference platform. It orchestrates proven inference engines
+(vLLM, SGLang, llama.cpp, MLX) and exposes Anthropic-compatible (`/v1/messages`) and OpenAI-compatible
+APIs, so existing tooling works with a one-line config change:
+`ANTHROPIC_BASE_URL=https://your-atlas`.
+
+<CardGrid stagger>
+  <Card title="Agent-first compatibility" icon="puzzle">
+    Native Anthropic Messages API plus OpenAI-compatible endpoints — the Claude Agent SDK, Claude
+    Code, and OpenAI SDKs just work against your own hardware.
+  </Card>
+  <Card title="Your hardware, anywhere" icon="laptop">
+    A lightweight worker runs on each machine and dials out to the control plane. No inbound ports, no
+    Kubernetes required.
+  </Card>
+  <Card title="Ollama-grade DX, fleet-grade scale" icon="rocket">
+    One binary: `atlas up`, pull a model, serve it. The same binary scales out to a multi-node GPU
+    cluster.
+  </Card>
+  <Card title="Best engine for the job" icon="setting">
+    Atlas orchestrates vLLM, SGLang, llama.cpp, and MLX rather than reinventing them.
+  </Card>
+</CardGrid>
+
+:::note[Work in progress]
+This documentation site is being built out as part of Atlas M5. Sections are landing
+incrementally — check the sidebar for what's available.
+:::

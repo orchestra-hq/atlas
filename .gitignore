@@ -24,3 +24,7 @@ node_modules/
 __pycache__/
 /conformance/.venv/
 /conformance/results/
+
+# Docs site (Astro Starlight) build artifacts
+/website/dist/
+/website/.astro/

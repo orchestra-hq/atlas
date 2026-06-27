@@ -16,7 +16,8 @@ if [ -n "$staged_go" ]; then
 fi
 
 # --- Markdown: prettier (format) + markdownlint-cli2 (verify, with auto-fix).
-staged_md=$(git diff --cached --name-only --diff-filter=ACMR -- '*.md')
+# website/ is excluded — the Astro Starlight docs site has its own toolchain.
+staged_md=$(git diff --cached --name-only --diff-filter=ACMR -- '*.md' ':!:website/**')
 [ -z "$staged_md" ] && exit 0
 
 # Formatting: prettier normalizes tables (padded pipes), emphasis markers, etc.

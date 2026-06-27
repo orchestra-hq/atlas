@@ -1,0 +1,58 @@
+name: Docs site
+
+# Build the Astro Starlight docs site on every PR that touches it (machinery proven
+# per-PR), and deploy to GitHub Pages on main. Going live is owner-gated: enable
+# Pages (Settings → Pages → Source: GitHub Actions) once; until then the build job
+# still runs and the deploy job is a no-op-until-enabled. See docs/internal/m5-build-plan.md.
+
+on:
+  push:
+    branches: [main]
+    paths: ["website/**", ".github/workflows/docs-site.yml"]
+  pull_request:
+    paths: ["website/**", ".github/workflows/docs-site.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+defaults:
+  run:
+    working-directory: website
+
+jobs:
+  build:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - run: npm ci
+      # `astro build` runs the starlight-links-validator plugin, so a broken
+      # internal link fails the build — this is the per-PR link check.
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: website/dist
+
+  deploy:
+    # Only on main, and only after a green build. Requires Pages enabled on the repo.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
