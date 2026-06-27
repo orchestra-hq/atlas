@@ -4,7 +4,7 @@
 
 ## What M2 done means
 
-The M2 demo ([roadmap.md](roadmap.md)): _SSH to the gateway box and `atlas top` to watch the fleet live; push concurrent load past capacity and watch requests queue then shed with clean 429/529 instead of timing out; add an Apple-Silicon worker running MLX._
+The M2 demo ([roadmap.md](../roadmap.md)): _SSH to the gateway box and `atlas top` to watch the fleet live; push concurrent load past capacity and watch requests queue then shed with clean 429/529 instead of timing out; add an Apple-Silicon worker running MLX._
 
 M2 is **done** when the runtime depth that demo implies is proven at the same bar M0 and M1 cleared:
 
@@ -55,7 +55,7 @@ All observed on the two new tracks, on real hardware, against a local `atlas up`
 
 ## How it is gated
 
-Two tracks added to the nightly acceptance workflow ([nightly-gpu.yml](../.github/workflows/nightly-gpu.yml)), parallel to the existing single-node GPU/CPU and the M1 fleet tracks:
+Two tracks added to the nightly acceptance workflow ([nightly-gpu.yml](../../.github/workflows/nightly-gpu.yml)), parallel to the existing single-node GPU/CPU and the M1 fleet tracks:
 
 - a **`sglang`** track — a clone of the vLLM GPU job (machulav GPU runner, same AMI), running `acceptance.sh` with `ACCEPTANCE_ENGINES: sglang`;
 - an **`mlx`** track — `runs-on: blacksmith-6vcpu-macos-latest`, no provisioning/teardown jobs, running `acceptance.sh` with `ACCEPTANCE_ENGINES: mlx`.
@@ -67,11 +67,11 @@ Both scope the gate to `G1–G8,G10` (via `CONF_REQUIRE`) with the Claude Code s
 1. **`scripts/acceptance.sh`** — add `SGLANG_`/`MLX_` model + engine-arg defaults (capable catalog models per engine) and a `CONF_REQUIRE` env so a track can scope the gate to `G1–G8,G10`. Stage 2 otherwise unchanged — the generic per-engine loop already handles any engine label.
 2. **Two tracks in `nightly-gpu.yml`** — the SGLang GPU track (clone the vLLM start/run/stop jobs) and the MLX macOS track (a single job on the Blacksmith hosted runner; install Go/uv/Node via the runner's toolchain). Add both to the default `tracks` string and the gating fallbacks.
 3. **Run to green** — dispatch each track on its PR branch and iterate (the M1 pattern: run → fix → push into the same PR), GPU fit and macOS toolchain being the likely first snags.
-4. **Record + flip** — on green runs, mark M2 ✅ done in [roadmap.md](roadmap.md), flip this doc's banner with the run evidence, and resolve the MLX/SGLang/full-matrix items in [open-questions.md](open-questions.md).
+4. **Record + flip** — on green runs, mark M2 ✅ done in [roadmap.md](../roadmap.md), flip this doc's banner with the run evidence, and resolve the MLX/SGLang/full-matrix items in [open-questions.md](open-questions.md).
 
 ## Out of scope for M2-done
 
-- **Web console** and **packaging / reference IaC** — explicitly pulled out of M2 into roadmap [M6](roadmap.md) and [M5](roadmap.md) ([m2-build-plan.md](m2-build-plan.md) §5).
+- **Web console** and **packaging / reference IaC** — explicitly pulled out of M2 into roadmap [M6](../roadmap.md) and [M5](../roadmap.md) ([m2-build-plan.md](m2-build-plan.md) §5).
 - **Richer per-model reasoning _styles_** beyond the `enable_thinking` convention — deferred until such a model enters the shipped catalog ([open-questions.md](open-questions.md)).
 - **Session/prefix affinity, HA control plane** — M3, not here ([ADR-0010](decisions/0010-load-balancing-and-backpressure.md)).
 - **ACME / public-DNS TLS** — self-signed + pin remains the transport; ACME is an M5 follow-up.

@@ -1,6 +1,6 @@
 # M2 build plan
 
-The ordered path from M1's multi-machine fleet to a fleet you can **operate from the terminal**: see what it is doing, keep it healthy under load, run it on more hardware, and trust the catalog. This refines the M2 milestone in [roadmap.md](roadmap.md); design truth still lives in [architecture.md](architecture.md) and the relevant ADRs.
+The ordered path from M1's multi-machine fleet to a fleet you can **operate from the terminal**: see what it is doing, keep it healthy under load, run it on more hardware, and trust the catalog. This refines the M2 milestone in [roadmap.md](../roadmap.md); design truth still lives in [architecture.md](../architecture.md) and the relevant ADRs.
 
 M2 is deliberately terminal-first. The **web console** and **packaging + reference IaC** that earlier drafts put in M2 are pulled out into their own later milestones (roadmap M6 and M5) — the console because operating the fleet from the CLI defers the need for a GUI, and packaging because it is a large, independent body of ops work. What is left is the runtime depth and observability that make a fleet operable at all.
 
@@ -45,13 +45,13 @@ Two phase-2 defaults are fixed here so they aren't re-litigated mid-build: per-r
 
 G17 runs the G1–G8+G10 suite against MLX (Apple-Silicon runner) and SGLang (GPU runner) on the capable/nightly tier — neither runs on the CPU PR runner, so the per-PR gate stays llama.cpp and these are asserted nightly, the same arrangement vLLM has.
 
-**Phase 4 — catalog expansion and the agent-capability matrix.** The catalog grows beyond the starter set (more tiers, pinned gguf/weights digests as each is verified — the M0 pinning rule still holds), and the G9-style agent suite is run per model×engine to produce a published **"works for agents" capability matrix** — the badge earned by the suite, not by vibes (a standing-track promise in [roadmap.md](roadmap.md)). This phase also closes two M0 open-questions whose data the gateway already records but does not yet apply: **per-model sampling defaults** (a request that omits `temperature`/`top_p` picks up the catalog entry's defaults) and **per-model reasoning config** (the catalog's reasoning flag/parser drives thinking control instead of the global `enable_thinking` convention) — both move from "recorded" to "applied", and the corresponding entries in [open-questions.md](open-questions.md) are resolved. G18 asserts the matrix is generated from real runs and that both config paths take effect.
+**Phase 4 — catalog expansion and the agent-capability matrix.** The catalog grows beyond the starter set (more tiers, pinned gguf/weights digests as each is verified — the M0 pinning rule still holds), and the G9-style agent suite is run per model×engine to produce a published **"works for agents" capability matrix** — the badge earned by the suite, not by vibes (a standing-track promise in [roadmap.md](../roadmap.md)). This phase also closes two M0 open-questions whose data the gateway already records but does not yet apply: **per-model sampling defaults** (a request that omits `temperature`/`top_p` picks up the catalog entry's defaults) and **per-model reasoning config** (the catalog's reasoning flag/parser drives thinking control instead of the global `enable_thinking` convention) — both move from "recorded" to "applied", and the corresponding entries in [open-questions.md](open-questions.md) are resolved. G18 asserts the matrix is generated from real runs and that both config paths take effect.
 
 Phase 4 shipped as three focused PRs: **4a** applies per-model sampling defaults at the worker's `Execute`/`ExecuteStream` choke point (threaded via `worker.Config`, so local and fleet both get it with no wire change); **4b** drives the `enable_thinking` kwarg from the catalog `reasoning` flag on the model-bound `openaichat.Client` (a non-reasoning model omits the kwarg) — an ADR-0005 consequence; **4c** adds `conformance/capability_matrix.py`, which aggregates the per-run `matrix.json` files into the published agent-readiness matrix (verdict per model×engine, turning on the agent-critical groups G3+G9), unit-tested and run on the per-PR llama.cpp cell. The sampling and reasoning halves are fully gated on the CPU PR tier; the **full** capability matrix awaits the same dormant MLX + CUDA runners as G17 (catalog expansion feeds rows as digests are pinned) — see [open-questions.md](open-questions.md). So M2's code is complete with the matrix's breadth, like the GPU acceptance run, gated on runner availability.
 
 ## Conformance groups added in M2
 
-These extend the suite defined in [conformance-suite.md](conformance-suite.md).
+These extend the suite defined in [conformance-suite.md](../conformance-suite.md).
 
 ### G15 — Observability
 

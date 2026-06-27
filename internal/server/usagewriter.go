@@ -9,7 +9,7 @@ import (
 // Async usage-writer tuning (M2 phase 2b). The writer buffers records off the
 // request hot path and flushes them in batched transactions, so the per-request
 // SQLite INSERT no longer serializes on the single WAL writer under fleet-scale
-// concurrency (docs/follow-ups.md).
+// concurrency (docs/internal/follow-ups.md).
 const (
 	asyncUsageBuffer = 4096                   // channel capacity before Record blocks
 	asyncUsageBatch  = 128                    // rows per flush before a forced flush

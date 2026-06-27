@@ -1,6 +1,6 @@
 // Package mlx adapts an mlx-lm server (Apple-Silicon inference via Metal) to
 // Atlas's engine interface. Like the vLLM adapter (build-time decision 1,
-// docs/m0-build-plan.md), it speaks the OpenAI-compatible
+// docs/internal/m0-build-plan.md), it speaks the OpenAI-compatible
 // /v1/chat/completions endpoint via the shared internal/engines/openaichat
 // translation, so one conformance result holds across engines. mlx_lm.server
 // exposes no tokenize or model-metadata endpoint, so the two engine-specific

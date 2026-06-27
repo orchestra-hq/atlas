@@ -1,10 +1,10 @@
 # M3 acceptance spec
 
-> **✅ Accepted — M3 declared done 2026-06-26.** The per-PR `Conformance (M3)` job is green on `main` ([run 28233738897](https://github.com/orchestra-hq/atlas/actions/runs/28233738897), PR #91): G19 (affinity hits + warm-key observability across two chat replicas), G20 (embeddings + reranker drop-in + wrong-class 400s), G21 (audit trail with actor/action/target, durable across restart), and G22 (cloud-fallback spill labeled `x-atlas-served-by: cloud` with cloud-class usage; off-path sheds) all pass end-to-end against a real two-process llama.cpp deployment + stub upstream via [`scripts/conformance-m3.sh`](../scripts/conformance-m3.sh). Combined with the per-PR Go unit/integration gates for the M3 logic, all four phase exit criteria are met. The GPU-engine breadth below remains a tracked, non-blocking nightly-growth follow-on. The criteria below stay the definition of done.
+> **✅ Accepted — M3 declared done 2026-06-26.** The per-PR `Conformance (M3)` job is green on `main` ([run 28233738897](https://github.com/orchestra-hq/atlas/actions/runs/28233738897), PR #91): G19 (affinity hits + warm-key observability across two chat replicas), G20 (embeddings + reranker drop-in + wrong-class 400s), G21 (audit trail with actor/action/target, durable across restart), and G22 (cloud-fallback spill labeled `x-atlas-served-by: cloud` with cloud-class usage; off-path sheds) all pass end-to-end against a real two-process llama.cpp deployment + stub upstream via [`scripts/conformance-m3.sh`](../../scripts/conformance-m3.sh). Combined with the per-PR Go unit/integration gates for the M3 logic, all four phase exit criteria are met. The GPU-engine breadth below remains a tracked, non-blocking nightly-growth follow-on. The criteria below stay the definition of done.
 
 ## What M3 done means
 
-The M3 demo ([roadmap.md](roadmap.md)): _run a multi-turn agent against the fleet and watch each turn stick to its warm replica; deploy an embedding + a reranker model and point a RAG stack's OpenAI client at the same endpoint; flip on cloud-fallback and watch a capacity spike spill to a provider, clearly labeled, instead of shedding._
+The M3 demo ([roadmap.md](../roadmap.md)): _run a multi-turn agent against the fleet and watch each turn stick to its warm replica; deploy an embedding + a reranker model and point a RAG stack's OpenAI client at the same endpoint; flip on cloud-fallback and watch a capacity spike spill to a provider, clearly labeled, instead of shedding._
 
 M3 is **done** when the four new conformance groups pass end-to-end on a real deployment, at the bar M0/M1/M2 cleared:
 
@@ -21,9 +21,9 @@ The M3 **logic** is gated on every PR by Go unit + integration tests (`internal/
 
 A new per-PR conformance tier plus nightly GPU breadth, mirroring how G11–G14 (fleet) and G15–G18 (M2) are gated.
 
-### Per-PR — real two-process llama.cpp ([`scripts/conformance-m3.sh`](../scripts/conformance-m3.sh))
+### Per-PR — real two-process llama.cpp ([`scripts/conformance-m3.sh`](../../scripts/conformance-m3.sh))
 
-A standalone script (the same shape as the two-process gate steps in [ci.yml](../.github/workflows/ci.yml)) that brings up `atlas server` + two `atlas worker`s on CPU llama.cpp — worker 1 serving chat + the `nomic-embed-text-v1.5` embedding model + the `bge-reranker-v2-m3` reranker, worker 2 a second chat replica — plus a stub upstream, and asserts:
+A standalone script (the same shape as the two-process gate steps in [ci.yml](../../.github/workflows/ci.yml)) that brings up `atlas server` + two `atlas worker`s on CPU llama.cpp — worker 1 serving chat + the `nomic-embed-text-v1.5` embedding model + the `bge-reranker-v2-m3` reranker, worker 2 a second chat replica — plus a stub upstream, and asserts:
 
 - **G19** — a burst of identical-prefix requests across two chat replicas accrues affinity **hits**, an `x-atlas-session` pin routes by that key, and `atlas_affinity_total{result="hit"}` + `atlas_affinity_warm_keys` appear in `/metrics`. (The load-yield-to-backpressure path is covered by `affinity_test.go`; the per-PR scenario proves the affine selection and its observability on a real deployment.)
 - **G20** — `/v1/embeddings` returns correct-shape vectors for a multi-input request; `/v1/rerank` orders documents by relevance (the on-topic document ranks first); an embeddings call against a chat model and a rerank call against an embedding model each return **400**.
@@ -45,14 +45,14 @@ GPU-engine breadth (above) is a documented standing follow-on, not part of the g
 
 ## How it is gated
 
-- A per-PR **`Conformance (M3)`** job in [ci.yml](../.github/workflows/ci.yml) runs `scripts/conformance-m3.sh` on the CPU runner. A green run is what flips M3 to _done_ — the same per-PR-conformance bar M0–M2 cleared, with the GPU breadth growing on the nightly tier afterward.
+- A per-PR **`Conformance (M3)`** job in [ci.yml](../../.github/workflows/ci.yml) runs `scripts/conformance-m3.sh` on the CPU runner. A green run is what flips M3 to _done_ — the same per-PR-conformance bar M0–M2 cleared, with the GPU breadth growing on the nightly tier afterward.
 
 ## Build plan (to reach the green run)
 
 1. **`scripts/conformance-m3.sh`** — the per-PR G19–G22 scenarios on real llama.cpp + a stub upstream (validated locally on Apple Silicon first).
 2. **Wire it into `ci.yml`** as the `Conformance (M3)` job.
 3. **Run to green** and iterate (the established run → fix → push loop).
-4. **Record + flip** — mark M3 ✅ done in [roadmap.md](roadmap.md), flip this banner with the run evidence, and update the status lines in `README.md` / `CLAUDE.md`.
+4. **Record + flip** — mark M3 ✅ done in [roadmap.md](../roadmap.md), flip this banner with the run evidence, and update the status lines in `README.md` / `CLAUDE.md`.
 5. **Grow the GPU breadth** on the nightly tier afterward, as GPU embedding/reranker catalog rows are pinned (tracked, non-blocking).
 
 ## Out of scope for M3-done

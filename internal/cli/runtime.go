@@ -61,7 +61,7 @@ func newRuntimeCmd() *cobra.Command {
 // keeps the version it started with (its process holds that venv) and only adopts
 // the new one on restart, so prune is safe only once no engine is serving an older
 // version — otherwise it can pull modules out from under a live process that
-// imports lazily. Liveness-aware pruning is a follow-up (docs/follow-ups.md).
+// imports lazily. Liveness-aware pruning is a follow-up (docs/internal/follow-ups.md).
 func newRuntimeUpgradeCmd() *cobra.Command {
 	var (
 		engineFlag string

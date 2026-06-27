@@ -1,6 +1,6 @@
 # M1 build plan
 
-The ordered path from M0's single-node gateway to a multi-machine fleet. Each phase ends with named conformance groups going green. This refines the M1 milestone in [roadmap.md](roadmap.md); design truth still lives in [architecture.md](architecture.md) and the relevant ADRs.
+The ordered path from M0's single-node gateway to a multi-machine fleet. Each phase ends with named conformance groups going green. This refines the M1 milestone in [roadmap.md](../roadmap.md); design truth still lives in [architecture.md](../architecture.md) and the relevant ADRs.
 
 ## Build-time technical decisions
 
@@ -69,7 +69,7 @@ A review finding to settle while this code is being written: today the gateway r
 
 ## Conformance groups added in M1
 
-These extend the suite defined in [conformance-suite.md](conformance-suite.md).
+These extend the suite defined in [conformance-suite.md](../conformance-suite.md).
 
 ### G11 — Multi-worker routing
 

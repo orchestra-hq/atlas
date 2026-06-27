@@ -12,7 +12,7 @@
 #
 # The caller (the nightly workflow) is responsible for AWS credentials (the runner
 # assumes the OIDC role before invoking this) and for tearing the box down after.
-# See docs/m1-acceptance.md and the header of scripts/acceptance-fleet.sh for the
+# See docs/internal/m1-acceptance.md and the header of scripts/acceptance-fleet.sh for the
 # baked-in decisions (same VPC/SG with the wss port open; SSM SecureString handoff).
 set -euo pipefail
 

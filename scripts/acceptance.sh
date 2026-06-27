@@ -17,10 +17,10 @@
 # For each requested engine it boots `atlas up` on a capable model, then runs
 # the FULL conformance gate (G1–G10) plus the real Claude Code drop-in smoke
 # (CONF_CLAUDE_CODE_SMOKE=1). A green run on BOTH engines is what flips M0 to
-# "done" (docs/open-questions.md, docs/roadmap.md M0.5).
+# "done" (docs/internal/open-questions.md, docs/roadmap.md M0.5).
 #
 # The model refs and vLLM parser flags below are defaults tuned for a single
-# ~24GB GPU; they are the two items docs/open-questions.md flags as genuinely
+# ~24GB GPU; they are the two items docs/internal/open-questions.md flags as genuinely
 # open until this run first executes. Override via env to tune without editing.
 set -euo pipefail
 
@@ -35,7 +35,7 @@ export CONF_CLAUDE_CODE_SMOKE=${CONF_CLAUDE_CODE_SMOKE:-1}
 # Conformance groups the gate requires. The single-node GPU/CPU tracks prove the
 # full M0 surface incl. the G9 agent harness; the MLX/SGLang G17 cells scope to
 # G1–G8,G10 (no G9 — their 7–8B models drive an agent loop only intermittently)
-# and run with CONF_CLAUDE_CODE_SMOKE=0. See docs/m2-acceptance.md.
+# and run with CONF_CLAUDE_CODE_SMOKE=0. See docs/internal/m2-acceptance.md.
 CONF_REQUIRE=${CONF_REQUIRE:-G1,G2,G3,G4,G5,G6,G7,G8,G9,G10}
 # The Claude Code smoke drives a full agentic loop; a capable model on a GPU
 # still needs minutes, so give it more wall-clock than the per-PR default (300s).

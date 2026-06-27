@@ -11,9 +11,9 @@ name: Nightly acceptance
 #   • fleet track — TWO boxes (a c7i.4xlarge control plane + co-located llama.cpp
 #     worker, and a g6.2xlarge cross-host vLLM worker) exercising G1–G14 across
 #     genuinely separate machines: the multi-host run that guards M1
-#     (docs/m1-acceptance.md). In the default tracks — runs on the nightly schedule.
+#     (docs/internal/m1-acceptance.md). In the default tracks — runs on the nightly schedule.
 #   • sglang track — g6.2xlarge (same AMI as GPU), serves SGLang. The M2 engine-
-#     breadth cell (G17): G1–G8+G10 on a second NVIDIA-GPU server (docs/m2-acceptance.md).
+#     breadth cell (G17): G1–G8+G10 on a second NVIDIA-GPU server (docs/internal/m2-acceptance.md).
 #   • mlx track — a blacksmith-6vcpu-macos-latest HOSTED runner (Apple Silicon /
 #     Metal), serves MLX. The other M2 G17 cell — no machulav/EC2 (the runner is
 #     managed), so it has no start/stop jobs.
@@ -280,7 +280,7 @@ jobs:
   # co-located llama.cpp worker) and host B (g6, a cross-host vLLM worker). They
   # run concurrently and rendezvous on SSM — host A publishes the join bundle
   # (private IP, wss pin, token, key) and host B reads it, joins over wss://, and
-  # stays up until host A signals done. See docs/m1-acceptance.md.
+  # stays up until host A signals done. See docs/internal/m1-acceptance.md.
   start-fleet-server-runner:
     name: Start fleet server runner (host A)
     if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu fleet sglang mlx', 'fleet') }}
@@ -481,7 +481,7 @@ jobs:
   # --------------------------------------------------- sglang (M2 G17, NVIDIA)
   # A second NVIDIA-GPU server alongside vLLM. Same on-demand g6 + AMI as the GPU
   # track; acceptance.sh is identical, only ACCEPTANCE_ENGINES + the G17 gate
-  # scope (CONF_REQUIRE=G1–G8,G10, no agent smoke) differ. See docs/m2-acceptance.md.
+  # scope (CONF_REQUIRE=G1–G8,G10, no agent smoke) differ. See docs/internal/m2-acceptance.md.
   start-sglang-runner:
     name: Start SGLang runner (GPU)
     if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu fleet sglang mlx', 'sglang') }}
@@ -603,7 +603,7 @@ jobs:
   # a Blacksmith HOSTED macOS runner (managed — no machulav start/stop jobs). The
   # runner is a normal user (HOME set; not root cloud-init), so no HOME/IS_SANDBOX
   # overrides. acceptance.sh is identical; the MLX catalog tier is non-reasoning,
-  # so G4 thinking skips and its graceful case runs. See docs/m2-acceptance.md.
+  # so G4 thinking skips and its graceful case runs. See docs/internal/m2-acceptance.md.
   mlx-acceptance:
     name: MLX acceptance (Apple Silicon)
     if: ${{ vars.GPU_ACCEPTANCE_ENABLED == 'true' && contains(github.event.inputs.tracks || 'gpu cpu fleet sglang mlx', 'mlx') }}

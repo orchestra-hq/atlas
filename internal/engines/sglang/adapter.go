@@ -1,5 +1,5 @@
 // Package sglang adapts an SGLang server to Atlas's engine interface. Like the
-// vLLM adapter (build-time decision 1, docs/m0-build-plan.md), it speaks the
+// vLLM adapter (build-time decision 1, docs/internal/m0-build-plan.md), it speaks the
 // OpenAI-compatible /v1/chat/completions endpoint via the shared
 // internal/engines/openaichat translation, so one conformance result holds across
 // engines. The two engine-specific methods differ from vLLM's: SGLang's /v1/models
