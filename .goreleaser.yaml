@@ -70,6 +70,9 @@ brews:
       owner: orchestra-hq
       name: homebrew-tap
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    # Modern Homebrew only discovers formulae under Formula/ (or HomebrewFormula/);
+    # a tap-root formula is not found. The default pushed to root, so pin it.
+    directory: Formula
     homepage: "https://github.com/orchestra-hq/atlas"
     description: "Self-hosted LLM inference platform — Anthropic & OpenAI compatible APIs on your own hardware"
     license: "Apache-2.0"
