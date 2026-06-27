@@ -16,8 +16,10 @@ make fmt
 
 echo "==> Formatting Markdown"
 # Tracked .md only — excludes node_modules and other gitignored trees. Matches
-# the tools the pre-commit hook runs (.githooks/pre-commit).
-md_files="$(git ls-files '*.md')"
+# the tools the pre-commit hook runs (.githooks/pre-commit). website/ is excluded:
+# the docs site (Astro Starlight, MDX + directives) has its own build + link-check
+# gate in .github/workflows/docs-site.yml and its own formatting conventions.
+md_files="$(git ls-files '*.md' ':!:website/**')"
 if [ -n "$md_files" ]; then
   printf '%s\n' "$md_files" | tr '\n' '\0' | xargs -0 npx --yes prettier --write --log-level warn
   printf '%s\n' "$md_files" | tr '\n' '\0' | xargs -0 npx --yes markdownlint-cli2 --fix
