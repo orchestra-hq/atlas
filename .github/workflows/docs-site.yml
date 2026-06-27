@@ -38,7 +38,11 @@ jobs:
       # `astro build` runs the starlight-links-validator plugin, so a broken
       # internal link fails the build — this is the per-PR link check.
       - run: npm run build
-      - uses: actions/upload-pages-artifact@v4
+      # Upload the Pages artifact only on main (the deploy path). PRs prove the
+      # build + link check and skip the upload, so they don't consume the org-wide
+      # Actions artifact storage quota (a known shared constraint; see M4 notes).
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v4
         with:
           path: website/dist
 
