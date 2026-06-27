@@ -109,3 +109,18 @@ jobs:
             COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # Prune untagged image versions orphaned when a rolling tag (:slim, :cuda,
+      # :latest) moves to a new digest — otherwise dead manifests pile up against
+      # the org's GHCR storage (which counts toward the shared Actions+Packages
+      # quota while the package is private; it's free once public). This action is
+      # manifest-list aware: it will NOT delete the per-arch children of a still-
+      # tagged multi-arch image (the slim image), which a naive untagged-delete
+      # would corrupt. Best-effort: a cleanup hiccup must not fail a good release.
+      - name: Prune untagged GHCR versions
+        continue-on-error: true
+        uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
+        with:
+          package: atlas
+          owner: orchestra-hq
+          delete-untagged: true
+          token: ${{ secrets.GITHUB_TOKEN }}
