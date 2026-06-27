@@ -1,6 +1,8 @@
 ---
 title: Installation
 description: Install the atlas binary via Homebrew, the one-line installer, or the container image.
+sidebar:
+  order: 1
 ---
 
 Atlas ships as a single static binary (macOS and Linux, amd64 and arm64), plus container images.

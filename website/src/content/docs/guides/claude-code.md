@@ -1,6 +1,8 @@
 ---
 title: Use with Claude Code
 description: Point Claude Code and the Anthropic SDKs at Atlas with ANTHROPIC_BASE_URL.
+sidebar:
+  order: 1
 ---
 
 Atlas implements the Anthropic Messages API as a first-class surface, so an app using the Anthropic

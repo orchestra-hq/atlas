@@ -1,6 +1,8 @@
 ---
 title: Use with OpenAI SDKs & LangChain
 description: Point OpenAI SDKs, LangChain, and other OpenAI-compatible clients at Atlas.
+sidebar:
+  order: 2
 ---
 
 Alongside the Anthropic surface, Atlas exposes an OpenAI-compatible API, so OpenAI SDKs, LangChain,
