@@ -1,5 +1,5 @@
 #!/bin/sh
-# install.sh — one-line installer for the atlas binary (M4, docs/m4-build-plan.md).
+# install.sh — one-line installer for the atlas binary (M4, docs/internal/m4-build-plan.md).
 #
 #   curl -fsSL https://raw.githubusercontent.com/orchestra-hq/atlas/main/install.sh | sh
 #

@@ -3,7 +3,7 @@ package anthropic
 // ModelInfo is one entry of GET /v1/models (and the body of GET
 // /v1/models/{id}). It follows the Anthropic model object — type, id,
 // display_name, created_at — plus context_window, an Atlas extension that
-// clients use to size requests to a model's real window (docs/m0-acceptance.md
+// clients use to size requests to a model's real window (docs/internal/m0-acceptance.md
 // context-window handling; SDKs ignore the unknown field).
 type ModelInfo struct {
 	Type          string `json:"type"`

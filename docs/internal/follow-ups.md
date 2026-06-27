@@ -12,7 +12,7 @@ Scope rules:
 
 ### Self-signed cert cache ignores changed `--tls` hosts
 
-**Suggested:** M5 (packaging & deployment — bites on real public deploys). **Surfaced:** post-phases-6–7 review.
+**Suggested:** M7 (packaging & IaC — bites on real public deploys; deferred from M5 per [ADR-0014](decisions/0014-m5-rescoped-to-documentation.md)). **Surfaced:** post-phases-6–7 review.
 
 `loadOrCreateSelfSigned` (`internal/cli/tls.go`) returns the cached `cert.pem`/`key.pem` whenever both exist, without checking the requested SAN hosts still match. A host/hostname change keeps serving a cert whose SANs omit the new host, so a non-pinning client fails hostname validation until the files are deleted by hand. Low impact while pinned workers (which skip the name check) are the primary client.
 
@@ -20,7 +20,7 @@ Scope rules:
 
 ### ACME mode does not reconcile `--tls-acme-domain` with `--addr`
 
-**Suggested:** M5 (packaging & deployment — when ACME is exercised on a real public deployment). **Surfaced:** post-phases-6–7 review.
+**Suggested:** M7 (packaging & IaC — when ACME is exercised on a real public deployment; deferred from M5 per [ADR-0014](decisions/0014-m5-rescoped-to-documentation.md)). **Surfaced:** post-phases-6–7 review.
 
 TLS-ALPN-01 validation requires the server reachable on `:443`, but nothing checks the listen port, so `atlas server --tls-acme-domain …` left on the default `:9090` silently never obtains a cert (every handshake fails fetching one). Only a banner note states the `:443` requirement today (`internal/cli/tls.go`, `acmeTLS`). A hard check is wrong — operators legitimately sit behind an LB/port-forward doing `:443 → :9090` — so the right move is a startup _warning_ when the listen port is not 443 and no proxy is declared.
 

@@ -1,6 +1,6 @@
 # Conformance suite v0
 
-The executable definition of M0's API surface. Each acceptance criterion in [m0-acceptance.md](m0-acceptance.md) maps to a test group here; the suite is the M0 release gate (breaking `ANTHROPIC_BASE_URL` drop-in blocks any release — roadmap standing track), and its published results are the compat matrix that proves positioning angle #1.
+The executable definition of M0's API surface. Each acceptance criterion in [m0-acceptance.md](internal/m0-acceptance.md) maps to a test group here; the suite is the M0 release gate (breaking `ANTHROPIC_BASE_URL` drop-in blocks any release — roadmap standing track), and its published results are the compat matrix that proves positioning angle #1.
 
 ## Principles
 
@@ -65,7 +65,7 @@ Counts come from the target model's real tokenizer; alias and real model name ag
 
 ### G7 — Errors (criterion 6)
 
-Oversized context rejected pre-dispatch with Anthropic-shaped 400 (gateway assertion — see [m0-acceptance.md](m0-acceptance.md) context-window handling); unknown model 404; bad/missing key 401; engine down 529; malformed body 400. Every envelope is `{"type":"error","error":{...}}`, and each SDK raises its corresponding typed exception (e.g. `BadRequestError`, `AuthenticationError`) — retry behavior on 529 observed, no retry on 400.
+Oversized context rejected pre-dispatch with Anthropic-shaped 400 (gateway assertion — see [m0-acceptance.md](internal/m0-acceptance.md) context-window handling); unknown model 404; bad/missing key 401; engine down 529; malformed body 400. Every envelope is `{"type":"error","error":{...}}`, and each SDK raises its corresponding typed exception (e.g. `BadRequestError`, `AuthenticationError`) — retry behavior on 529 observed, no retry on 400.
 
 ### G8 — OpenAI surface (criterion 7)
 
@@ -76,7 +76,7 @@ OpenAI SDK completes the G3 task against `/v1/chat/completions` with streaming +
 Two real-client cells exercise the agent loop through Atlas:
 
 - **agent-sdk** (per-PR, CPU tier): a streamed agent loop completes ≥3 client-side tool calls — request → `tool_use` → client executes → `tool_result` → repeat — driven on the small catalog model. The tool is forced each turn (`tool_choice`), so the loop is deterministic: what is under test is Atlas's streamed multi-turn tool wire path, not the model's planning.
-- **claude-code** (capable tier, opt-in via `CONF_CLAUDE_CODE_SMOKE`): the real `claude` binary, `ANTHROPIC_BASE_URL` pointed at Atlas, runs a non-interactive edit-and-verify task in a sandbox and exits successfully. This is the literal drop-in promise. It is off by default because the small CPU-tier model drives Claude Code only intermittently; reliable Claude Code drop-in — and the dedicated **Claude Agent SDK** package's model-initiated custom-tool loop — need a capable model and run in the full-matrix/GPU acceptance tier (see [open-questions.md](open-questions.md)). The smoke earns its keep: it caught Atlas rejecting Claude Code's default `thinking.type: "adaptive"` (now fixed).
+- **claude-code** (capable tier, opt-in via `CONF_CLAUDE_CODE_SMOKE`): the real `claude` binary, `ANTHROPIC_BASE_URL` pointed at Atlas, runs a non-interactive edit-and-verify task in a sandbox and exits successfully. This is the literal drop-in promise. It is off by default because the small CPU-tier model drives Claude Code only intermittently; reliable Claude Code drop-in — and the dedicated **Claude Agent SDK** package's model-initiated custom-tool loop — need a capable model and run in the full-matrix/GPU acceptance tier (see [open-questions.md](internal/open-questions.md)). The smoke earns its keep: it caught Atlas rejecting Claude Code's default `thinking.type: "adaptive"` (now fixed).
 
 ### G10 — Ops minimum (criterion 8)
 
@@ -94,7 +94,7 @@ Multimodal pass-through (not M0 acceptance), `/v1/embeddings`, legacy `/v1/compl
 
 ## M1 test groups
 
-These extend the matrix and the pass policy when M1 ships. See [m1-build-plan.md](m1-build-plan.md) for the phase that introduces each group.
+These extend the matrix and the pass policy when M1 ships. See [m1-build-plan.md](internal/m1-build-plan.md) for the phase that introduces each group.
 
 ### G11 — Multi-worker routing (M1 phase 4)
 
@@ -116,7 +116,7 @@ After N requests across two keys and two models: `atlas usage` returns correct p
 
 ## M2 test groups
 
-These extend the matrix and the pass policy when M2 ships. See [m2-build-plan.md](m2-build-plan.md) for the phase that introduces each group.
+These extend the matrix and the pass policy when M2 ships. See [m2-build-plan.md](internal/m2-build-plan.md) for the phase that introduces each group.
 
 ### G15 — Observability (M2 phase 1)
 
@@ -134,13 +134,13 @@ G1–G8+G10 pass on MLX (Apple Silicon) and on SGLang (NVIDIA GPU), on the capab
 
 The agent-capability matrix is generated from real per-model×engine runs and reflects suite results. A request that omits sampling fields uses the model's catalog defaults (phase 4a); a reasoning model's thinking behavior follows its catalog config rather than the global convention (phase 4b).
 
-The matrix is produced by [`conformance/capability_matrix.py`](../conformance/README.md) (phase 4c): it aggregates the per-run `matrix-<engine>.json` files into one published matrix — a row per (model, engine) with an **agent-readiness verdict** (`ready` / `partial` / `incomplete` / `unsupported`) turning on the agent-critical groups (G3 tool use, G9 the streamed multi-call agent loop), plus the per-group detail. The generator and its verdict logic are unit-tested on the CPU per-PR tier, and the per-PR conformance job runs it on the single llama.cpp cell it produces; the **full** model×engine matrix is generated on the nightly capable tier, which needs the MLX (Apple-Silicon) and CUDA runners still dormant in [open-questions.md](open-questions.md) — the same blocker as G17.
+The matrix is produced by [`conformance/capability_matrix.py`](../conformance/README.md) (phase 4c): it aggregates the per-run `matrix-<engine>.json` files into one published matrix — a row per (model, engine) with an **agent-readiness verdict** (`ready` / `partial` / `incomplete` / `unsupported`) turning on the agent-critical groups (G3 tool use, G9 the streamed multi-call agent loop), plus the per-group detail. The generator and its verdict logic are unit-tested on the CPU per-PR tier, and the per-PR conformance job runs it on the single llama.cpp cell it produces; the **full** model×engine matrix is generated on the nightly capable tier, which needs the MLX (Apple-Silicon) and CUDA runners still dormant in [open-questions.md](internal/open-questions.md) — the same blocker as G17.
 
 ---
 
 ## M3 test groups
 
-These extend the matrix and the pass policy when M3 ships. See [m3-build-plan.md](m3-build-plan.md) for the phase that introduces each group.
+These extend the matrix and the pass policy when M3 ships. See [m3-build-plan.md](internal/m3-build-plan.md) for the phase that introduces each group.
 
 ### G19 — Prefix/session-affinity routing (M3 phase 1)
 

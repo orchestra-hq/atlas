@@ -4,15 +4,15 @@ Phased so every milestone ends in something demoable and marketable. Dates inten
 
 ## M0 — Single-node MVP: "Claude Code on your own box"
 
-**Status: ✅ done (2026-06-25).** All acceptance criteria green on both engines — vLLM (GPU) and llama.cpp (CPU) — with the real Claude Code drop-in proven on vLLM. See the result banner in [m0-acceptance.md](m0-acceptance.md).
+**Status: ✅ done (2026-06-25).** All acceptance criteria green on both engines — vLLM (GPU) and llama.cpp (CPU) — with the real Claude Code drop-in proven on vLLM. See the result banner in [m0-acceptance.md](internal/m0-acceptance.md).
 
-**Demo:** install one binary, `atlas up`, `atlas pull <model>`, point Claude Code at `http://localhost:9090`, complete a real coding task on a local open model. Definition of done: [m0-acceptance.md](m0-acceptance.md). Build order: [m0-build-plan.md](m0-build-plan.md).
+**Demo:** install one binary, `atlas up`, `atlas pull <model>`, point Claude Code at `http://localhost:9090`, complete a real coding task on a local open model. Definition of done: [m0-acceptance.md](internal/m0-acceptance.md). Build order: [m0-build-plan.md](internal/m0-build-plan.md).
 
 - `atlas` CLI + daemon (`up`, `pull`, `run`, `ps`, `serve` equivalents)
 - One engine adapter per platform class to start: **llama.cpp** (works everywhere, incl. dev laptops) and **vLLM** (CUDA, the credibility path) — MLX and SGLang follow
-- Model store (content-addressable cache) + a starter catalog of 3–5 agent-tested models with correct templates/tool parsers, incl. ≥1 reasoning-capable model (ADR-0005) — candidates in [research/model-catalog-m0.md](research/model-catalog-m0.md)
+- Model store (content-addressable cache) + a starter catalog of 3–5 agent-tested models with correct templates/tool parsers, incl. ≥1 reasoning-capable model (ADR-0005) — candidates in [research/model-catalog-m0.md](internal/research/model-catalog-m0.md)
 - **Anthropic `/v1/messages`** incl. streaming + tool use + thinking-block mapping for reasoning models (ADR-0005), `count_tokens`, `/v1/models`; **OpenAI `/v1/chat/completions`** incl. streaming + tools
-- Gateway-side context-window assertion: requests that don't fit the resolved model's window are rejected pre-dispatch with a clean Anthropic-shaped 400 ([m0-acceptance.md](m0-acceptance.md))
+- Gateway-side context-window assertion: requests that don't fit the resolved model's window are rejected pre-dispatch with a clean Anthropic-shaped 400 ([m0-acceptance.md](internal/m0-acceptance.md))
 - Model alias mapping (`claude-* → local model`)
 - Conformance suite v0 (real Anthropic + OpenAI SDKs, tool loop, Claude Code smoke test) — specced in [conformance-suite.md](conformance-suite.md)
 - Single shared-secret auth for the endpoint
@@ -24,10 +24,10 @@ Cut from M0: web console, multi-node, API key management, usage metering (log co
 
 **Status: ✅ done (2026-06-25).** The scheduled nightly acceptance run is green on both engines (vLLM on an on-demand GPU box, llama.cpp on a CPU box); the green GPU run is what flipped M0 to _done_. Docker images, the deploy recipes, and the acceptance machinery are all in place.
 
-**Demo:** `docker run … ghcr.io/orchestra-hq/atlas` on a laptop, or `sky launch atlas-serve.yaml` to bring up Atlas on a cheapest-available cloud GPU, then point Claude Code at it; meanwhile a nightly job proves the full suite green on both engines. Closed out M0: a green GPU acceptance run is what flipped M0 to _done_. Rationale + survey: [research/distribution-deployment-and-gpu-ci.md](research/distribution-deployment-and-gpu-ci.md); decisions: [ADR-0006](decisions/0006-packaging-and-deployment.md). The polished public-install channels (one-line installer, Homebrew) are deliberately deferred to [M4](#m4--deliverability-the-frictionless-install).
+**Demo:** `docker run … ghcr.io/orchestra-hq/atlas` on a laptop, or `sky launch atlas-serve.yaml` to bring up Atlas on a cheapest-available cloud GPU, then point Claude Code at it; meanwhile a nightly job proves the full suite green on both engines. Closed out M0: a green GPU acceptance run is what flipped M0 to _done_. Rationale + survey: [research/distribution-deployment-and-gpu-ci.md](internal/research/distribution-deployment-and-gpu-ci.md); decisions: [ADR-0006](internal/decisions/0006-packaging-and-deployment.md). The polished public-install channels (one-line installer, Homebrew) are deliberately deferred to [M4](#m4--deliverability-the-frictionless-install).
 
 - **Docker images** to GHCR (pulled forward from M2): one image, role by subcommand; slim + CUDA "batteries-included" (vLLM) variants
-- **Nightly GPU acceptance** — SkyPilot recipe from a CPU runner spins up a spot GPU, runs `G1–G10` + the real Claude Code smoke (`CONF_CLAUDE_CODE_SMOKE=1`) on **llama.cpp and vLLM**, tears down (machulav/ephemeral-EC2 as fallback). This is the deferred capable/GPU tier from [open-questions.md](open-questions.md)
+- **Nightly GPU acceptance** — SkyPilot recipe from a CPU runner spins up a spot GPU, runs `G1–G10` + the real Claude Code smoke (`CONF_CLAUDE_CODE_SMOKE=1`) on **llama.cpp and vLLM**, tears down (machulav/ephemeral-EC2 as fallback). This is the deferred capable/GPU tier from [open-questions.md](internal/open-questions.md)
 - **Deploy recipes:** the SkyPilot one-command cloud-GPU serve recipe (canonical) + the boring "single GPU box + SSH tunnel from your laptop" path
 - **Usage-scenarios doc:** persona → path (laptop / single cloud GPU / dial-out fleet)
 
@@ -37,9 +37,9 @@ SkyPilot is fenced to one CI workflow + one optional `examples/` recipe; the Atl
 
 ## M1 — Fleet: "Join three machines, one endpoint"
 
-**Status: ✅ done (2026-06-25).** The multi-host fleet acceptance run is green — `atlas server` on one host + a cross-host vLLM worker on a separate GPU host, G1–G14 across the two machines (full surface over the wss channel, multi-worker routing, auth, usage attribution, drain/timeout). See [m1-acceptance.md](m1-acceptance.md).
+**Status: ✅ done (2026-06-25).** The multi-host fleet acceptance run is green — `atlas server` on one host + a cross-host vLLM worker on a separate GPU host, G1–G14 across the two machines (full surface over the wss channel, multi-worker routing, auth, usage attribution, drain/timeout). See [m1-acceptance.md](internal/m1-acceptance.md).
 
-**Demo:** `atlas server` on a VPS; `atlas worker --join <url> --token <token>` on a 4090 box and a Mac; deploy two models; one authenticated endpoint serves both. Build order: [m1-build-plan.md](m1-build-plan.md).
+**Demo:** `atlas server` on a VPS; `atlas worker --join <url> --token <token>` on a 4090 box and a Mac; deploy two models; one authenticated endpoint serves both. Build order: [m1-build-plan.md](internal/m1-build-plan.md).
 
 - `atlas server` (control plane only) + `atlas worker --join` (outbound WebSocket channel — ADR-0007)
 - Worker join (token), heartbeats, drain/remove; hardware inventory reported on join
@@ -52,13 +52,13 @@ SkyPilot is fenced to one CI workflow + one optional `examples/` recipe; the Atl
 
 ## M2 — Operate: "Run a real fleet from the terminal"
 
-**Status: ✅ done (2026-06-26).** Observability (`/metrics`, `atlas status`/`top`) and load-balancing/backpressure (least-in-flight, bounded admission queue, retryable 429/529) are proven per-PR; the engine-breadth acceptance is green on real hardware — MLX on an Apple-Silicon runner and SGLang on a GPU box both pass `G1–G8,G10` and feed the agent-capability matrix. See [m2-acceptance.md](m2-acceptance.md).
+**Status: ✅ done (2026-06-26).** Observability (`/metrics`, `atlas status`/`top`) and load-balancing/backpressure (least-in-flight, bounded admission queue, retryable 429/529) are proven per-PR; the engine-breadth acceptance is green on real hardware — MLX on an Apple-Silicon runner and SGLang on a GPU box both pass `G1–G8,G10` and feed the agent-capability matrix. See [m2-acceptance.md](internal/m2-acceptance.md).
 
-**Demo:** SSH to the gateway box and `atlas top` to watch the fleet live; push concurrent load past capacity and watch requests queue then shed with clean 429/529 instead of timing out; add an Apple-Silicon worker running MLX. Build order: [m2-build-plan.md](m2-build-plan.md).
+**Demo:** SSH to the gateway box and `atlas top` to watch the fleet live; push concurrent load past capacity and watch requests queue then shed with clean 429/529 instead of timing out; add an Apple-Silicon worker running MLX. Build order: [m2-build-plan.md](internal/m2-build-plan.md).
 
 - Observability: Prometheus `/metrics` endpoint + structured logs
 - CLI inspection tool — `atlas status` (snapshot) + `atlas top` (live view), run over SSH on the gateway; the web console's stand-in (the console itself is its own later milestone, [M6](#m6--web-console))
-- Load balancing across replicas (least-in-flight) + bounded queueing/backpressure with retryable 429/529 ([ADR-0010](decisions/0010-load-balancing-and-backpressure.md))
+- Load balancing across replicas (least-in-flight) + bounded queueing/backpressure with retryable 429/529 ([ADR-0010](internal/decisions/0010-load-balancing-and-backpressure.md))
 - MLX (Apple Silicon) then SGLang (NVIDIA) engine adapters; engine version pinning/upgrade flow
 - Catalog expansion + published agent-capability matrix per model; apply the catalog's recorded-but-unused per-model sampling + reasoning config
 
@@ -66,16 +66,16 @@ Web console and packaging/IaC, which earlier drafts had in M2, are split out to 
 
 ## M3 — Ecosystem & differentiation deepeners (pick by traction)
 
-**Status: ✅ done (2026-06-26).** The four chosen threads — prefix/session-affinity routing, embeddings + reranker model classes, the control-plane audit log, and cloud-fallback passthrough — shipped and are proven end-to-end: the per-PR `Conformance (M3)` job (G19–G22) is green on a real two-process llama.cpp deployment. The two heaviest candidates (full HA control plane, hosted offering) stay deferred. See [m3-acceptance.md](m3-acceptance.md).
+**Status: ✅ done (2026-06-26).** The four chosen threads — prefix/session-affinity routing, embeddings + reranker model classes, the control-plane audit log, and cloud-fallback passthrough — shipped and are proven end-to-end: the per-PR `Conformance (M3)` job (G19–G22) is green on a real two-process llama.cpp deployment. The two heaviest candidates (full HA control plane, hosted offering) stay deferred. See [m3-acceptance.md](internal/m3-acceptance.md).
 
-**Demo:** run a multi-turn agent against the fleet and watch each turn stick to its warm replica; deploy an embedding + a reranker model and point a RAG stack's OpenAI client at the same endpoint; flip on cloud-fallback and watch a capacity spike spill to a provider, clearly labeled, instead of shedding. Build order: [m3-build-plan.md](m3-build-plan.md).
+**Demo:** run a multi-turn agent against the fleet and watch each turn stick to its warm replica; deploy an embedding + a reranker model and point a RAG stack's OpenAI client at the same endpoint; flip on cloud-fallback and watch a capacity spike spill to a provider, clearly labeled, instead of shedding. Build order: [m3-build-plan.md](internal/m3-build-plan.md).
 
 Of the candidate threads below, M3 takes the four that compound M2's runtime depth and serve the self-hosted-agent thesis, and defers the two heaviest (full HA, and the hosted offering):
 
-- **Prefix/session-affinity routing** (agent conversations stick to a warm worker — SGLang prefix-cache synergy). Extends [ADR-0010](decisions/0010-load-balancing-and-backpressure.md) as a load-bounded hint; [ADR-0011](decisions/0011-prefix-session-affinity-routing.md).
-- **Embeddings + reranker model classes** as first-class citizens (`/v1/embeddings`, `/v1/rerank`); a model-`class` abstraction; [ADR-0012](decisions/0012-embeddings-and-reranker-model-classes.md).
-- **Audit log** of control-plane mutations (split out of the HA bundle — light, independent, high trust value); reuses the [ADR-0008](decisions/0008-control-plane-persistence-and-api-keys.md) store.
-- **Cloud-fallback passthrough** (route overflow to a real provider key, clearly labeled, separately billed, off by default); [ADR-0013](decisions/0013-cloud-fallback-passthrough.md).
+- **Prefix/session-affinity routing** (agent conversations stick to a warm worker — SGLang prefix-cache synergy). Extends [ADR-0010](internal/decisions/0010-load-balancing-and-backpressure.md) as a load-bounded hint; [ADR-0011](internal/decisions/0011-prefix-session-affinity-routing.md).
+- **Embeddings + reranker model classes** as first-class citizens (`/v1/embeddings`, `/v1/rerank`); a model-`class` abstraction; [ADR-0012](internal/decisions/0012-embeddings-and-reranker-model-classes.md).
+- **Audit log** of control-plane mutations (split out of the HA bundle — light, independent, high trust value); reuses the [ADR-0008](internal/decisions/0008-control-plane-persistence-and-api-keys.md) store.
+- **Cloud-fallback passthrough** (route overflow to a real provider key, clearly labeled, separately billed, off by default); [ADR-0013](internal/decisions/0013-cloud-fallback-passthrough.md).
 
 Deferred from M3 (revisit by traction):
 
@@ -84,9 +84,9 @@ Deferred from M3 (revisit by traction):
 
 ## M4 — Deliverability: "the frictionless install"
 
-**Status: ✅ done (2026-06-27).** The deliverability machinery — `install.sh`, cosign keyless signing, and the Homebrew formula pushed to `orchestra-hq/homebrew-tap` via a dedicated Release App — is built and proven end-to-end by the `v0.1.0` release run. The public channels (`brew install` / `curl | sh`) light up on the owner's go-live flip (repo public + publish the draft); see [m4-build-plan.md](m4-build-plan.md).
+**Status: ✅ done (2026-06-27).** The deliverability machinery — `install.sh`, cosign keyless signing, and the Homebrew formula pushed to `orchestra-hq/homebrew-tap` via a dedicated Release App — is built and proven end-to-end by the `v0.1.0` release run. The public channels (`brew install` / `curl | sh`) light up on the owner's go-live flip (repo public + publish the draft); see [m4-build-plan.md](internal/m4-build-plan.md).
 
-**Demo:** a newcomer runs `brew install orchestra-hq/tap/atlas` (or `curl -fsSL <install.sh> | sh`) and is serving a model in one command. Build order + decisions: [m4-build-plan.md](m4-build-plan.md). Until M4 the binary is installed from GitHub Releases / the container image (M0.5, [ADR-0006](decisions/0006-packaging-and-deployment.md)).
+**Demo:** a newcomer runs `brew install orchestra-hq/tap/atlas` (or `curl -fsSL <install.sh> | sh`) and is serving a model in one command. Build order + decisions: [m4-build-plan.md](internal/m4-build-plan.md). Until M4 the binary is installed from GitHub Releases / the container image (M0.5, [ADR-0006](internal/decisions/0006-packaging-and-deployment.md)).
 
 - **Homebrew tap** — a public, reusable `orchestra-hq/homebrew-tap` repo; GoReleaser publishes the formula on each release, pushing via a dedicated "Atlas Release" GitHub App (short-lived token, no PAT).
 - **One-line installer** (`install.sh`): detects OS/arch, fetches the pinned signed release, verifies checksum + cosign signature, drops `atlas` on `PATH`. Served from the repo / GitHub Releases — **no custom domain** (owner's call, 2026-06-26); a vanity URL can be added later as a doc-only change.
@@ -97,9 +97,9 @@ Deferred from M3 (revisit by traction):
 
 ## M5 — Documentation & docs site
 
-**Re-scoped 2026-06-27** ([ADR-0014](decisions/0014-m5-rescoped-to-documentation.md)) from "Packaging & deployment" to documentation. M4 already shipped everything needed to _deploy_ Atlas (binary, `install.sh`, signed releases, GHCR images — [ADR-0006](decisions/0006-packaging-and-deployment.md)) and the AWS reference _topology_ is already written ([deployment-aws.md](deployment-aws.md)); the acute gap as the project goes public is **discoverability, not deployability**. Building compose/k8s/Terraform recipes ahead of any operator telling us how they actually deploy is speculative, so that packaging work is deferred to a demand-driven [M7](#m7--packaging--iac-by-traction). M5 instead stands up a curated public docs site so a newcomer can go install → quickstart → deploy → operate without reading the internal design docs.
+**Re-scoped 2026-06-27** ([ADR-0014](internal/decisions/0014-m5-rescoped-to-documentation.md)) from "Packaging & deployment" to documentation. M4 already shipped everything needed to _deploy_ Atlas (binary, `install.sh`, signed releases, GHCR images — [ADR-0006](internal/decisions/0006-packaging-and-deployment.md)) and the AWS reference _topology_ is already written ([deployment-aws.md](deployment-aws.md)); the acute gap as the project goes public is **discoverability, not deployability**. Building compose/k8s/Terraform recipes ahead of any operator telling us how they actually deploy is speculative, so that packaging work is deferred to a demand-driven [M7](#m7--packaging--iac-by-traction). M5 instead stands up a curated public docs site so a newcomer can go install → quickstart → deploy → operate without reading the internal design docs.
 
-**Demo:** a newcomer lands on `orchestra-hq.github.io/atlas`, follows Get started → Deploy → Operate, and is serving a model — never touching the repo's internal scaffolding. Build order: [m5-build-plan.md](m5-build-plan.md).
+**Demo:** a newcomer lands on `orchestra-hq.github.io/atlas`, follows Get started → Deploy → Operate, and is serving a model — never touching the repo's internal scaffolding. Build order: [m5-build-plan.md](internal/m5-build-plan.md).
 
 - **Docs site:** Astro Starlight, deployed to **GitHub Pages** (`orchestra-hq.github.io/atlas`); build per-PR, deploy on `main`. No custom domain (a later CNAME-only change, as with M4's installer).
 - **Curated user-facing content:** Get started (install · quickstart), Guides (Claude Code · Agent SDK · OpenAI/LangChain · models & catalog), Deploy (laptop · single GPU box · Docker · cloud fleet / AWS reference topology · hybrid — all grounded in M4-shipped artifacts, **no new packaging**), Operate (keys · usage · observability · TLS · drain/scale), Reference (CLI · API compatibility · config), About (vision · positioning).
@@ -116,11 +116,11 @@ The graphical operate surface, held until the very end: M2's `atlas status`/`atl
 
 ## M7 — Packaging & IaC (by traction)
 
-The deploy-recipe and packaging surface, **deferred here from M5** ([ADR-0014](decisions/0014-m5-rescoped-to-documentation.md)) so it is pulled by real demand rather than pushed ahead of any users. The Docker images already ship in M0.5 ([ADR-0006](decisions/0006-packaging-and-deployment.md)) and M5 documents deploying with what M4 ships; M7 adds the convenience packaging on top — prioritized by whichever deployment shape early adopters actually converge on.
+The deploy-recipe and packaging surface, **deferred here from M5** ([ADR-0014](internal/decisions/0014-m5-rescoped-to-documentation.md)) so it is pulled by real demand rather than pushed ahead of any users. The Docker images already ship in M0.5 ([ADR-0006](internal/decisions/0006-packaging-and-deployment.md)) and M5 documents deploying with what M4 ships; M7 adds the convenience packaging on top — prioritized by whichever deployment shape early adopters actually converge on.
 
-- Packaging: compose file, systemd units, k8s manifests (packaging only — no first-party operator/CRDs, per [ADR-0006](decisions/0006-packaging-and-deployment.md))
+- Packaging: compose file, systemd units, k8s manifests (packaging only — no first-party operator/CRDs, per [ADR-0006](internal/decisions/0006-packaging-and-deployment.md))
 - Reference IaC under `examples/` — AWS Terraform first (~100-line bar, see [deployment-aws.md](deployment-aws.md)); `s3://` model sources
-- TLS/ACME hardening on a real public deployment, resolving the remaining transport-security follow-ups in [follow-ups.md](follow-ups.md): self-signed cert host-change handling, ACME `:443` reconciliation
+- TLS/ACME hardening on a real public deployment, resolving the remaining transport-security follow-ups in [follow-ups.md](internal/follow-ups.md): self-signed cert host-change handling, ACME `:443` reconciliation
 
 ## Standing tracks (every milestone)
 

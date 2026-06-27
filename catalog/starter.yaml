@@ -1,6 +1,6 @@
 # Atlas starter catalog — curated, agent-tested model definitions.
 #
-# Seeded from docs/research/model-catalog-m0.md and pinned at build time
+# Seeded from docs/internal/research/model-catalog-m0.md and pinned at build time
 # (build-time decision 5: explicit versions, explicit upgrades). GGUF entries
 # carry the exact sha256 the store verifies against; Hugging Face (vLLM) entries
 # name the repo the engine resolves at boot.
@@ -8,7 +8,7 @@
 # The small llama.cpp tier boots from cold on a CPU box (and in CI) — that is
 # the phase-9 exit criterion. The larger vLLM tiers need a GPU; their cold-boot
 # conformance is the full-matrix tier, deferred with the rest of the vLLM GPU
-# run (docs/open-questions.md), and lands in the phase-11 acceptance pass.
+# run (docs/internal/open-questions.md), and lands in the phase-11 acceptance pass.
 
 models:
   # --- Small, CPU-bootable (laptop / haiku) -------------------------------
@@ -63,7 +63,7 @@ models:
 
   # --- Capable reasoning gguf tier (GPU acceptance) -----------------------
   # Qwen3-8B Q4_K_M (hybrid-thinking) is the llama.cpp half of the GPU
-  # acceptance run (docs/open-questions.md, scripts/acceptance.sh). Serving it
+  # acceptance run (docs/internal/open-questions.md, scripts/acceptance.sh). Serving it
   # through the catalog (rather than a raw -hf spec) is deliberate: it threads
   # reasoning=true so enable_thinking is gated per request, the absence of which
   # made a raw-served hybrid leak <think> blocks into non-reasoning replies
@@ -185,7 +185,7 @@ models:
   # --- MLX tiers (Apple Silicon; mlx-lm via Metal) ------------------------
   # mlx_lm.server exposes no model-metadata endpoint, so context_window here is
   # also what the gateway asserts against (worker.Config.ContextWindow). Cold-boot
-  # conformance is the Apple-Silicon nightly tier (docs/open-questions.md).
+  # conformance is the Apple-Silicon nightly tier (docs/internal/open-questions.md).
   - name: qwen2.5-1.5b-instruct-mlx
     engine: mlx
     tier: haiku
@@ -212,7 +212,7 @@ models:
 
   # --- SGLang tiers (NVIDIA GPU; prefix-cache + structured-output strengths) ---
   # Cold-boot conformance is the GPU nightly tier, shared with vLLM
-  # (docs/open-questions.md). engine_args carry SGLang's tool/reasoning parsers.
+  # (docs/internal/open-questions.md). engine_args carry SGLang's tool/reasoning parsers.
   - name: qwen2.5-7b-instruct-sglang
     engine: sglang
     tier: sonnet

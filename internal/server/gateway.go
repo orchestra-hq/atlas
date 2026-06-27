@@ -47,7 +47,7 @@ type StreamExecutor interface {
 // TokenCounter is an Executor that can count a request's prompt tokens using
 // the engine's real tokenizer. The gateway uses it for POST
 // /v1/messages/count_tokens and to assert context-window fit before dispatch
-// (docs/m0-acceptance.md). The in-process worker implements it; an executor
+// (docs/internal/m0-acceptance.md). The in-process worker implements it; an executor
 // that does not simply skips the pre-dispatch assertion.
 type TokenCounter interface {
 	CountTokens(ctx context.Context, req core.Request) (int, error)
@@ -140,7 +140,7 @@ func (m Model) ClassOrChat() string {
 // workerName is the worker's stable operator-supplied --name, which survives
 // reconnects. resolve returns the name for usage attribution so a machine's
 // ledger totals don't fragment across the many connection ids it cycles through
-// over its lifetime (M2 phase 1; docs/follow-ups.md).
+// over its lifetime (M2 phase 1; docs/internal/follow-ups.md).
 // inflight is this instance's live request count, the key least-in-flight
 // selection ranks on (ADR-0010): incremented when a request is dispatched to this
 // route and decremented once it completes (every path — success, error, cancel).
@@ -690,7 +690,7 @@ func (g *Gateway) handleMessages(w http.ResponseWriter, r *http.Request) {
 
 	// Assert the prompt fits the model's window before dispatch, so an oversized
 	// request fails with a clean 400 rather than a garbled engine overflow
-	// (docs/m0-acceptance.md context-window handling). The returned count is the
+	// (docs/internal/m0-acceptance.md context-window handling). The returned count is the
 	// prompt's input tokens, reused to attribute input usage on an interrupted
 	// stream (the engine reports usage only on a clean completion).
 	promptTokens, err := g.assertContextFits(r.Context(), model, coreReq)

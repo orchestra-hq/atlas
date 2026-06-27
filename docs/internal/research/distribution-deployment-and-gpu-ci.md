@@ -1,6 +1,6 @@
 # Research: distribution, deployment, and GPU CI
 
-How does Atlas reach users, how do they run it, and how do we prove it on real GPUs without owning a GPU? This survey grounds [ADR-0006](../decisions/0006-packaging-and-deployment.md) and the M0.5 milestone in [roadmap.md](../roadmap.md). It complements the broader project survey in [landscape.md](landscape.md).
+How does Atlas reach users, how do they run it, and how do we prove it on real GPUs without owning a GPU? This survey grounds [ADR-0006](../decisions/0006-packaging-and-deployment.md) and the M0.5 milestone in [roadmap.md](../../roadmap.md). It complements the broader project survey in [landscape.md](landscape.md).
 
 ## Two separate questions
 
@@ -38,7 +38,7 @@ Atlas's wedge is that **one binary spans laptop → single cloud box → dial-ou
 1. **Laptop:** `atlas up` (shipped, M0).
 2. **One cloud GPU box, connect from your laptop:** launch a GPU instance, `atlas up`, point `ANTHROPIC_BASE_URL` at it over an SSH tunnel or TLS. The boring, universal path — no new tooling.
 3. **One command, any cloud GPU:** a **SkyPilot** recipe — `sky launch atlas.yaml` finds the cheapest available GPU on any configured cloud, runs Atlas, idles to zero. Differentiated, and the _same YAML is reused for the nightly acceptance_.
-4. **Fleet:** dial-out workers (M1) + reference IaC under `examples/` (the ~100-line-bar Terraform in [deployment-aws.md](../deployment-aws.md)). Not an orchestrator.
+4. **Fleet:** dial-out workers (M1) + reference IaC under `examples/` (the ~100-line-bar Terraform in [deployment-aws.md](../../deployment-aws.md)). Not an orchestrator.
 
 ## GPU CI: how to prove it without owning a GPU
 

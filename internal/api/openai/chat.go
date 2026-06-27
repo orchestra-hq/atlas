@@ -1,7 +1,7 @@
 // Package openai holds the wire types for Atlas's OpenAI-compatible surface
 // (POST /v1/chat/completions — see docs/api-surface.md) and the translation
 // between those shapes and internal/core. Per build-time decision 1 in
-// docs/m0-build-plan.md the gateway owns this surface: it translates
+// docs/internal/m0-build-plan.md the gateway owns this surface: it translates
 // core⇄OpenAI wire itself rather than proxying an engine's endpoint, so one
 // set of semantics holds across every engine.
 package openai

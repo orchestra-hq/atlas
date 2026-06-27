@@ -1,5 +1,5 @@
 // Package cli wires up the atlas command tree. Subcommands land with the
-// build phases in docs/m0-build-plan.md (up, server, worker, pull, run, ps).
+// build phases in docs/internal/m0-build-plan.md (up, server, worker, pull, run, ps).
 package cli
 
 import (

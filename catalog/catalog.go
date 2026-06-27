@@ -1,5 +1,5 @@
 // Package catalog is Atlas's curated starter model catalog: agent-tested model
-// definitions seeded from docs/research/model-catalog-m0.md and pinned at build
+// definitions seeded from docs/internal/research/model-catalog-m0.md and pinned at build
 // time (build-time decision 5). The definitions are embedded so the static
 // binary needs no external files; the gateway and `atlas pull`/`atlas up`
 // resolve a model name through here to its source, engine, and serving config.

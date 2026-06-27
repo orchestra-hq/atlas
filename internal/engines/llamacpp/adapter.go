@@ -1,6 +1,6 @@
 // Package llamacpp adapts llama.cpp's bundled HTTP server (llama-server) to
 // Atlas's engine interface. Per build-time decision 1 in
-// docs/m0-build-plan.md, the adapter speaks llama-server's OpenAI-compatible
+// docs/internal/m0-build-plan.md, the adapter speaks llama-server's OpenAI-compatible
 // /v1/chat/completions endpoint (via the shared internal/engines/openaichat
 // translation); the gateway produces all Anthropic semantics, so one
 // conformance result holds across engines. Only token counting and the
@@ -83,7 +83,7 @@ func (a *Adapter) CountTokens(ctx context.Context, req core.Request) (int, error
 
 // ContextWindow returns the engine's context window (tokens), read from /props.
 // The gateway uses it to reject oversized requests pre-dispatch and to report
-// each model's window via /v1/models (docs/m0-acceptance.md).
+// each model's window via /v1/models (docs/internal/m0-acceptance.md).
 func (a *Adapter) ContextWindow(ctx context.Context) (int, error) {
 	var props propsResponse
 	if err := a.GetJSON(ctx, "/props", &props); err != nil {

@@ -42,7 +42,7 @@ changelog:
 release:
   draft: true # publish manually after sanity-checking artifacts
 
-# Cosign keyless signing (M4, docs/m4-build-plan.md). Signs checksums.txt using
+# Cosign keyless signing (M4, docs/internal/m4-build-plan.md). Signs checksums.txt using
 # GitHub Actions OIDC — no key to manage — producing checksums.txt.{sig,pem}
 # release assets. Signing OIDC is only available on the tagged release run (which
 # grants id-token: write); the per-PR `release --snapshot` dry-run skips it

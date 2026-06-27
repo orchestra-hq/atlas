@@ -1,5 +1,5 @@
 // Package vllm adapts a vLLM OpenAI-compatible server to Atlas's engine
-// interface. Per build-time decision 1 in docs/m0-build-plan.md, the adapter
+// interface. Per build-time decision 1 in docs/internal/m0-build-plan.md, the adapter
 // speaks vLLM's /v1/chat/completions endpoint (via the shared
 // internal/engines/openaichat translation); the gateway produces all Anthropic
 // semantics, so one conformance result holds across engines. Only token
@@ -77,7 +77,7 @@ func (a *Adapter) CountTokens(ctx context.Context, req core.Request) (int, error
 // ContextWindow returns the engine's context window (tokens), read as
 // max_model_len from GET /v1/models. The gateway uses it to reject oversized
 // requests pre-dispatch and to report each model's window via /v1/models
-// (docs/m0-acceptance.md).
+// (docs/internal/m0-acceptance.md).
 func (a *Adapter) ContextWindow(ctx context.Context) (int, error) {
 	var models modelsResponse
 	if err := a.GetJSON(ctx, "/v1/models", &models); err != nil {

@@ -1,10 +1,10 @@
 # M1 acceptance spec
 
-> **✅ Accepted — M1 declared done 2026-06-25.** The multi-host fleet acceptance run (the `fleet` track of [nightly-gpu.yml](../.github/workflows/nightly-gpu.yml)) is green on real separate machines: host A (`atlas server --tls-self-signed` + a co-located llama.cpp worker on a c7i) and host B (a cross-host vLLM worker serving `qwen3-8b` on a g6 GPU box, joined over `wss://` with a pinned self-signed cert). All criteria below passed — G1–G10 over the wss channel against the cross-host vLLM worker (incl. G4 thinking), G11 multi-worker routing across hosts, G12 auth, G13 usage attributed to both remote workers, and G14 drain + heartbeat-timeout — with the two hosts rendezvousing on SSM. The criteria below stay the definition of done.
+> **✅ Accepted — M1 declared done 2026-06-25.** The multi-host fleet acceptance run (the `fleet` track of [nightly-gpu.yml](../../.github/workflows/nightly-gpu.yml)) is green on real separate machines: host A (`atlas server --tls-self-signed` + a co-located llama.cpp worker on a c7i) and host B (a cross-host vLLM worker serving `qwen3-8b` on a g6 GPU box, joined over `wss://` with a pinned self-signed cert). All criteria below passed — G1–G10 over the wss channel against the cross-host vLLM worker (incl. G4 thinking), G11 multi-worker routing across hosts, G12 auth, G13 usage attributed to both remote workers, and G14 drain + heartbeat-timeout — with the two hosts rendezvousing on SSM. The criteria below stay the definition of done.
 
 ## What M1 done means
 
-The M1 demo ([roadmap.md](roadmap.md)): _`atlas server` on one host; `atlas worker --join` on separate hosts running different engines; deploy two models; one authenticated endpoint serves both._ M1 is **done** when that demo is observed green on real, separate machines — not just the correctness logic on one CI runner over loopback.
+The M1 demo ([roadmap.md](../roadmap.md)): _`atlas server` on one host; `atlas worker --join` on separate hosts running different engines; deploy two models; one authenticated endpoint serves both._ M1 is **done** when that demo is observed green on real, separate machines — not just the correctness logic on one CI runner over loopback.
 
 The fleet **logic** is already well-tested per-PR (the `conformance-fleet` CI job runs a real `atlas server` + `atlas worker --join` and exercises G1–G8, G10, G11, G12, G13, and G14's drain/timeout/wss cases). The gap is purely **topological**: everything per-PR runs on one runner over `ws(s)://127.0.0.1`, on the CPU/llama.cpp engine only. M1-done observes the same groups across genuinely separate hosts, with the GPU/vLLM engine in the fleet.
 
@@ -46,18 +46,18 @@ All observed on the topology above, against host A's `https://` endpoint, with w
 
 ## How it is gated
 
-A new **fleet track** in the nightly acceptance workflow ([nightly-gpu.yml](../.github/workflows/nightly-gpu.yml)), parallel to the existing single-node GPU/CPU tracks, provisions host A + host B and runs the criteria above. A green nightly fleet run is what flips M1 to _done_ — the same bar M0 cleared.
+A new **fleet track** in the nightly acceptance workflow ([nightly-gpu.yml](../../.github/workflows/nightly-gpu.yml)), parallel to the existing single-node GPU/CPU tracks, provisions host A + host B and runs the criteria above. A green nightly fleet run is what flips M1 to _done_ — the same bar M0 cleared.
 
 What is **already proven per-PR** (so the nightly only needs to add the cross-host/real-hardware dimension): the `conformance-fleet` job on one CI runner covers G1–G8, G10, G11, G13, and G14's drain/timeout/wss-loopback cases on llama.cpp, plus G12 via Go integration tests. The nightly fleet track does not re-prove the logic — it proves it **across machines and on vLLM**.
 
 ## Build plan (to reach the green run)
 
-1. **`scripts/acceptance-fleet.sh`** — provider-agnostic stage 2 (mirrors [acceptance.sh](../scripts/acceptance.sh)). Runs on host A: start `atlas server --tls-self-signed`, mint an admin API key, capture the pin + join token, bring up the co-located llama.cpp worker, wait for the expected models (local + the remote GPU worker) to register, run `run.py --require G1..G14` once per engine, then replay the drain / kill-9 / multi-worker-routing scenarios. Worker hosts run a thin `atlas worker --join wss://<hostA> --tls-pin <pin> --token <token>` entrypoint.
+1. **`scripts/acceptance-fleet.sh`** — provider-agnostic stage 2 (mirrors [acceptance.sh](../../scripts/acceptance.sh)). Runs on host A: start `atlas server --tls-self-signed`, mint an admin API key, capture the pin + join token, bring up the co-located llama.cpp worker, wait for the expected models (local + the remote GPU worker) to register, run `run.py --require G1..G14` once per engine, then replay the drain / kill-9 / multi-worker-routing scenarios. Worker hosts run a thin `atlas worker --join wss://<hostA> --tls-pin <pin> --token <token>` entrypoint.
 2. **Multi-host provisioning in `nightly-gpu.yml`** — the infra crux: two hosts that can reach each other (host B dials host A's wss port), provisioned via the existing `machulav/ec2-github-runner` machinery, with the pin + token + API key handed from host A to host B at launch. Requires a **networking enablement on the project owner's side** (host A reachable by host B — same VPC/security-group with the wss port open, or a public IP), analogous to the M0 AWS OIDC enablement.
-3. **Record + flip** — on a green run, mark M1 ✅ done in [roadmap.md](roadmap.md), update this doc's status banner with the run evidence, and trim the M1 "remaining" notes.
+3. **Record + flip** — on a green run, mark M1 ✅ done in [roadmap.md](../roadmap.md), update this doc's status banner with the run evidence, and trim the M1 "remaining" notes.
 
 ## Out of scope for M1-done
 
 - **Apple-Silicon / MLX worker leg** — deferred with the Apple-Silicon runner (open M2 item, [open-questions.md](open-questions.md)).
 - **ACME / public-DNS TLS** — self-signed + pin is the M1 transport; ACME `:443` reconciliation is an M5 follow-up ([follow-ups.md](follow-ups.md)).
-- **Cross-machine sharding, HA control plane** — never in M1's scope ([roadmap.md](roadmap.md)).
+- **Cross-machine sharding, HA control plane** — never in M1's scope ([roadmap.md](../roadmap.md)).

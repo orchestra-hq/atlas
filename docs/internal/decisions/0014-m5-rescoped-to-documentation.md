@@ -6,7 +6,7 @@ accepted
 
 ## Context
 
-[roadmap.md](../roadmap.md) scoped **M5 as "Packaging & deployment"**: a Docker Compose file,
+[roadmap.md](../../roadmap.md) scoped **M5 as "Packaging & deployment"**: a Docker Compose file,
 systemd units, Kubernetes manifests, and reference AWS Terraform under `examples/`, plus the
 deployment/operations docs to make a team deployment turnkey. The intent was sound when written, but
 the ground has shifted by the time M5 comes up:
@@ -16,7 +16,7 @@ the ground has shifted by the time M5 comes up:
   The worker join flow, drain, and TLS modes ([ADR-0009](0009-transport-security-tls-and-pinning.md))
   are in place. There is no missing capability blocking a real deployment — only missing _packaging
   convenience_ and missing _docs_.
-- **The AWS reference _topology_ is already written** ([deployment-aws.md](../deployment-aws.md)).
+- **The AWS reference _topology_ is already written** ([deployment-aws.md](../../deployment-aws.md)).
 - **Compose/systemd/k8s/Terraform recipes built now are speculative.** Atlas has no users yet (the
   repo is not even public — M4's go-live is owner-gated). Committing to a specific compose shape, a
   k8s manifest set, and a Terraform module _before any operator tells us how they actually deploy_
@@ -28,7 +28,7 @@ the ground has shifted by the time M5 comes up:
   "the machinery works" and "a stranger can adopt it."
 
 This is a load-bearing scope change to a roadmap milestone, so it is recorded here per
-[CLAUDE.md](../../CLAUDE.md) rule 1, with the roadmap updated in the same change.
+[CLAUDE.md](../../../CLAUDE.md) rule 1, with the roadmap updated in the same change.
 
 ## Decision
 

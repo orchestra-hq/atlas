@@ -245,7 +245,7 @@ func TestUsageRecordsCanonicalModelName(t *testing.T) {
 // per-connection id, and that attribution survives a reconnect (a fresh
 // connection id for the same machine). Otherwise `atlas usage --by-worker` would
 // fragment one machine's totals across every connection id it ever held
-// (docs/follow-ups.md).
+// (docs/internal/follow-ups.md).
 func TestUsageAttributedToStableWorkerName(t *testing.T) {
 	rec := &recordingUsage{}
 	g := NewGateway(staticAuth(testKey), nil, nil)

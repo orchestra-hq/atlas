@@ -163,7 +163,7 @@ jobs:
       # real-Claude-Code drop-in cell is opt-in (CONF_CLAUDE_CODE_SMOKE) — the
       # 1.5B CPU-tier model drives Claude Code only intermittently, so that cell
       # and the vLLM full matrix are the capable/GPU acceptance tier (M0 "done"
-      # is gated on that run; see docs/open-questions.md), not the per-PR CPU gate.
+      # is gated on that run; see docs/internal/open-questions.md), not the per-PR CPU gate.
       - name: Run harness
         run: |
           uv run --locked python run.py \
@@ -591,7 +591,7 @@ jobs:
   conformance-m3:
     name: Conformance (M3)
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    # The per-PR M3 conformance tier (docs/m3-acceptance.md): G19 affinity, G20
+    # The per-PR M3 conformance tier (docs/internal/m3-acceptance.md): G19 affinity, G20
     # embeddings + reranker classes, G21 audit log, G22 cloud-fallback — driven
     # end to end against a real two-process llama.cpp deployment + a stub upstream
     # by scripts/conformance-m3.sh (which builds atlas, pulls the models, mints a

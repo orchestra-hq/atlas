@@ -6,7 +6,7 @@
 # teardown) applies, but the topology spans two machines, so this script also
 # coordinates a remote worker over AWS SSM Parameter Store.
 #
-# Topology (see docs/m1-acceptance.md — the decided heterogeneous two-engine fleet):
+# Topology (see docs/internal/m1-acceptance.md — the decided heterogeneous two-engine fleet):
 #
 #   host A (here): atlas server --tls-self-signed   +   a co-located llama.cpp worker
 #   host B (GPU) : atlas worker on vLLM, dials host A's wss:// endpoint cross-host
@@ -240,7 +240,7 @@ done
 echo "==> Both models routable after ${waited}s ($LLAMACPP_MODEL local, $VLLM_MODEL remote)"
 
 # ============================================================================
-#  Acceptance criteria (docs/m1-acceptance.md)
+#  Acceptance criteria (docs/internal/m1-acceptance.md)
 # ============================================================================
 overall=0
 fail() { echo "::error::$*" >&2; overall=1; }

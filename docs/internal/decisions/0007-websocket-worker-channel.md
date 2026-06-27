@@ -63,4 +63,4 @@ The gateway's worker view is three methods (`Execute`, `ExecuteStream`, `CountTo
 - No protobuf schema or code generation in the repo.
 - TLS for the `wss://` production endpoint is a separate concern, decided in [ADR-0009](0009-transport-security-tls-and-pinning.md) (M1 phase 7: ACME for public servers, self-signed + pinned for private deployments).
 - The in-process channel (`atlas up` single-node mode) is kept alongside the WebSocket implementation; both satisfy the same `WorkerChannel` interface. Nothing about single-node mode changes for existing users.
-- Scaling limit: all inference bytes transit the server. Acceptable for v1 (token streams are small). A "direct data plane" optimisation (gateway redirects to a worker that chooses to expose a port) can be added later without changing the model — stated in [architecture.md](../architecture.md).
+- Scaling limit: all inference bytes transit the server. Acceptable for v1 (token streams are small). A "direct data plane" optimisation (gateway redirects to a worker that chooses to expose a port) can be added later without changing the model — stated in [architecture.md](../../architecture.md).

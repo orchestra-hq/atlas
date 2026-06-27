@@ -1,7 +1,7 @@
 // Package openaichat is the shared core⇄OpenAI chat-completions translation
 // used by every engine adapter that speaks an OpenAI-compatible endpoint
 // (llama.cpp, vLLM, and SGLang later). Per build-time decision 1 in
-// docs/m0-build-plan.md the gateway owns all Anthropic semantics; adapters only
+// docs/internal/m0-build-plan.md the gateway owns all Anthropic semantics; adapters only
 // translate to and from the engine's OpenAI wire, and that translation is
 // identical across engines — so it lives here once. Engine-specific endpoints
 // (token counting, context window) stay in each adapter.

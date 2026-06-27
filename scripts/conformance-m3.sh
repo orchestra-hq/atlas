@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# conformance-m3.sh — the per-PR M3 conformance tier (docs/m3-acceptance.md).
+# conformance-m3.sh — the per-PR M3 conformance tier (docs/internal/m3-acceptance.md).
 #
 # Drives the four M3 conformance groups against a real two-process llama.cpp
 # deployment (CPU, no special hardware) plus a stub upstream for cloud-fallback:

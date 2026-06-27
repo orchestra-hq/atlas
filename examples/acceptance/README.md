@@ -1,8 +1,8 @@
 # GPU acceptance run
 
-The capable/GPU acceptance run is what flipped **M0 to "done"** (2026-06-25; see [docs/roadmap.md](../../docs/roadmap.md) M0.5, [ADR-0006](../../docs/decisions/0006-packaging-and-deployment.md), and [docs/m0-acceptance.md](../../docs/m0-acceptance.md)). It runs the full conformance gate (`G1–G10`) plus the real Claude Code drop-in smoke (`CONF_CLAUDE_CODE_SMOKE=1`) on a capable model, on **both** the llama.cpp and vLLM engines, on a real GPU.
+The capable/GPU acceptance run is what flipped **M0 to "done"** (2026-06-25; see [docs/roadmap.md](../../docs/roadmap.md) M0.5, [ADR-0006](../../docs/internal/decisions/0006-packaging-and-deployment.md), and [docs/internal/m0-acceptance.md](../../docs/internal/m0-acceptance.md)). It runs the full conformance gate (`G1–G10`) plus the real Claude Code drop-in smoke (`CONF_CLAUDE_CODE_SMOKE=1`) on a capable model, on **both** the llama.cpp and vLLM engines, on a real GPU.
 
-A third **fleet track** ([see below](#fleet-track-m1-multi-host-acceptance)) reuses this same machinery across **two** boxes and guards **M1** — `G1–G14` on a genuine multi-host deployment ([docs/m1-acceptance.md](../../docs/m1-acceptance.md)). Two further **engine-breadth tracks** — `sglang` (NVIDIA) and `mlx` (Apple Silicon) — guard **M2's** G17 ([see below](#engine-breadth-tracks-m2-g17)). All five run on the nightly schedule.
+A third **fleet track** ([see below](#fleet-track-m1-multi-host-acceptance)) reuses this same machinery across **two** boxes and guards **M1** — `G1–G14` on a genuine multi-host deployment ([docs/internal/m1-acceptance.md](../../docs/internal/m1-acceptance.md)). Two further **engine-breadth tracks** — `sglang` (NVIDIA) and `mlx` (Apple Silicon) — guard **M2's** G17 ([see below](#engine-breadth-tracks-m2-g17)). All five run on the nightly schedule.
 
 ## Three decoupled stages
 
@@ -50,7 +50,7 @@ Then trigger a manual **Run workflow** once to validate before trusting the sche
 
 ## Fleet track (M1 multi-host acceptance)
 
-The `fleet` track ([`docs/m1-acceptance.md`](../../docs/m1-acceptance.md)) is the multi-host run that closes out **M1**. It provisions **two** ephemeral boxes in the same VPC/SG — host A (`c7i.4xlarge`: `atlas server --tls-self-signed` + a co-located llama.cpp worker) and host B (`g6.2xlarge`: a cross-host vLLM worker) — and runs `G1–G14` across them. Stage 2 is split in two: [`scripts/acceptance-fleet.sh`](../../scripts/acceptance-fleet.sh) on host A and [`scripts/acceptance-fleet-worker.sh`](../../scripts/acceptance-fleet-worker.sh) on host B.
+The `fleet` track ([`docs/internal/m1-acceptance.md`](../../docs/internal/m1-acceptance.md)) is the multi-host run that closes out **M1**. It provisions **two** ephemeral boxes in the same VPC/SG — host A (`c7i.4xlarge`: `atlas server --tls-self-signed` + a co-located llama.cpp worker) and host B (`g6.2xlarge`: a cross-host vLLM worker) — and runs `G1–G14` across them. Stage 2 is split in two: [`scripts/acceptance-fleet.sh`](../../scripts/acceptance-fleet.sh) on host A and [`scripts/acceptance-fleet-worker.sh`](../../scripts/acceptance-fleet-worker.sh) on host B.
 
 The two hosts run concurrently and **rendezvous on AWS SSM Parameter Store**: host A publishes a SecureString join bundle (private IP, wss cert pin, join token, API key) and host B reads it to dial host A's `wss://` endpoint, then waits for host A's "done" flag.
 
@@ -61,7 +61,7 @@ It runs on the nightly schedule (in the default `tracks`); run just this track o
 
 ## Engine-breadth tracks (M2 G17)
 
-Two tracks close out **M2's** engine breadth ([docs/m2-acceptance.md](../../docs/m2-acceptance.md)) by running the conformance suite on the two engines the per-PR CPU runner can't host. Both reuse stage 2 (`scripts/acceptance.sh`) unchanged — only `ACCEPTANCE_ENGINES` and the gate scope differ. Each scopes to `G1–G8,G10` (via `CONF_REQUIRE`) with the Claude Code smoke off (`CONF_CLAUDE_CODE_SMOKE=0`): the agent badge (G9) stays earned on the larger nightly models.
+Two tracks close out **M2's** engine breadth ([docs/internal/m2-acceptance.md](../../docs/internal/m2-acceptance.md)) by running the conformance suite on the two engines the per-PR CPU runner can't host. Both reuse stage 2 (`scripts/acceptance.sh`) unchanged — only `ACCEPTANCE_ENGINES` and the gate scope differ. Each scopes to `G1–G8,G10` (via `CONF_REQUIRE`) with the Claude Code smoke off (`CONF_CLAUDE_CODE_SMOKE=0`): the agent badge (G9) stays earned on the larger nightly models.
 
 - **`sglang`** — a second NVIDIA-GPU server. Provisioned exactly like the GPU/vLLM track (on-demand `g6.2xlarge`, same AMI, machulav start/stop), serving the SGLang catalog models (`qwen2.5-7b-instruct-sglang` + the reasoning `qwen3-8b-sglang`). No new account-side prerequisites beyond the GPU setup above.
 - **`mlx`** — MLX on Apple Silicon (`darwin/arm64`, Metal). It runs on a **`blacksmith-6vcpu-macos-latest`** hosted runner (the project owner's call, 2026-06-25), so there is **no machulav/EC2 provisioning** — the acceptance job `runs-on` the managed macOS runner directly, with no start/stop jobs and no AWS credentials. The shipped MLX catalog tier is non-reasoning, so G4's thinking cases skip and its graceful-degradation case runs.
