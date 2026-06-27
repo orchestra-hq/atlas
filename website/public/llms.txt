@@ -1,0 +1,37 @@
+# Atlas
+
+> Atlas is an open source, self-hosted LLM inference platform. It orchestrates existing inference engines (vLLM, SGLang, llama.cpp, MLX) and exposes Anthropic-compatible (`/v1/messages`) and OpenAI-compatible APIs, so agents and apps built on the Claude Agent SDK, Claude Code, or OpenAI SDKs can be pointed at hardware you control with a one-line config change (`ANTHROPIC_BASE_URL`).
+
+Atlas runs on a laptop, a single GPU box, or a fleet of GPU machines across clouds. Workers dial out to a control plane (no inbound ports), and the same single binary scales from `atlas up` on a laptop to a multi-node cluster.
+
+## Get started
+
+- [Installation](https://orchestra-hq.github.io/atlas/get-started/installation/): Homebrew, the one-line installer, or the container image.
+- [Quickstart](https://orchestra-hq.github.io/atlas/get-started/quickstart/): serve a model with `atlas up` and drive Claude Code against it.
+
+## Guides
+
+- [Use with Claude Code](https://orchestra-hq.github.io/atlas/guides/claude-code/): the Anthropic Messages API drop-in, aliases, and thinking blocks.
+- [Use with OpenAI SDKs & LangChain](https://orchestra-hq.github.io/atlas/guides/openai-and-other-clients/): the OpenAI-compatible surface.
+- [Models & the catalog](https://orchestra-hq.github.io/atlas/guides/models/): model classes, reasoning, aliases, and your own weights.
+
+## Deploy
+
+- [Deploy overview](https://orchestra-hq.github.io/atlas/deploy/): laptop, Docker, single GPU box, or a cloud fleet.
+- [Cloud fleet](https://orchestra-hq.github.io/atlas/deploy/cloud-fleet/): dial-out workers behind one endpoint, hybrid topologies.
+
+## Operate
+
+- [API keys](https://orchestra-hq.github.io/atlas/operate/api-keys/): mint, scope, and revoke client keys.
+- [Observability](https://orchestra-hq.github.io/atlas/operate/observability/): Prometheus metrics and the `atlas status`/`top` CLI.
+- [TLS](https://orchestra-hq.github.io/atlas/operate/tls/): ACME, an operator certificate, or self-signed + pin.
+
+## Reference
+
+- [API compatibility](https://orchestra-hq.github.io/atlas/reference/api-compatibility/): the Anthropic + OpenAI surfaces and what's out of scope.
+- [CLI](https://orchestra-hq.github.io/atlas/reference/cli/): the `atlas` commands.
+
+## About
+
+- [Vision](https://orchestra-hq.github.io/atlas/about/vision/): point your agents at your own hardware.
+- [Why Atlas](https://orchestra-hq.github.io/atlas/about/why-atlas/): differentiators and comparisons.
