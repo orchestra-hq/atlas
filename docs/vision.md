@@ -40,6 +40,6 @@ The components of this product exist and several projects (GPUStack most directl
 
 ## Success criteria for v1
 
-- A developer can go from `curl -fsSL get.atlas.dev | sh` to Claude Code running against a local open model in under 10 minutes.
+- A developer can go from `brew install orchestra-hq/tap/atlas` (or `curl -fsSL …/install.sh | sh`) to Claude Code running against a local open model in under 10 minutes.
 - A team can join three GPU machines to one control plane and serve two models behind one authenticated endpoint without touching Kubernetes.
 - An existing app using the Anthropic SDK works against Atlas by changing only `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, and model name (or relying on alias mapping).

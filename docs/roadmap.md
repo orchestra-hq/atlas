@@ -84,6 +84,8 @@ Deferred from M3 (revisit by traction):
 
 ## M4 — Deliverability: "the frictionless install"
 
+**Status: ✅ done (2026-06-27).** The deliverability machinery — `install.sh`, cosign keyless signing, and the Homebrew formula pushed to `orchestra-hq/homebrew-tap` via a dedicated Release App — is built and proven end-to-end by the `v0.1.0` release run. The public channels (`brew install` / `curl | sh`) light up on the owner's go-live flip (repo public + publish the draft); see [m4-build-plan.md](m4-build-plan.md).
+
 **Demo:** a newcomer runs `brew install orchestra-hq/tap/atlas` (or `curl -fsSL <install.sh> | sh`) and is serving a model in one command. Build order + decisions: [m4-build-plan.md](m4-build-plan.md). Until M4 the binary is installed from GitHub Releases / the container image (M0.5, [ADR-0006](decisions/0006-packaging-and-deployment.md)).
 
 - **Homebrew tap** — a public, reusable `orchestra-hq/homebrew-tap` repo; GoReleaser publishes the formula on each release, pushing via a dedicated "Atlas Release" GitHub App (short-lived token, no PAT).

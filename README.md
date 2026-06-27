@@ -2,7 +2,21 @@
 
 Atlas is an open source, self-hosted LLM inference platform. It lets you run open-weight models on hardware **you** control — a laptop, a single GPU box, or a fleet of GPU machines across clouds — and exposes the APIs that agents and apps already speak, so you can point existing tooling (the Claude Agent SDK, Claude Code, OpenAI-compatible clients) at your own infrastructure with a one-line config change.
 
-**Status: M0–M3 done (M3 declared 2026-06-26), M4 next.** M0 ("Claude Code on your own box"), M0.5 ("Release & prove"), M1 ("Fleet"), M2 ("Operate from the terminal"), and M3 ("Ecosystem & differentiation deepeners") are complete — M0/M0.5 acceptance is green on both engines with the real Claude Code drop-in proven on a GPU ([docs/m0-acceptance.md](docs/m0-acceptance.md)), M1's multi-host fleet acceptance (G1–G14 across two machines, two engines) is green ([docs/m1-acceptance.md](docs/m1-acceptance.md)), M2's engine-breadth acceptance (MLX on Apple Silicon + SGLang on GPU) is green alongside the per-PR observability/backpressure gates ([docs/m2-acceptance.md](docs/m2-acceptance.md)), and M3's affinity routing, embeddings/reranker classes, audit log, and cloud-fallback are proven by the per-PR G19–G22 conformance ([docs/m3-acceptance.md](docs/m3-acceptance.md)). Design truth in `docs/` is the source of truth.
+**Status: M0–M4 done (M4 declared 2026-06-27), M5 next.** M0 ("Claude Code on your own box"), M0.5 ("Release & prove"), M1 ("Fleet"), M2 ("Operate from the terminal"), M3 ("Ecosystem & differentiation deepeners"), and M4 ("Deliverability") are complete — M0/M0.5 acceptance is green on both engines with the real Claude Code drop-in proven on a GPU ([docs/m0-acceptance.md](docs/m0-acceptance.md)), M1's multi-host fleet acceptance (G1–G14 across two machines, two engines) is green ([docs/m1-acceptance.md](docs/m1-acceptance.md)), M2's engine-breadth acceptance (MLX on Apple Silicon + SGLang on GPU) is green alongside the per-PR observability/backpressure gates ([docs/m2-acceptance.md](docs/m2-acceptance.md)), M3's affinity routing, embeddings/reranker classes, audit log, and cloud-fallback are proven by the per-PR G19–G22 conformance ([docs/m3-acceptance.md](docs/m3-acceptance.md)), and M4's install machinery (`install.sh`, cosign signing, Homebrew tap) is proven by the `v0.1.0` release run ([docs/m4-build-plan.md](docs/m4-build-plan.md)). Design truth in `docs/` is the source of truth.
+
+## Install
+
+Once a release is published, install the `atlas` binary via Homebrew or the one-line installer:
+
+```sh
+# Homebrew (macOS / Linuxbrew)
+brew install orchestra-hq/tap/atlas
+
+# or the one-line installer (detects OS/arch, verifies checksum + cosign signature)
+curl -fsSL https://raw.githubusercontent.com/orchestra-hq/atlas/main/install.sh | sh
+```
+
+Or run the container image: `docker run ghcr.io/orchestra-hq/atlas:slim` (CPU) / `:cuda` (GPU) — see [docs/docker.md](docs/docker.md). Then `atlas up` to serve a model.
 
 ## Why
 
