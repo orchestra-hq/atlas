@@ -1,0 +1,3 @@
+# The docs site (Astro Starlight) has its own toolchain and formatting
+# conventions; it is built + link-checked by .github/workflows/docs-site.yml.
+website/

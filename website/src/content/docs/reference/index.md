@@ -1,11 +1,9 @@
 ---
 title: Reference
-description: CLI, API compatibility, and configuration.
+description: The atlas CLI and the API compatibility surface.
 ---
 
-The `atlas` CLI, the API compatibility surface (Anthropic + OpenAI), and configuration / environment
-variables.
-
-:::note[Coming soon]
-This section is being populated as part of Atlas M5 (see the build plan).
-:::
+- **[API compatibility](/atlas/reference/api-compatibility/)** — the Anthropic-compatible and
+  OpenAI-compatible surfaces, error mapping, and what is intentionally out of scope.
+- **[CLI](/atlas/reference/cli/)** — the `atlas` commands for serving, the fleet, models, keys, and
+  usage.

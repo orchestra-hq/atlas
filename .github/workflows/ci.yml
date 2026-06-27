@@ -637,6 +637,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       # Same tools the pre-commit hook runs; versions pinned so CI does not
-      # drift from what contributors see locally.
+      # drift from what contributors see locally. website/ is excluded (its own
+      # toolchain): prettier honors .prettierignore; markdownlint takes a negated glob.
       - run: npx --yes prettier@3.8.4 --check "**/*.md"
-      - run: npx --yes markdownlint-cli2@0.22.1 "**/*.md"
+      - run: npx --yes markdownlint-cli2@0.22.1 "**/*.md" "!website"
