@@ -1,9 +1,11 @@
 name: Docs site
 
 # Build the Astro Starlight docs site on every PR that touches it (machinery proven
-# per-PR), and deploy to GitHub Pages on main. Going live is owner-gated: enable
-# Pages (Settings → Pages → Source: GitHub Actions) once; until then the build job
-# still runs and the deploy job is a no-op-until-enabled. See docs/internal/m5-build-plan.md.
+# per-PR), and on main publish website/dist to the `gh-pages` branch. We deploy via a
+# branch (Pages Source: "Deploy from a branch" → gh-pages /) rather than the GitHub
+# Actions Pages flow on purpose: a branch is plain git and does NOT consume the
+# org-wide Actions artifact storage quota, which the actions/upload-pages-artifact
+# path kept hitting. See docs/internal/m5-build-plan.md.
 
 on:
   push:
@@ -27,6 +29,8 @@ defaults:
 jobs:
   build:
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: write # push the built site to the gh-pages branch (main only)
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v6
@@ -38,26 +42,22 @@ jobs:
       # `astro build` runs the starlight-links-validator plugin, so a broken
       # internal link fails the build — this is the per-PR link check.
       - run: npm run build
-      # Upload the Pages artifact only on main (the deploy path) — for both a push
-      # and a manual run. PRs prove the build + link check and skip the upload, so
-      # they don't consume the org-wide Actions artifact storage quota. Keep this
-      # condition in lock-step with the deploy job's `if` below.
-      - if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: website/dist
-
-  deploy:
-    # Only on main, and only after a green build. Requires Pages enabled on the repo.
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    needs: build
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      # On main (push or manual run), publish the built site to the gh-pages branch.
+      # Plain git force-push — no Actions artifact, so the storage quota never applies.
+      # `.nojekyll` stops Pages' Jekyll from dropping Astro's `_astro/` asset dir.
+      - name: Publish to gh-pages
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          touch dist/.nojekyll
+          cd dist
+          git init -q
+          git checkout -q -b gh-pages
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              add -A
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -qm "deploy docs site @ ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
