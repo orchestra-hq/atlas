@@ -38,10 +38,11 @@ jobs:
       # `astro build` runs the starlight-links-validator plugin, so a broken
       # internal link fails the build — this is the per-PR link check.
       - run: npm run build
-      # Upload the Pages artifact only on main (the deploy path). PRs prove the
-      # build + link check and skip the upload, so they don't consume the org-wide
-      # Actions artifact storage quota (a known shared constraint; see M4 notes).
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      # Upload the Pages artifact only on main (the deploy path) — for both a push
+      # and a manual run. PRs prove the build + link check and skip the upload, so
+      # they don't consume the org-wide Actions artifact storage quota. Keep this
+      # condition in lock-step with the deploy job's `if` below.
+      - if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v4
         with:
           path: website/dist
