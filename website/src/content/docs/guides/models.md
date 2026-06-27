@@ -1,6 +1,8 @@
 ---
 title: Models & the catalog
 description: The starter catalog, model classes, aliases, and serving your own weights.
+sidebar:
+  order: 3
 ---
 
 Atlas ships a **starter catalog** of agent-tested models with the correct chat templates, tool

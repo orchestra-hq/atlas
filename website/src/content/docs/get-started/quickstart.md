@@ -1,6 +1,8 @@
 ---
 title: Quickstart
 description: Serve an open model with atlas up and drive Claude Code against it.
+sidebar:
+  order: 2
 ---
 
 This is the hero path: run an open model on your own machine and drive Claude Code against it — no GPU
