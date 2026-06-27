@@ -188,6 +188,7 @@ jobs:
         working-directory: conformance
       - uses: actions/upload-artifact@v7
         if: always()
+        continue-on-error: true # never red a green gate on an artifact-quota blip
         with:
           name: conformance-matrix
           path: |
@@ -582,6 +583,7 @@ jobs:
           for p in server.pid as-server.pid tls-server.pid; do kill "$(cat $p 2>/dev/null)" 2>/dev/null || true; done
       - uses: actions/upload-artifact@v7
         if: always()
+        continue-on-error: true # never red a green gate on an artifact-quota blip
         with:
           name: conformance-fleet-matrix
           path: conformance/results/matrix.json
@@ -620,6 +622,7 @@ jobs:
         run: bash scripts/conformance-m3.sh
       - uses: actions/upload-artifact@v7
         if: always()
+        continue-on-error: true # never red a green gate on an artifact-quota blip
         with:
           name: conformance-m3-logs
           path: |
