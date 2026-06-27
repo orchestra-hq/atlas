@@ -1,6 +1,6 @@
 # Running Atlas with Docker
 
-Atlas ships container images alongside the static binary (see [ADR-0006](internal/decisions/0006-packaging-and-deployment.md)). Like the binary, the image is **one artifact with the role chosen by subcommand** — the entrypoint is `atlas`, so `docker run … atlas-image up` runs `atlas up`, `… pull qwen3-0.6b` runs `atlas pull`, and so on.
+Atlas ships container images alongside the static binary (see [ADR-0006](decisions/0006-packaging-and-deployment.md)). Like the binary, the image is **one artifact with the role chosen by subcommand** — the entrypoint is `atlas`, so `docker run … atlas-image up` runs `atlas up`, `… pull qwen3-0.6b` runs `atlas pull`, and so on.
 
 Images are published to GitHub Container Registry under `ghcr.io/orchestra-hq/atlas`.
 
@@ -71,7 +71,7 @@ The totals are durable across restarts. A stream interrupted partway (worker dro
 
 ## TLS
 
-`atlas server` serves plaintext (`ws://`/`http://`) by default — fine behind an SSH tunnel or on a trusted network. For an exposed endpoint, pick one TLS mode ([ADR-0009](internal/decisions/0009-transport-security-tls-and-pinning.md)):
+`atlas server` serves plaintext (`ws://`/`http://`) by default — fine behind an SSH tunnel or on a trusted network. For an exposed endpoint, pick one TLS mode ([ADR-0009](decisions/0009-transport-security-tls-and-pinning.md)):
 
 - `--tls-acme-domain <name>` — Let's Encrypt for a public DNS name (the server must be reachable on `:443`). Clients and workers trust it through the system root store; no pin needed.
 - `--tls-cert <pem> --tls-key <pem>` — an operator-supplied certificate.
@@ -81,7 +81,7 @@ The cert pin is stable across restarts (the self-signed material is cached), so 
 
 ## Building locally
 
-The [`Dockerfile`](../Dockerfile) is multi-stage with named targets:
+The [`Dockerfile`](../../Dockerfile) is multi-stage with named targets:
 
 ```bash
 docker build --target slim -t atlas:slim .

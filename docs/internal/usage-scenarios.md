@@ -24,7 +24,7 @@ This is great for development, evals, and offline work. A small model drives Cla
 
 ## Single cloud GPU
 
-The credibility path: a capable model on one rented ~24GB GPU, vLLM under the hood, your tools pointed at it. Two recipes (full detail in [examples/serve/](../examples/serve/README.md)):
+The credibility path: a capable model on one rented ~24GB GPU, vLLM under the hood, your tools pointed at it. Two recipes (full detail in [examples/serve/](../../examples/serve/README.md)):
 
 - **SkyPilot one-command** — `sky launch examples/serve/atlas-serve.sky.yaml …` brings up the cheapest available GPU across your clouds and serves a model. Best when you want it picked for you.
 - **Single box + SSH tunnel** — already have a GPU box (any cloud, or your own)? Install the binary or the [CUDA image](docker.md), serve bound to localhost, and reach it over an SSH tunnel. Zero extra tooling, nothing exposed.
@@ -37,13 +37,13 @@ ANTHROPIC_BASE_URL=http://<your-endpoint> ANTHROPIC_API_KEY=<your key> claude
 
 ## Fleet (several machines)
 
-> Lands in **M1** ([roadmap](roadmap.md)) — described here so you can see where it goes.
+> Lands in **M1** ([roadmap](../roadmap.md)) — described here so you can see where it goes.
 
 Run `atlas server` on a small always-on box, then `atlas worker --join <token>` on each GPU machine (a 4090 under your desk, a cloud box, a customer's host). Workers **dial out** to the server (ADR-0003) — no inbound ports on the compute boxes — and one authenticated endpoint serves models across all of them. The same binary, the same API surface; only the topology grows.
 
 ## See also
 
 - [docs/docker.md](docker.md) — the container images (slim + CUDA)
-- [examples/serve/](../examples/serve/README.md) — the cloud-GPU serve recipes
+- [examples/serve/](../../examples/serve/README.md) — the cloud-GPU serve recipes
 - [docs/api-surface.md](api-surface.md) — exactly what the endpoint exposes
 - [docs/deployment-aws.md](deployment-aws.md) — reference AWS topology and the requirements it imposes

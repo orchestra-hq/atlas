@@ -1,6 +1,6 @@
 # Conformance suite
 
-The executable spec of Atlas's compat promise. What it tests and why lives in [docs/conformance-suite.md](../docs/conformance-suite.md); this directory is the harness that runs it.
+The executable spec of Atlas's compat promise. What it tests and why lives in [docs/internal/conformance-suite.md](../docs/internal/conformance-suite.md); this directory is the harness that runs it.
 
 ## Layout
 
@@ -122,7 +122,7 @@ One structured record per test, merged across pytest and vitest — this artifac
 }
 ```
 
-Group status: `fail` if any cell fails, else `pass` if any passes, else `skip`. A group with no cells at all is a harness error — every group in docs/conformance-suite.md must keep at least one (possibly placeholder) test, so the criterion mapping stays bidirectional. `flakes`/`retries` are reserved: the one-retry flake policy starts mattering when real engines join the matrix.
+Group status: `fail` if any cell fails, else `pass` if any passes, else `skip`. A group with no cells at all is a harness error — every group in docs/internal/conformance-suite.md must keep at least one (possibly placeholder) test, so the criterion mapping stays bidirectional. `flakes`/`retries` are reserved: the one-retry flake policy starts mattering when real engines join the matrix.
 
 Every pytest test carries `group` / `criterion` / `client` markers; vitest tests carry the same coordinates in their title as `[Gx][cN][client]`.
 

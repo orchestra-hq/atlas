@@ -14,7 +14,7 @@ import (
 
 // G12 (auth, M1 phase 5) at the integration level: the real SQLite key store,
 // the production keyAuth adapter, and a real gateway, exercising the full client
-// auth contract from docs/conformance-suite.md G12. The unit-level pieces live
+// auth contract from docs/internal/conformance-suite.md G12. The unit-level pieces live
 // in internal/db (store) and internal/server (gateway 401/403/500); this test
 // proves they compose — including that a revoke through the store is visible to a
 // live gateway on the very next request, with no restart or cache window.

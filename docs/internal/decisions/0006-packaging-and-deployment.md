@@ -6,7 +6,7 @@
 
 M0's build phases are code-complete, but M0 cannot be declared done until the acceptance suite is observed on a real GPU (vLLM all groups + the real Claude Code smoke on a capable model — see [open-questions.md](../open-questions.md)). That forced a set of distribution/deployment questions earlier than the roadmap had them: does Atlas ship as a Docker image or just a process? Do we ship CloudFormation/EKS/Terraform? How do we run a nightly GPU check without owning a GPU? The survey and reasoning are in [research/distribution-deployment-and-gpu-ci.md](../research/distribution-deployment-and-gpu-ci.md).
 
-Existing decisions this builds on: single binary with `server`/`worker`/`up` roles and outbound-dialing workers (ADR-0003); managed engine runtimes downloaded into the state dir ([m0-build-plan.md](../m0-build-plan.md)); IaC as reference examples only, ~100-line bar ([deployment-aws.md](../../deployment-aws.md)).
+Existing decisions this builds on: single binary with `server`/`worker`/`up` roles and outbound-dialing workers (ADR-0003); managed engine runtimes downloaded into the state dir ([m0-build-plan.md](../m0-build-plan.md)); IaC as reference examples only, ~100-line bar ([deployment-aws.md](../deployment-aws.md)).
 
 ## Decision
 

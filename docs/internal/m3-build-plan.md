@@ -1,6 +1,6 @@
 # M3 build plan
 
-The ordered path from M2's operable fleet to a fleet that is **differentiated and trustworthy for real agent stacks**: keep multi-turn conversations on warm hardware, serve the embedding/rerank model classes a RAG stack needs, record an audit trail of who changed what, and spill overflow to a real provider instead of dropping it. This refines the M3 milestone in [roadmap.md](../roadmap.md); design truth still lives in [architecture.md](../architecture.md) and the relevant ADRs.
+The ordered path from M2's operable fleet to a fleet that is **differentiated and trustworthy for real agent stacks**: keep multi-turn conversations on warm hardware, serve the embedding/rerank model classes a RAG stack needs, record an audit trail of who changed what, and spill overflow to a real provider instead of dropping it. This refines the M3 milestone in [roadmap.md](../roadmap.md); design truth still lives in [architecture.md](architecture.md) and the relevant ADRs.
 
 M3 is the roadmap's "ecosystem & differentiation deepeners (pick by traction)" milestone, so its first job is to **pick**. Of the five candidate threads, M3 takes the four that compound M2's momentum and serve Atlas's thesis — _point your own agents at your own hardware_ — and explicitly defers the two heaviest:
 
@@ -49,7 +49,7 @@ Phase 2 is the largest thread — it widens Atlas from a chat-inference platform
 
 ## Conformance groups added in M3
 
-These extend the suite defined in [conformance-suite.md](../conformance-suite.md).
+These extend the suite defined in [conformance-suite.md](conformance-suite.md).
 
 ### G19 — Prefix/session-affinity routing
 

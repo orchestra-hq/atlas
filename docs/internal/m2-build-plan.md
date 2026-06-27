@@ -1,6 +1,6 @@
 # M2 build plan
 
-The ordered path from M1's multi-machine fleet to a fleet you can **operate from the terminal**: see what it is doing, keep it healthy under load, run it on more hardware, and trust the catalog. This refines the M2 milestone in [roadmap.md](../roadmap.md); design truth still lives in [architecture.md](../architecture.md) and the relevant ADRs.
+The ordered path from M1's multi-machine fleet to a fleet you can **operate from the terminal**: see what it is doing, keep it healthy under load, run it on more hardware, and trust the catalog. This refines the M2 milestone in [roadmap.md](../roadmap.md); design truth still lives in [architecture.md](architecture.md) and the relevant ADRs.
 
 M2 is deliberately terminal-first. The **web console** and **packaging + reference IaC** that earlier drafts put in M2 are pulled out into their own later milestones (roadmap M6 and M5) — the console because operating the fleet from the CLI defers the need for a GUI, and packaging because it is a large, independent body of ops work. What is left is the runtime depth and observability that make a fleet operable at all.
 
@@ -51,7 +51,7 @@ Phase 4 shipped as three focused PRs: **4a** applies per-model sampling defaults
 
 ## Conformance groups added in M2
 
-These extend the suite defined in [conformance-suite.md](../conformance-suite.md).
+These extend the suite defined in [conformance-suite.md](conformance-suite.md).
 
 ### G15 — Observability
 

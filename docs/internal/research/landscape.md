@@ -29,7 +29,7 @@ vLLM, Ollama, and exo all now expose Anthropic-compatible endpoints, and LiteLLM
 
 ### 2. The architecture question is settled in the field
 
-Every multi-machine system converges on the same shape: **a CPU-only control plane** (API gateway, scheduler, registry, UI) **+ a worker agent per GPU machine** that registers with the control plane (GPUStack uses token-based worker auth) and runs the actual engine. The control plane schedules model instances onto workers based on resources; the gateway routes inference requests to the right worker. This directly answers "is it a job distributor with a process per GPU machine?" — yes, and we should not be clever about it. Details in [architecture.md](../../architecture.md).
+Every multi-machine system converges on the same shape: **a CPU-only control plane** (API gateway, scheduler, registry, UI) **+ a worker agent per GPU machine** that registers with the control plane (GPUStack uses token-based worker auth) and runs the actual engine. The control plane schedules model instances onto workers based on resources; the gateway routes inference requests to the right worker. This directly answers "is it a job distributor with a process per GPU machine?" — yes, and we should not be clever about it. Details in [architecture.md](../architecture.md).
 
 ### 3. Don't write an engine; don't even favor one
 

@@ -13,7 +13,7 @@ The engines Atlas already wraps support these tasks: vLLM serves embeddings (`--
 Surface constraints:
 
 - The Anthropic Messages API ([ADR-0002](0002-anthropic-api-first.md)) has **no** embeddings or rerank endpoint, so there is no first-class surface to mirror — embeddings/rerank are an OpenAI-compat-and-native concern, and adding them does not touch the Anthropic drop-in promise.
-- `POST /v1/embeddings` is the OpenAI-standard embeddings shape ([api-surface.md](../../api-surface.md) already lists it as "later"). Rerank has **no** OpenAI standard; the de-facto convention is Cohere's `/v1/rerank` (query + documents + top_n → ordered results), which vLLM and others already emulate.
+- `POST /v1/embeddings` is the OpenAI-standard embeddings shape ([api-surface.md](../api-surface.md) already lists it as "later"). Rerank has **no** OpenAI standard; the de-facto convention is Cohere's `/v1/rerank` (query + documents + top_n → ordered results), which vLLM and others already emulate.
 
 ## Decision
 
@@ -21,11 +21,11 @@ Surface constraints:
 
 2. **The gateway routes by class and rejects mismatches cleanly.** An embeddings request resolves only to an `embedding` model and a rerank request only to a `reranker`; sending a request to a model of the wrong class returns a well-formed Anthropic/OpenAI-shaped error (not a 5xx), the same way an unknown model does. Chat endpoints stay restricted to `chat` models.
 
-3. **Serve embeddings on `POST /v1/embeddings` (OpenAI shape) and rerank on a native `POST /v1/rerank` (Cohere shape).** Embeddings reuse the OpenAI surface because that is where the standard and the SDK ecosystem live; rerank gets a native Atlas endpoint following the Cohere convention because there is no OpenAI equivalent to mirror. Both are documented in [api-surface.md](../../api-surface.md).
+3. **Serve embeddings on `POST /v1/embeddings` (OpenAI shape) and rerank on a native `POST /v1/rerank` (Cohere shape).** Embeddings reuse the OpenAI surface because that is where the standard and the SDK ecosystem live; rerank gets a native Atlas endpoint following the Cohere convention because there is no OpenAI equivalent to mirror. Both are documented in [api-surface.md](../api-surface.md).
 
 4. **Wrap engine capabilities through the shared translation layer.** The shared `internal/engines/openaichat` client gains sibling embedding/rerank calls (or a parallel minimal client) so vLLM, SGLang, and MLX reuse one translation path, exactly as they share the chat translation. llama.cpp's `/embedding` is wrapped for the embedding class. Atlas computes nothing — it forwards to the engine and shapes the response.
 
-5. **Class-aware scheduling reuses the existing placement policy.** Embedding and reranker models are placed by the same VRAM-fit logic as chat models ([architecture.md](../../architecture.md) scheduler); they differ only in that they do not stream and have no tool loop, so the admission/affinity layer treats them as single-shot requests.
+5. **Class-aware scheduling reuses the existing placement policy.** Embedding and reranker models are placed by the same VRAM-fit logic as chat models ([architecture.md](../architecture.md) scheduler); they differ only in that they do not stream and have no tool loop, so the admission/affinity layer treats them as single-shot requests.
 
 6. **The starter catalog gains at least one embedding model and one reranker, with pinned digests.** The M0 pinning rule holds ([internal/catalog](../m0-build-plan.md)): a weights entry without a verified digest is rejected.
 

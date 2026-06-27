@@ -49,7 +49,7 @@ func newUpCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&opts.models, "model", nil,
 		"model to serve: a path to a .gguf file or a Hugging Face spec (e.g. ggml-org/Qwen2.5-0.5B-Instruct-GGUF); repeat to serve several (required)")
 	cmd.Flags().StringArrayVar(&opts.aliases, "alias", nil,
-		"model alias as name=target, e.g. claude-sonnet-4-6=qwen2.5-1.5b-instruct-q4_k_m; repeat for several (docs/api-surface.md)")
+		"model alias as name=target, e.g. claude-sonnet-4-6=qwen2.5-1.5b-instruct-q4_k_m; repeat for several (docs/internal/api-surface.md)")
 	cmd.Flags().StringVar(&opts.engine, "engine", string(worker.EngineLlamaCpp),
 		"inference engine: llamacpp (prebuilt binary), vllm or sglang (uv venv, NVIDIA GPU), or mlx (uv venv, Apple Silicon)")
 	cmd.Flags().StringArrayVar(&opts.engineArgs, "engine-arg", nil,

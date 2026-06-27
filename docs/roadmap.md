@@ -14,9 +14,9 @@ Phased so every milestone ends in something demoable and marketable. Dates inten
 - **Anthropic `/v1/messages`** incl. streaming + tool use + thinking-block mapping for reasoning models (ADR-0005), `count_tokens`, `/v1/models`; **OpenAI `/v1/chat/completions`** incl. streaming + tools
 - Gateway-side context-window assertion: requests that don't fit the resolved model's window are rejected pre-dispatch with a clean Anthropic-shaped 400 ([m0-acceptance.md](internal/m0-acceptance.md))
 - Model alias mapping (`claude-* → local model`)
-- Conformance suite v0 (real Anthropic + OpenAI SDKs, tool loop, Claude Code smoke test) — specced in [conformance-suite.md](conformance-suite.md)
+- Conformance suite v0 (real Anthropic + OpenAI SDKs, tool loop, Claude Code smoke test) — specced in [conformance-suite.md](internal/conformance-suite.md)
 - Single shared-secret auth for the endpoint
-- `/healthz` + `/readyz` endpoints; single-directory state ([deployment requirements](deployment-aws.md#product-requirements-this-topology-imposes))
+- `/healthz` + `/readyz` endpoints; single-directory state ([deployment requirements](internal/deployment-aws.md#product-requirements-this-topology-imposes))
 
 Cut from M0: web console, multi-node, API key management, usage metering (log counts only).
 
@@ -48,7 +48,7 @@ SkyPilot is fenced to one CI workflow + one optional `examples/` recipe; the Atl
 - API key management (create/revoke, per-key model allowlist); replaces M0 shared secret
 - Usage metering (tokens by key/model/worker) + `atlas usage` CLI
 - TLS for the server endpoint (ACME for public VPS, self-signed for private)
-- Cloud-fleet behaviors: non-interactive join (`ATLAS_SERVER_URL` + `ATLAS_JOIN_TOKEN`), graceful drain on SIGTERM, heartbeat-timeout removal ([deployment requirements](deployment-aws.md#product-requirements-this-topology-imposes))
+- Cloud-fleet behaviors: non-interactive join (`ATLAS_SERVER_URL` + `ATLAS_JOIN_TOKEN`), graceful drain on SIGTERM, heartbeat-timeout removal ([deployment requirements](internal/deployment-aws.md#product-requirements-this-topology-imposes))
 
 ## M2 — Operate: "Run a real fleet from the terminal"
 
@@ -97,7 +97,7 @@ Deferred from M3 (revisit by traction):
 
 ## M5 — Documentation & docs site
 
-**Re-scoped 2026-06-27** ([ADR-0014](internal/decisions/0014-m5-rescoped-to-documentation.md)) from "Packaging & deployment" to documentation. M4 already shipped everything needed to _deploy_ Atlas (binary, `install.sh`, signed releases, GHCR images — [ADR-0006](internal/decisions/0006-packaging-and-deployment.md)) and the AWS reference _topology_ is already written ([deployment-aws.md](deployment-aws.md)); the acute gap as the project goes public is **discoverability, not deployability**. Building compose/k8s/Terraform recipes ahead of any operator telling us how they actually deploy is speculative, so that packaging work is deferred to a demand-driven [M7](#m7--packaging--iac-by-traction). M5 instead stands up a curated public docs site so a newcomer can go install → quickstart → deploy → operate without reading the internal design docs.
+**Re-scoped 2026-06-27** ([ADR-0014](internal/decisions/0014-m5-rescoped-to-documentation.md)) from "Packaging & deployment" to documentation. M4 already shipped everything needed to _deploy_ Atlas (binary, `install.sh`, signed releases, GHCR images — [ADR-0006](internal/decisions/0006-packaging-and-deployment.md)) and the AWS reference _topology_ is already written ([deployment-aws.md](internal/deployment-aws.md)); the acute gap as the project goes public is **discoverability, not deployability**. Building compose/k8s/Terraform recipes ahead of any operator telling us how they actually deploy is speculative, so that packaging work is deferred to a demand-driven [M7](#m7--packaging--iac-by-traction). M5 instead stands up a curated public docs site so a newcomer can go install → quickstart → deploy → operate without reading the internal design docs.
 
 **Demo:** a newcomer lands on `orchestra-hq.github.io/atlas`, follows Get started → Deploy → Operate, and is serving a model — never touching the repo's internal scaffolding. Build order: [m5-build-plan.md](internal/m5-build-plan.md).
 
@@ -119,7 +119,7 @@ The graphical operate surface, held until the very end: M2's `atlas status`/`atl
 The deploy-recipe and packaging surface, **deferred here from M5** ([ADR-0014](internal/decisions/0014-m5-rescoped-to-documentation.md)) so it is pulled by real demand rather than pushed ahead of any users. The Docker images already ship in M0.5 ([ADR-0006](internal/decisions/0006-packaging-and-deployment.md)) and M5 documents deploying with what M4 ships; M7 adds the convenience packaging on top — prioritized by whichever deployment shape early adopters actually converge on.
 
 - Packaging: compose file, systemd units, k8s manifests (packaging only — no first-party operator/CRDs, per [ADR-0006](internal/decisions/0006-packaging-and-deployment.md))
-- Reference IaC under `examples/` — AWS Terraform first (~100-line bar, see [deployment-aws.md](deployment-aws.md)); `s3://` model sources
+- Reference IaC under `examples/` — AWS Terraform first (~100-line bar, see [deployment-aws.md](internal/deployment-aws.md)); `s3://` model sources
 - TLS/ACME hardening on a real public deployment, resolving the remaining transport-security follow-ups in [follow-ups.md](internal/follow-ups.md): self-signed cert host-change handling, ACME `:443` reconciliation
 
 ## Standing tracks (every milestone)
