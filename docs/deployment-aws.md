@@ -47,7 +47,7 @@ Atlas does **not** ship or support Terraform as part of the product. We will pub
 
   ```bash
   #!/bin/bash
-  curl -fsSL https://get.atlas.dev | sh
+  curl -fsSL https://raw.githubusercontent.com/orchestra-hq/atlas/main/install.sh | sh
   atlas worker --server https://atlas.yourco.com \
                --join-token "$(aws secretsmanager get-secret-value --secret-id atlas/join-token --query SecretString --output text)"
   ```
