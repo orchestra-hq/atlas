@@ -1,5 +1,14 @@
 # M5 build plan
 
+> **✅ Accepted — M5 declared done 2026-06-27.** The Astro Starlight docs site is **live** at
+> <https://orchestra-hq.github.io/atlas> — Get started, Guides, Deploy, Operate, Reference, and About
+> (26 pages, built + link-validated per-PR, search via Pagefind, plus an `llms.txt`). `docs/` is split
+> into the public site (user-facing) and `docs/internal/` (design truth — ADRs, build plans,
+> acceptance, research, detailed source docs), nothing deleted. Deploy uses a `gh-pages` branch
+> (Pages Source: deploy-from-branch) to sidestep the org-wide Actions artifact-storage quota; the
+> recurring Docker Hub pull-rate-limit flake was fixed with authenticated pulls. The deferred packaging
+> work lives in [M7](../roadmap.md#m7--packaging--iac-by-traction).
+>
 > **Re-scoped 2026-06-27** ([ADR-0014](decisions/0014-m5-rescoped-to-documentation.md)): M5 changed from "Packaging & deployment" to **documentation**. M4 already shipped what is needed to _deploy_ Atlas (binary, `install.sh`, signed releases, GHCR images) and the AWS reference topology is already written; the acute gap as the project goes public is **discoverability, not deployability**. The packaging/IaC work (compose, systemd, k8s, Terraform) is deferred to a demand-driven [M7](../roadmap.md#m7--packaging--iac-by-traction). M5 stands up a curated public docs site instead.
 
 The path from "the machinery works" to **"a stranger can adopt it"**: a newcomer finds install →

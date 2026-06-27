@@ -97,6 +97,8 @@ Deferred from M3 (revisit by traction):
 
 ## M5 — Documentation & docs site
 
+**Status: ✅ done (2026-06-27).** The Astro Starlight docs site is live at [orchestra-hq.github.io/atlas](https://orchestra-hq.github.io/atlas) — Get started, Guides, Deploy, Operate, Reference, and About (built + link-validated per-PR, search + `llms.txt`), deployed via a `gh-pages` branch. `docs/` is split into the public site and `docs/internal/` design truth. Build order + result: [m5-build-plan.md](internal/m5-build-plan.md).
+
 **Re-scoped 2026-06-27** ([ADR-0014](internal/decisions/0014-m5-rescoped-to-documentation.md)) from "Packaging & deployment" to documentation. M4 already shipped everything needed to _deploy_ Atlas (binary, `install.sh`, signed releases, GHCR images — [ADR-0006](internal/decisions/0006-packaging-and-deployment.md)) and the AWS reference _topology_ is already written ([deployment-aws.md](internal/deployment-aws.md)); the acute gap as the project goes public is **discoverability, not deployability**. Building compose/k8s/Terraform recipes ahead of any operator telling us how they actually deploy is speculative, so that packaging work is deferred to a demand-driven [M7](#m7--packaging--iac-by-traction). M5 instead stands up a curated public docs site so a newcomer can go install → quickstart → deploy → operate without reading the internal design docs.
 
 **Demo:** a newcomer lands on `orchestra-hq.github.io/atlas`, follows Get started → Deploy → Operate, and is serving a model — never touching the repo's internal scaffolding. Build order: [m5-build-plan.md](internal/m5-build-plan.md).
