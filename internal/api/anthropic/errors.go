@@ -1,5 +1,5 @@
 // Package anthropic holds the wire types for Atlas's first-class API surface
-// (POST /v1/messages and friends — see docs/api-surface.md and ADR-0002) and
+// (POST /v1/messages and friends — see docs/internal/api-surface.md and ADR-0002) and
 // the translation between those shapes and internal/core. The gateway in
 // internal/server speaks HTTP; this package owns what the bytes look like.
 package anthropic
@@ -12,10 +12,10 @@ import (
 )
 
 // ErrorType is the Anthropic error-envelope vocabulary. Status codes pair
-// with types per docs/api-surface.md so SDK retry logic behaves.
+// with types per docs/internal/api-surface.md so SDK retry logic behaves.
 type ErrorType string
 
-// Anthropic error-envelope types (docs/api-surface.md).
+// Anthropic error-envelope types (docs/internal/api-surface.md).
 const (
 	ErrInvalidRequest ErrorType = "invalid_request_error"
 	ErrAuthentication ErrorType = "authentication_error"

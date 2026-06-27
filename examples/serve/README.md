@@ -37,7 +37,7 @@ No extra tooling — works on any GPU host (EC2, GCE, a box under your desk).
 
 1. **Get a GPU box** and SSH in. Install Atlas one of three ways:
    - the static binary from [GitHub Releases](https://github.com/orchestra-hq/atlas/releases), or
-   - the container image: `docker run --gpus all -p 127.0.0.1:8080:8080 -v atlas:/var/lib/atlas ghcr.io/orchestra-hq/atlas:cuda up --engine vllm --model Qwen/Qwen3-8B --addr 0.0.0.0:8080` (see [docs/docker.md](../../docs/docker.md)), or
+   - the container image: `docker run --gpus all -p 127.0.0.1:8080:8080 -v atlas:/var/lib/atlas ghcr.io/orchestra-hq/atlas:cuda up --engine vllm --model Qwen/Qwen3-8B --addr 0.0.0.0:8080` (see [docs/internal/docker.md](../../docs/internal/docker.md)), or
    - build from source.
 
 2. **Serve, bound to localhost** (so nothing is exposed):
@@ -63,6 +63,6 @@ The tunnel makes the remote gateway look local, encrypted over SSH, with no inbo
 
 ## See also
 
-- [docs/usage-scenarios.md](../../docs/usage-scenarios.md) — which path fits which situation (laptop / single cloud GPU / fleet)
-- [docs/docker.md](../../docs/docker.md) — the container images
+- [docs/internal/usage-scenarios.md](../../docs/internal/usage-scenarios.md) — which path fits which situation (laptop / single cloud GPU / fleet)
+- [docs/internal/docker.md](../../docs/internal/docker.md) — the container images
 - [examples/acceptance/](../acceptance/README.md) — the GPU acceptance run (proving, not serving)

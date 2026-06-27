@@ -2,7 +2,9 @@
 
 Atlas is an open source, self-hosted LLM inference platform. It lets you run open-weight models on hardware **you** control — a laptop, a single GPU box, or a fleet of GPU machines across clouds — and exposes the APIs that agents and apps already speak, so you can point existing tooling (the Claude Agent SDK, Claude Code, OpenAI-compatible clients) at your own infrastructure with a one-line config change.
 
-**Status: M0–M4 done (M4 declared 2026-06-27); M5 (docs site) in progress.** M0 ("Claude Code on your own box"), M0.5 ("Release & prove"), M1 ("Fleet"), M2 ("Operate from the terminal"), M3 ("Ecosystem & differentiation deepeners"), and M4 ("Deliverability") are complete — M0/M0.5 acceptance is green on both engines with the real Claude Code drop-in proven on a GPU ([docs/internal/m0-acceptance.md](docs/internal/m0-acceptance.md)), M1's multi-host fleet acceptance (G1–G14 across two machines, two engines) is green ([docs/internal/m1-acceptance.md](docs/internal/m1-acceptance.md)), M2's engine-breadth acceptance (MLX on Apple Silicon + SGLang on GPU) is green alongside the per-PR observability/backpressure gates ([docs/internal/m2-acceptance.md](docs/internal/m2-acceptance.md)), M3's affinity routing, embeddings/reranker classes, audit log, and cloud-fallback are proven by the per-PR G19–G22 conformance ([docs/internal/m3-acceptance.md](docs/internal/m3-acceptance.md)), and M4's install machinery (`install.sh`, cosign signing, Homebrew tap) is proven by the `v0.1.0` release run ([docs/internal/m4-build-plan.md](docs/internal/m4-build-plan.md)). Design truth in `docs/` is the source of truth.
+**Status: M0–M4 done (M4 declared 2026-06-27); M5 (docs site) in progress.** M0 ("Claude Code on your own box"), M0.5 ("Release & prove"), M1 ("Fleet"), M2 ("Operate from the terminal"), M3 ("Ecosystem & differentiation deepeners"), and M4 ("Deliverability") are complete — M0/M0.5 acceptance is green on both engines with the real Claude Code drop-in proven on a GPU ([docs/internal/m0-acceptance.md](docs/internal/m0-acceptance.md)), M1's multi-host fleet acceptance (G1–G14 across two machines, two engines) is green ([docs/internal/m1-acceptance.md](docs/internal/m1-acceptance.md)), M2's engine-breadth acceptance (MLX on Apple Silicon + SGLang on GPU) is green alongside the per-PR observability/backpressure gates ([docs/internal/m2-acceptance.md](docs/internal/m2-acceptance.md)), M3's affinity routing, embeddings/reranker classes, audit log, and cloud-fallback are proven by the per-PR G19–G22 conformance ([docs/internal/m3-acceptance.md](docs/internal/m3-acceptance.md)), and M4's install machinery (`install.sh`, cosign signing, Homebrew tap) is proven by the `v0.1.0` release run ([docs/internal/m4-build-plan.md](docs/internal/m4-build-plan.md)). User-facing documentation lives at the **[Atlas docs site](https://orchestra-hq.github.io/atlas)**; the design truth lives in [`docs/internal/`](docs/internal/).
+
+> 📖 **Documentation:** <https://orchestra-hq.github.io/atlas> — install, quickstart, guides, deploy, and operate.
 
 ## Install
 
@@ -16,7 +18,7 @@ brew install orchestra-hq/tap/atlas
 curl -fsSL https://raw.githubusercontent.com/orchestra-hq/atlas/main/install.sh | sh
 ```
 
-Or run the container image: `docker run ghcr.io/orchestra-hq/atlas:slim` (CPU) / `:cuda` (GPU) — see [docs/docker.md](docs/docker.md). Then `atlas up` to serve a model.
+Or run the container image: `docker run ghcr.io/orchestra-hq/atlas:slim` (CPU) / `:cuda` (GPU). Then `atlas up` to serve a model. Full walkthrough: the [quickstart](https://orchestra-hq.github.io/atlas/get-started/quickstart/) on the docs site.
 
 ## Why
 
@@ -27,23 +29,28 @@ Teams building on LLMs increasingly want control over where the model runs and w
 - **Ollama-grade DX, fleet-grade scale.** One binary, `atlas up`, pull a model, serve it. The same binary scales out to a multi-node GPU cluster.
 - **Best engine for the job.** Atlas orchestrates proven inference engines (vLLM, SGLang, llama.cpp, MLX) rather than reinventing them.
 
-## Documentation map
+## Design docs & internals
+
+User-facing documentation (install, quickstart, guides, deploy, operate, reference) lives on the
+**[docs site](https://orchestra-hq.github.io/atlas)**. The table below indexes the design truth under
+[`docs/internal/`](docs/internal/) — ADRs, build plans, acceptance reports, research, and the detailed
+source docs — for contributors and agents working in the repo.
 
 | Doc                                                                                                                          | What it covers                                                    |
 | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| [docs/vision.md](docs/vision.md)                                                                                             | What we're building, for whom, and how we differentiate           |
+| [docs/internal/vision.md](docs/internal/vision.md)                                                                           | What we're building, for whom, and how we differentiate           |
 | [docs/internal/research/landscape.md](docs/internal/research/landscape.md)                                                   | Survey of existing projects and what we take from each            |
 | [docs/internal/research/model-catalog-m0.md](docs/internal/research/model-catalog-m0.md)                                     | Starter catalog candidates: models, tiers, per-engine config      |
 | [docs/internal/research/distribution-deployment-and-gpu-ci.md](docs/internal/research/distribution-deployment-and-gpu-ci.md) | How Atlas is packaged, deployed, and proven on GPUs (M0.5)        |
-| [docs/architecture.md](docs/architecture.md)                                                                                 | How Atlas runs: control plane, workers, request flow, scheduling  |
-| [docs/api-surface.md](docs/api-surface.md)                                                                                   | The APIs Atlas exposes (Anthropic-compat, OpenAI-compat, admin)   |
-| [docs/usage-scenarios.md](docs/usage-scenarios.md)                                                                           | Which path fits you: laptop / single cloud GPU / fleet            |
-| [docs/docker.md](docs/docker.md)                                                                                             | Running Atlas from the published container images (slim + CUDA)   |
+| [docs/internal/architecture.md](docs/internal/architecture.md)                                                               | How Atlas runs: control plane, workers, request flow, scheduling  |
+| [docs/internal/api-surface.md](docs/internal/api-surface.md)                                                                 | The APIs Atlas exposes (Anthropic-compat, OpenAI-compat, admin)   |
+| [docs/internal/usage-scenarios.md](docs/internal/usage-scenarios.md)                                                         | Which path fits you: laptop / single cloud GPU / fleet            |
+| [docs/internal/docker.md](docs/internal/docker.md)                                                                           | Running Atlas from the published container images (slim + CUDA)   |
 | [examples/serve/](examples/serve/README.md)                                                                                  | Serve on a cloud GPU: SkyPilot one-command + single-box+tunnel    |
-| [docs/deployment-aws.md](docs/deployment-aws.md)                                                                             | Reference topology for deploying in your own AWS account          |
+| [docs/internal/deployment-aws.md](docs/internal/deployment-aws.md)                                                           | Reference topology for deploying in your own AWS account          |
 | [docs/roadmap.md](docs/roadmap.md)                                                                                           | Phased milestones from single-node MVP to fleet                   |
 | [docs/internal/m0-acceptance.md](docs/internal/m0-acceptance.md)                                                             | Definition of done for M0's API surface                           |
-| [docs/conformance-suite.md](docs/conformance-suite.md)                                                                       | Executable spec of the compat promise: harness, test groups       |
+| [docs/internal/conformance-suite.md](docs/internal/conformance-suite.md)                                                     | Executable spec of the compat promise: harness, test groups       |
 | [examples/acceptance/](examples/acceptance/README.md)                                                                        | GPU acceptance run that closed out M0 (M0.5) + AWS setup          |
 | [docs/internal/m0-build-plan.md](docs/internal/m0-build-plan.md)                                                             | M0 phased build order, repo layout, and build-time decisions      |
 | [docs/internal/m1-build-plan.md](docs/internal/m1-build-plan.md)                                                             | M1 phased build order (fleet: worker channel, scheduler, auth)    |
@@ -54,7 +61,7 @@ Teams building on LLMs increasingly want control over where the model runs and w
 | [docs/internal/m3-acceptance.md](docs/internal/m3-acceptance.md)                                                             | Definition of done for M3: the G19–G22 conformance tier           |
 | [docs/internal/m4-build-plan.md](docs/internal/m4-build-plan.md)                                                             | M4 phased build order (deliverability: Homebrew tap + installer)  |
 | [docs/internal/m5-build-plan.md](docs/internal/m5-build-plan.md)                                                             | M5 phased build order (documentation: Starlight docs site)        |
-| [docs/positioning.md](docs/positioning.md)                                                                                   | Marketing differentiators and the proof each one requires         |
+| [docs/internal/positioning.md](docs/internal/positioning.md)                                                                 | Marketing differentiators and the proof each one requires         |
 | [docs/internal/decisions/](docs/internal/decisions/)                                                                         | Architecture decision records (ADRs)                              |
 | [docs/internal/open-questions.md](docs/internal/open-questions.md)                                                           | Unresolved decisions that need an owner call                      |
 | [docs/internal/follow-ups.md](docs/internal/follow-ups.md)                                                                   | Deferred, non-blocking refinements surfaced by code reviews       |

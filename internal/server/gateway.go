@@ -189,7 +189,7 @@ type Gateway struct {
 // model in models by its Name, and resolves each alias to a canonical model
 // name. In M0 single-node mode every model maps to one in-process worker;
 // operator-defined aliases (e.g. claude-sonnet-4-6 -> a local model) let SDK/tool
-// defaults resolve (docs/api-surface.md).
+// defaults resolve (docs/internal/api-surface.md).
 func NewGateway(auth Authenticator, models []Model, aliases map[string]string) *Gateway {
 	if aliases == nil {
 		aliases = map[string]string{}
@@ -1103,7 +1103,7 @@ func writeAdminError(w http.ResponseWriter, status int, msg string) {
 }
 
 // apiKeyFromRequest extracts the presented secret from x-api-key or
-// Authorization: Bearer (clients vary — docs/api-surface.md).
+// Authorization: Bearer (clients vary — docs/internal/api-surface.md).
 func apiKeyFromRequest(r *http.Request) string {
 	if key := r.Header.Get("x-api-key"); key != "" {
 		return key

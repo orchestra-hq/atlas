@@ -51,7 +51,7 @@ func newServerCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.addr, "addr", "0.0.0.0:9090", "address the gateway and worker hub listen on")
 	cmd.Flags().StringVar(&opts.token, "token", "", "join token workers must present (a random token is generated if unset)")
 	cmd.Flags().StringArrayVar(&opts.aliases, "alias", nil,
-		"model alias as name=target, e.g. claude-sonnet-4-6=qwen2.5-1.5b-instruct; resolves once a worker registers the target (docs/api-surface.md); repeat for several")
+		"model alias as name=target, e.g. claude-sonnet-4-6=qwen2.5-1.5b-instruct; resolves once a worker registers the target (docs/internal/api-surface.md); repeat for several")
 	cmd.Flags().StringVar(&opts.stateDir, "state-dir", defaultStateDir(), "directory for state (logs, the key store)")
 	cmd.Flags().DurationVar(&opts.autostartTimeout, "autostart-timeout", 5*time.Minute,
 		"how long a request waits for a model to auto-start on first use (0 disables auto-start)")

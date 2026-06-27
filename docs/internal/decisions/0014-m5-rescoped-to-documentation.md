@@ -16,7 +16,7 @@ the ground has shifted by the time M5 comes up:
   The worker join flow, drain, and TLS modes ([ADR-0009](0009-transport-security-tls-and-pinning.md))
   are in place. There is no missing capability blocking a real deployment — only missing _packaging
   convenience_ and missing _docs_.
-- **The AWS reference _topology_ is already written** ([deployment-aws.md](../../deployment-aws.md)).
+- **The AWS reference _topology_ is already written** ([deployment-aws.md](../deployment-aws.md)).
 - **Compose/systemd/k8s/Terraform recipes built now are speculative.** Atlas has no users yet (the
   repo is not even public — M4's go-live is owner-gated). Committing to a specific compose shape, a
   k8s manifest set, and a Terraform module _before any operator tells us how they actually deploy_
