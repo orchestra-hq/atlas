@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -97,6 +99,59 @@ func TestInspectCommandCaches(t *testing.T) {
 	}
 	if hits["config.json"] != 2 {
 		t.Errorf("config.json fetched %d times, want 2 (--no-cache should have refreshed the cache)", hits["config.json"])
+	}
+}
+
+// ageCacheFiles back-dates every cache file's mtime so a TTL check sees them as
+// stale, making the time-based expiry deterministic.
+func ageCacheFiles(t *testing.T, dir string, age time.Duration) {
+	t.Helper()
+	files, _ := filepath.Glob(filepath.Join(dir, "inspect-cache", "*.json"))
+	if len(files) == 0 {
+		t.Fatal("no cache files to age")
+	}
+	old := time.Now().Add(-age)
+	for _, f := range files {
+		if err := os.Chtimes(f, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A mutable ref ("main") whose cache entry is older than the TTL is refetched.
+func TestInspectCacheMutableTTLExpires(t *testing.T) {
+	hits := map[string]int{}
+	srv := hfFixtureServer(t, defaultFixtures(), hits)
+	dir := t.TempDir()
+
+	if _, err := runInspectCapture(t, &inspectOptions{stateDir: dir, endpoint: srv.URL}, []string{"org/m"}); err != nil {
+		t.Fatal(err)
+	}
+	ageCacheFiles(t, dir, 48*time.Hour)
+	if _, err := runInspectCapture(t, &inspectOptions{stateDir: dir, endpoint: srv.URL}, []string{"org/m"}); err != nil {
+		t.Fatal(err)
+	}
+	if hits["config.json"] != 2 {
+		t.Errorf("config.json fetched %d times, want 2 (stale mutable ref should refetch)", hits["config.json"])
+	}
+}
+
+// An immutable commit SHA is cached indefinitely — age doesn't expire it.
+func TestInspectCacheImmutableSHANeverExpires(t *testing.T) {
+	hits := map[string]int{}
+	srv := hfFixtureServer(t, defaultFixtures(), hits)
+	dir := t.TempDir()
+	sha := "0123456789abcdef0123456789abcdef01234567"
+
+	if _, err := runInspectCapture(t, &inspectOptions{stateDir: dir, endpoint: srv.URL, revision: sha}, []string{"org/m"}); err != nil {
+		t.Fatal(err)
+	}
+	ageCacheFiles(t, dir, 48*time.Hour)
+	if _, err := runInspectCapture(t, &inspectOptions{stateDir: dir, endpoint: srv.URL, revision: sha}, []string{"org/m"}); err != nil {
+		t.Fatal(err)
+	}
+	if hits["config.json"] != 1 {
+		t.Errorf("config.json fetched %d times, want 1 (immutable SHA cache must not expire)", hits["config.json"])
 	}
 }
 

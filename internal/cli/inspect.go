@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -186,6 +188,16 @@ func pendingLine(value, phase string) string {
 
 // --- metadata cache (state dir, keyed by repo@revision; ADR-0015) ---
 
+// inspectCacheTTL bounds how long a *mutable* revision's cached metadata is
+// trusted. A branch or tag like "main" can move under a fixed name, so its
+// capabilities can go stale; an immutable commit SHA never does and is cached
+// indefinitely. --no-cache always forces a fresh fetch regardless.
+const inspectCacheTTL = 24 * time.Hour
+
+// revIsImmutable reports whether a revision names an unchanging commit (a hex
+// SHA, full or abbreviated) rather than a movable branch/tag.
+var revIsImmutable = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+
 // inspectCachePath maps a repo@revision to a cache file. The name is a SHA-256 of
 // the key so distinct repos/revisions never collide (a sanitize-unsafe-chars
 // scheme could map "org/a"@"b" and "org"@"a_b" to the same file).
@@ -195,7 +207,17 @@ func inspectCachePath(stateDir, repo, rev string) string {
 }
 
 func readInspectCache(stateDir, repo, rev string) (modelmeta.Result, bool) {
-	data, err := os.ReadFile(inspectCachePath(stateDir, repo, rev))
+	path := inspectCachePath(stateDir, repo, rev)
+	info, err := os.Stat(path)
+	if err != nil {
+		return modelmeta.Result{}, false
+	}
+	// A mutable ref's entry expires after the TTL so a moved "main" can't serve
+	// stale metadata forever; an immutable SHA is trusted indefinitely.
+	if !revIsImmutable.MatchString(rev) && time.Since(info.ModTime()) > inspectCacheTTL {
+		return modelmeta.Result{}, false
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return modelmeta.Result{}, false
 	}
