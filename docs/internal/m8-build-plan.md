@@ -1,6 +1,6 @@
 # M8 build plan
 
-> **🧭 Proposed — not yet scheduled or started.** This captures a feature the project wants to build and a phased plan for it; nothing here is built. The load-bearing design choices (Build-time decisions below) need to be locked in an ADR as Phase 0 before implementation. M8 refines the M8 milestone in [roadmap.md](../roadmap.md).
+> **🧭 Proposed — not yet scheduled or started.** This captures a feature the project wants to build and a phased plan for it; nothing here is built. The load-bearing design choices (Build-time decisions below) are recorded in [ADR-0015](decisions/0015-bring-any-model-auto-configuration.md) (status: proposed), to be ratified before implementation. M8 refines the M8 milestone in [roadmap.md](../roadmap.md).
 
 The pitch in one line: **`atlas up --model <hugging-face-repo>` for _any_ model.** Atlas fetches the model's metadata (not its weights), decides whether it can serve the model well, and then either configures and serves it or tells the user exactly how to add support. This turns the curated catalog from a fence into a fast path, and — crucially — means **nobody has to maintain a catalog**: the "list of supported models" becomes a family→config map in Atlas's own source, extended by ordinary PRs gated on the conformance suite.
 
@@ -40,7 +40,7 @@ These are the load-bearing choices; recorded here so the ADR can confirm or revi
 
 | Phase | Deliverable                                            | Exit criterion                                                                                                                                                  |
 | ----- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0     | ADR locking the design (decisions above)               | ADR accepted under `docs/internal/decisions/`                                                                                                                   |
+| 0     | ADR locking the design (decisions above)               | [ADR-0015](decisions/0015-bring-any-model-auto-configuration.md) flipped from `proposed` to `accepted`                                                          |
 | 1     | `atlas inspect <model>` — read-only metadata → verdict | For fixture models across families/formats, prints the derived engine/context/template/sampling **and** the three-way verdict, downloading no weights           |
 | 2     | Family→agent-config map + auto-derived serving         | A **known-family** HF model **not in the catalog** serves via `atlas up --model <repo>` and tool-calls correctly (parser + reasoning applied)                   |
 | 3     | Fit gating + failure UX                                | An unsupported architecture and an oversized model each fail fast, **before** downloading weights, with an actionable message (upstream link / sizing)          |
@@ -51,7 +51,7 @@ Exit criteria are cumulative. **Phase 1 is independently shippable and useful on
 
 ## Phase notes
 
-**Phase 0 — ADR.** Write the decision record (resolution becomes metadata-driven; family map in code is the extension point; three-way verdict + default warn-and-serve policy; no community/required-user catalog). Surface the open questions below. This is the gate before any code.
+**Phase 0 — ADR.** The decision record is written — [ADR-0015](decisions/0015-bring-any-model-auto-configuration.md) (resolution becomes metadata-driven; family map in code is the extension point; three-way verdict + default warn-and-serve policy; no community/required-user catalog), with the open questions below surfaced. It is `proposed`; the gate before any code is the owner ratifying it (→ `accepted`).
 
 **Phase 1 — inspect.** A metadata fetcher (HF `resolve` URLs for `config.json`, `tokenizer_config.json`, `generation_config.json`; GGUF header reader for gguf repos; token + revision + gated-repo handling) feeding a capability resolver that derives engine candidate(s), context window, template presence, and sampling. Surfaced as `atlas inspect <model>` printing the derived plan and the verdict. No serving, no weight download — cheap to build and test against recorded metadata fixtures.
 
