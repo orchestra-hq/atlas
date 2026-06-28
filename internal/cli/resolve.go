@@ -3,10 +3,13 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/orchestra-hq/atlas/catalog"
+	"github.com/orchestra-hq/atlas/internal/modelmeta"
 	"github.com/orchestra-hq/atlas/internal/store"
 	"github.com/orchestra-hq/atlas/internal/worker"
 )
@@ -35,14 +38,13 @@ type resolvedModel struct {
 // resolveModel turns one --model value into a worker plan. A catalog name
 // resolves through the store (pulling a cold gguf model first); anything else
 // is treated as a raw path or engine spec, preserving the pre-catalog behavior.
-func resolveModel(ctx context.Context, cmd *cobra.Command, engine worker.Engine, st *store.Store, cat *catalog.Catalog, spec string) (resolvedModel, error) {
+func resolveModel(ctx context.Context, cmd *cobra.Command, engine worker.Engine, st *store.Store, cat *catalog.Catalog, stateDir, spec string) (resolvedModel, error) {
 	entry, ok := cat.Lookup(spec)
 	if !ok {
-		// Not a catalog name: a local path or a Hugging Face spec, as before.
-		return resolvedModel{
-			served:    modelDisplayName(engine, spec),
-			modelArgs: modelArgs(engine, spec),
-		}, nil
+		// Not a catalog name: a local path or a Hugging Face spec. Auto-configure
+		// from the model's own metadata where it names a known family (ADR-0015),
+		// else fall back to the pre-M8 bare passthrough.
+		return resolveRaw(ctx, cmd, engine, stateDir, spec), nil
 	}
 
 	if worker.Engine(entry.Engine) != engine {
@@ -93,6 +95,75 @@ func resolveModel(ctx context.Context, cmd *cobra.Command, engine worker.Engine,
 	default:
 		return resolvedModel{}, fmt.Errorf("model %q: unsupported source type %q", entry.Name, entry.Source.Type)
 	}
+}
+
+// resolveRaw resolves a spec that is not a catalog name — a local path or a
+// Hugging Face repo. Where the model's published metadata identifies a known
+// family (ADR-0015 Decision 1), it auto-configures the full serving plan — the
+// family's tool-call/reasoning parser engine_args, reasoning gating, the
+// author's sampling defaults, and a context-window hint — exactly as a catalog
+// entry would. Otherwise it returns the pre-M8 bare passthrough. Inspection is
+// best-effort: any failure (offline, gated, unrecognized) yields the bare plan,
+// so resolution is never less able to serve than it was before M8.
+func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, stateDir, spec string) resolvedModel {
+	plan := resolvedModel{
+		served:    modelDisplayName(engine, spec),
+		modelArgs: modelArgs(engine, spec),
+	}
+	caps, ok := inspectForResolve(ctx, stateDir, spec)
+	if !ok {
+		return plan
+	}
+	fam, ok := modelmeta.Classify(caps)
+	if !ok {
+		// Engine-loadable but unknown family: bare passthrough today. Warn-and-serve
+		// and the --require-verified opt-out are M8 Phase 4.
+		return plan
+	}
+	plan.engineArgs = fam.EngineArgs(string(engine))
+	plan.reasoning = fam.Reasoning
+	plan.sampling = caps.Sampling
+	plan.ctxHint = caps.ContextWindow
+	cmd.Printf("Auto-configured %q as the %s family%s\n", spec, fam.Name, parserNote(plan.engineArgs))
+	return plan
+}
+
+// parserNote describes the parser flags auto-config applied, for the user-facing
+// note. An empty list means the engine drives tool-calling from the model's chat
+// template (llama.cpp / MLX) rather than a parser flag.
+func parserNote(args []string) string {
+	if len(args) == 0 {
+		return " (template-driven; no parser flags)."
+	}
+	return ": " + strings.Join(args, " ")
+}
+
+// inspectForResolve fetches a raw spec's metadata for auto-configuration. A local
+// file is read directly (cheap, no cache); a Hugging Face repo uses the shared
+// inspect-cache (so a prior `atlas inspect`/`up` is instant) keyed at the default
+// revision. It classifies from the cached Capabilities, never the cached Verdict,
+// so a pre-M8 cache entry is handled correctly. It returns ok=false on any error,
+// leaving the caller on the bare path. ATLAS_HF_ENDPOINT overrides the metadata
+// host (a Hugging Face mirror, or a test server).
+func inspectForResolve(ctx context.Context, stateDir, spec string) (modelmeta.Capabilities, bool) {
+	opts := modelmeta.Options{Token: hfToken(), Endpoint: os.Getenv("ATLAS_HF_ENDPOINT")}
+	if fileExists(spec) {
+		res, err := modelmeta.Inspect(ctx, spec, opts)
+		if err != nil {
+			return modelmeta.Capabilities{}, false
+		}
+		return res.Capabilities, true
+	}
+	rev := modelmeta.DefaultRevision
+	if res, ok := readInspectCache(stateDir, spec, rev); ok {
+		return res.Capabilities, true
+	}
+	res, err := modelmeta.Inspect(ctx, spec, opts)
+	if err != nil {
+		return modelmeta.Capabilities{}, false
+	}
+	writeInspectCache(stateDir, spec, rev, res) // best-effort
+	return res.Capabilities, true
 }
 
 // pullEntry downloads a gguf catalog entry into the store with a progress line.

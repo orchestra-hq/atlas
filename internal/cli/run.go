@@ -83,7 +83,7 @@ func runRun(ctx context.Context, cmd *cobra.Command, opts *runOptions, model str
 		return err
 	}
 
-	rm, err := resolveModel(ctx, cmd, engine, st, cat, model)
+	rm, err := resolveModel(ctx, cmd, engine, st, cat, opts.stateDir, model)
 	if err != nil {
 		return err
 	}
