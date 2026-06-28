@@ -95,7 +95,7 @@ func (r *engineRuntime) start(ctx context.Context, spec string) (startedModel, e
 	if entry, ok := r.cat.Lookup(spec); ok && worker.Engine(entry.Engine) != r.engine {
 		return startedModel{}, fmt.Errorf("model %q is a %s catalog model; rerun with --engine %s", entry.Name, entry.Engine, entry.Engine)
 	}
-	rm, err := resolveModel(ctx, r.cmd, r.engine, r.st, r.cat, spec)
+	rm, err := resolveModel(ctx, r.cmd, r.engine, r.st, r.cat, r.stateDir, spec)
 	if err != nil {
 		return startedModel{}, err
 	}

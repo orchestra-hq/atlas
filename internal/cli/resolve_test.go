@@ -33,8 +33,11 @@ func TestResolveModelRawSpecFallsBack(t *testing.T) {
 	}
 	st := store.New(t.TempDir())
 
-	// A Hugging Face spec that is not a catalog name keeps the pre-catalog path.
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, "ggml-org/Qwen2.5-0.5B-Instruct-GGUF")
+	// Inspection is best-effort: point it at a host that 404s everything so the
+	// metadata fetch fails and resolution falls back to the pre-M8 bare passthrough.
+	t.Setenv("ATLAS_HF_ENDPOINT", notFoundServer(t).URL)
+
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "ggml-org/Qwen2.5-0.5B-Instruct-GGUF")
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}
@@ -44,16 +47,159 @@ func TestResolveModelRawSpecFallsBack(t *testing.T) {
 	if !reflect.DeepEqual(rm.modelArgs, []string{"-hf", "ggml-org/Qwen2.5-0.5B-Instruct-GGUF"}) {
 		t.Errorf("modelArgs = %v", rm.modelArgs)
 	}
-	if rm.ctxHint != 0 {
-		t.Errorf("ctxHint = %d, want 0 for raw spec", rm.ctxHint)
+	if rm.ctxHint != 0 || len(rm.engineArgs) != 0 || rm.reasoning {
+		t.Errorf("expected bare plan, got ctxHint=%d engineArgs=%v reasoning=%v", rm.ctxHint, rm.engineArgs, rm.reasoning)
 	}
+}
+
+// notFoundServer is an httptest server that 404s every request, used to force the
+// best-effort metadata inspection to fail.
+func notFoundServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestResolveRawAutoConfigsKnownFamily proves a known-family HF repo that is NOT
+// in the catalog is auto-configured with the family's parser engine_args,
+// reasoning gating, sampling defaults, and context hint — the heart of P8.2.
+func TestResolveRawAutoConfigsKnownFamily(t *testing.T) {
+	cat, _ := catalog.Load()
+	st := store.New(t.TempDir())
+	hits := map[string]int{}
+	srv := hfFixtureServer(t, map[string]string{
+		"config.json":            `{"architectures":["Qwen3ForCausalLM"],"model_type":"qwen3","max_position_embeddings":40960}`,
+		"tokenizer_config.json":  `{"chat_template":"{{ messages }}"}`,
+		"generation_config.json": `{"temperature":0.6,"top_p":0.95}`,
+	}, hits)
+	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
+
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "Qwen/Qwen3-8B")
+	if err != nil {
+		t.Fatalf("resolveModel: %v", err)
+	}
+	if rm.served != "Qwen/Qwen3-8B" || !reflect.DeepEqual(rm.modelArgs, []string{"Qwen/Qwen3-8B"}) {
+		t.Errorf("served/modelArgs = %q / %v", rm.served, rm.modelArgs)
+	}
+	if !containsPair(rm.engineArgs, "--tool-call-parser", "hermes") {
+		t.Errorf("engineArgs missing vLLM tool-call parser: %v", rm.engineArgs)
+	}
+	if !containsPair(rm.engineArgs, "--reasoning-parser", "qwen3") {
+		t.Errorf("engineArgs missing reasoning parser: %v", rm.engineArgs)
+	}
+	if !rm.reasoning {
+		t.Error("reasoning = false, want true for qwen3")
+	}
+	if rm.ctxHint != 40960 {
+		t.Errorf("ctxHint = %d, want 40960 (from max_position_embeddings)", rm.ctxHint)
+	}
+	if rm.sampling.Temperature == nil || *rm.sampling.Temperature != 0.6 {
+		t.Errorf("sampling temperature = %v, want 0.6", rm.sampling.Temperature)
+	}
+}
+
+// A different engine renders the same family's parser names for that engine.
+func TestResolveRawAutoConfigsPerEngine(t *testing.T) {
+	cat, _ := catalog.Load()
+	st := store.New(t.TempDir())
+	hits := map[string]int{}
+	srv := hfFixtureServer(t, map[string]string{
+		"config.json": `{"architectures":["Qwen3ForCausalLM"],"model_type":"qwen3","max_position_embeddings":40960}`,
+	}, hits)
+	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
+
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineSGLang, st, cat, t.TempDir(), "Qwen/Qwen3-8B")
+	if err != nil {
+		t.Fatalf("resolveModel: %v", err)
+	}
+	if !containsPair(rm.engineArgs, "--tool-call-parser", "qwen25") {
+		t.Errorf("SGLang engineArgs = %v, want qwen25 tool-call parser", rm.engineArgs)
+	}
+	if contains(rm.engineArgs, "--enable-auto-tool-choice") {
+		t.Errorf("SGLang must not carry vLLM's --enable-auto-tool-choice: %v", rm.engineArgs)
+	}
+}
+
+// A local .gguf whose header names a known family is auto-configured too — here
+// proving reasoning gating is applied to a bring-your-own hybrid GGUF (the gap
+// catalog/starter.yaml's qwen3-8b-gguf comment describes), with no parser flags
+// since llama.cpp drives tool-calling from the embedded template.
+func TestResolveRawAutoConfigsLocalGGUF(t *testing.T) {
+	cat, _ := catalog.Load()
+	st := store.New(t.TempDir())
+
+	path := filepath.Join(t.TempDir(), "byo-qwen3.gguf")
+	if err := os.WriteFile(path, ggufHeaderArch(t, "qwen3"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), path)
+	if err != nil {
+		t.Fatalf("resolveModel: %v", err)
+	}
+	if !rm.reasoning {
+		t.Error("reasoning = false, want true for a qwen3 GGUF")
+	}
+	if len(rm.engineArgs) != 0 {
+		t.Errorf("engineArgs = %v, want none (template-driven)", rm.engineArgs)
+	}
+	if !reflect.DeepEqual(rm.modelArgs, []string{"-m", path}) {
+		t.Errorf("modelArgs = %v", rm.modelArgs)
+	}
+}
+
+// Negative control: an unknown family falls back to the bare plan unchanged,
+// identical to pre-M8 behaviour, even though metadata was fetched successfully.
+func TestResolveRawUnknownFamilyFallsBack(t *testing.T) {
+	cat, _ := catalog.Load()
+	st := store.New(t.TempDir())
+	hits := map[string]int{}
+	srv := hfFixtureServer(t, map[string]string{
+		"config.json": `{"architectures":["MambaForCausalLM"],"model_type":"mamba","max_position_embeddings":8192}`,
+	}, hits)
+	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
+
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "org/mamba")
+	if err != nil {
+		t.Fatalf("resolveModel: %v", err)
+	}
+	if len(rm.engineArgs) != 0 || rm.reasoning || rm.ctxHint != 0 {
+		t.Errorf("expected bare plan for unknown family, got engineArgs=%v reasoning=%v ctxHint=%d", rm.engineArgs, rm.reasoning, rm.ctxHint)
+	}
+}
+
+// ggufHeaderArch hand-encodes a minimal GGUF header naming one
+// general.architecture, enough for resolution to classify the family.
+func ggufHeaderArch(t *testing.T, arch string) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	b.WriteString("GGUF")
+	putU32(&b, 3) // version
+	putU64(&b, 0) // tensor count
+	putU64(&b, 1) // kv count
+	putStr(&b, "general.architecture")
+	putU32(&b, 8) // ggufString type
+	putStr(&b, arch)
+	return b.Bytes()
+}
+
+func contains(args []string, s string) bool {
+	for _, a := range args {
+		if a == s {
+			return true
+		}
+	}
+	return false
 }
 
 func TestResolveModelEngineMismatch(t *testing.T) {
 	cat, _ := catalog.Load()
 	st := store.New(t.TempDir())
 	// qwen3.5-35b-a3b is a vLLM catalog entry; resolving it under llamacpp errors.
-	if _, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, "qwen3.5-35b-a3b"); err == nil {
+	if _, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "qwen3.5-35b-a3b"); err == nil {
 		t.Fatal("expected engine-mismatch error")
 	}
 }
@@ -61,7 +207,7 @@ func TestResolveModelEngineMismatch(t *testing.T) {
 func TestResolveModelHFServesUnderName(t *testing.T) {
 	cat, _ := catalog.Load()
 	st := store.New(t.TempDir())
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, "qwen3.5-35b-a3b")
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "qwen3.5-35b-a3b")
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}
@@ -95,7 +241,7 @@ func TestResolveModelGGUFAutoPulls(t *testing.T) {
 	cat := testCatalog(t, "small-test", srv.URL+"/m.gguf", hex.EncodeToString(sum[:]))
 	st := store.New(t.TempDir())
 
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, "small-test")
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "small-test")
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}
