@@ -53,6 +53,11 @@ type Capabilities struct {
 	HasChatTemplate bool             `json:"has_chat_template"`        // engine can apply the model's own template
 	Sampling        catalog.Sampling `json:"sampling,omitempty"`       // author defaults, when published
 	Engines         []string         `json:"engines,omitempty"`        // candidate engines (worker.Engine values)
+	// GGUF-only: when a repo holds multiple quantizations, Files lists them and
+	// Selected names the one inspected (the Q4_K_M-preferring default). Empty for
+	// safetensors repos and single-file GGUF targets.
+	Files    []string `json:"files,omitempty"`
+	Selected string   `json:"selected,omitempty"`
 }
 
 // Conclusion is the headline of a Verdict. Phase 1 always reports

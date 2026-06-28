@@ -106,6 +106,9 @@ func presentInspect(cmd *cobra.Command, res modelmeta.Result, asJSON bool) error
 	if c.Architecture != "" || c.ModelType != "" {
 		cmd.Printf("Arch:     %s\n", archLine(c.Architecture, c.ModelType))
 	}
+	if len(c.Files) > 1 {
+		cmd.Printf("Quants:   %d files; inspected %s (default; override with the file at serve time)\n", len(c.Files), c.Selected)
+	}
 	cmd.Printf("Context:  %s\n", contextLine(c.ContextWindow, c.RopeScaling))
 	cmd.Printf("Template: %s\n", presentBool(c.HasChatTemplate, "present", "absent"))
 	cmd.Printf("Sampling: %s\n", samplingLine(c.Sampling.Temperature, c.Sampling.TopP))

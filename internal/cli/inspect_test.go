@@ -3,12 +3,14 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/orchestra-hq/atlas/internal/modelmeta"
 )
@@ -106,6 +108,66 @@ func TestInspectCommandJSON(t *testing.T) {
 	if res.Capabilities.Architecture != "Qwen2ForCausalLM" {
 		t.Errorf("json arch = %q", res.Capabilities.Architecture)
 	}
+}
+
+func TestInspectCommandGGUFRepo(t *testing.T) {
+	// A minimal GGUF header: "GGUF" + version + tensor/kv counts + one
+	// general.architecture string KV. Hand-encoded little-endian.
+	header := buildMinimalGGUF(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/models/org/repo", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"siblings":[{"rfilename":"m-Q8_0.gguf"},{"rfilename":"m-Q4_K_M.gguf"}]}`))
+	})
+	mux.HandleFunc("/org/repo/resolve/main/config.json", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/org/repo/resolve/main/m-Q4_K_M.gguf", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeContent(w, r, "m.gguf", time.Time{}, bytes.NewReader(header))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	out, err := runInspectCapture(t, &inspectOptions{stateDir: t.TempDir(), endpoint: srv.URL}, []string{"org/repo"})
+	if err != nil {
+		t.Fatalf("runInspect: %v", err)
+	}
+	for _, want := range []string{"Format:   gguf", "llama", "Quants:", "Q4_K_M"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// buildMinimalGGUF hand-encodes a tiny valid GGUF header with one
+// general.architecture="llama" KV, enough to exercise the command end-to-end.
+func buildMinimalGGUF(t *testing.T) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	b.WriteString("GGUF")
+	putU32(&b, 3) // version
+	putU64(&b, 0) // tensor count
+	putU64(&b, 1) // kv count
+	putStr(&b, "general.architecture")
+	putU32(&b, 8) // ggufString
+	putStr(&b, "llama")
+	return b.Bytes()
+}
+
+func putU32(b *bytes.Buffer, v uint32) {
+	var t [4]byte
+	binary.LittleEndian.PutUint32(t[:], v)
+	b.Write(t[:])
+}
+
+func putU64(b *bytes.Buffer, v uint64) {
+	var t [8]byte
+	binary.LittleEndian.PutUint64(t[:], v)
+	b.Write(t[:])
+}
+
+func putStr(b *bytes.Buffer, s string) {
+	putU64(b, uint64(len(s)))
+	b.WriteString(s)
 }
 
 func TestInspectCommandGatedError(t *testing.T) {

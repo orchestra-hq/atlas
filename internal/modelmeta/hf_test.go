@@ -142,14 +142,22 @@ func TestInspectHFOptionalFilesAbsent(t *testing.T) {
 	}
 }
 
-func TestInspectHFMissingConfig(t *testing.T) {
-	hf := newFakeHF(map[string]fileResp{}) // everything 404s
-	_, err := Inspect(context.Background(), "org/not-a-model", Options{Endpoint: hf.server(t).URL})
-	if err == nil {
-		t.Fatal("expected error for missing config.json")
-	}
-	if !strings.Contains(err.Error(), "not a recognized transformers repo") {
-		t.Errorf("error = %v, want transformers hint", err)
+// A repo that exists (its listing returns) but holds neither config.json nor any
+// .gguf file is not something Atlas can serve — the error says so.
+func TestInspectHFUnrecognizedRepo(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/org/repo/resolve/main/config.json", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/api/models/org/repo", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"siblings":[{"rfilename":"README.md"}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	_, err := Inspect(context.Background(), "org/repo", Options{Endpoint: srv.URL})
+	if err == nil || !strings.Contains(err.Error(), "not a recognized transformers or GGUF repo") {
+		t.Errorf("error = %v, want unrecognized-repo message", err)
 	}
 }
 
@@ -173,12 +181,5 @@ func TestInspectHFSendsToken(t *testing.T) {
 	}
 	if hf.lastAuth != "Bearer secret" {
 		t.Errorf("Authorization = %q, want \"Bearer secret\"", hf.lastAuth)
-	}
-}
-
-func TestInspectGGUFNotYet(t *testing.T) {
-	_, err := Inspect(context.Background(), "org/model-Q4_K_M.gguf", Options{})
-	if err == nil || !strings.Contains(err.Error(), "Phase 1b") {
-		t.Errorf("expected Phase 1b not-implemented error, got %v", err)
 	}
 }
