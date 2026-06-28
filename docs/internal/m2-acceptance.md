@@ -71,7 +71,7 @@ Both scope the gate to `G1–G8,G10` (via `CONF_REQUIRE`) with the Claude Code s
 
 ## Out of scope for M2-done
 
-- **Web console** and **packaging / reference IaC** — explicitly pulled out of M2 into roadmap [M6](../roadmap.md) and [M5](../roadmap.md) ([m2-build-plan.md](m2-build-plan.md) §5).
+- **Web console** and **packaging / reference IaC** — explicitly pulled out of M2 into roadmap [M6](../roadmap.md) (web console) and [M7](../roadmap.md) (packaging & IaC, re-scoped from M5 per [ADR-0014](decisions/0014-m5-rescoped-to-documentation.md)) ([m2-build-plan.md](m2-build-plan.md) §5).
 - **Richer per-model reasoning _styles_** beyond the `enable_thinking` convention — deferred until such a model enters the shipped catalog ([open-questions.md](open-questions.md)).
 - **Session/prefix affinity, HA control plane** — M3, not here ([ADR-0010](decisions/0010-load-balancing-and-backpressure.md)).
-- **ACME / public-DNS TLS** — self-signed + pin remains the transport; ACME is an M5 follow-up.
+- **ACME / public-DNS TLS** — was deferred at M2 (self-signed + pin was the transport then); ACME has since shipped via `--tls-acme-domain` (Let's Encrypt/autocert, [ADR-0009](decisions/0009-transport-security-tls-and-pinning.md)).

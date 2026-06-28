@@ -2,7 +2,7 @@
 
 The ordered path from M1's multi-machine fleet to a fleet you can **operate from the terminal**: see what it is doing, keep it healthy under load, run it on more hardware, and trust the catalog. This refines the M2 milestone in [roadmap.md](../roadmap.md); design truth still lives in [architecture.md](architecture.md) and the relevant ADRs.
 
-M2 is deliberately terminal-first. The **web console** and **packaging + reference IaC** that earlier drafts put in M2 are pulled out into their own later milestones (roadmap M6 and M5) — the console because operating the fleet from the CLI defers the need for a GUI, and packaging because it is a large, independent body of ops work. What is left is the runtime depth and observability that make a fleet operable at all.
+M2 is deliberately terminal-first. The **web console** and **packaging + reference IaC** that earlier drafts put in M2 are pulled out into their own later milestones (roadmap M6 and M7 — packaging was re-scoped from M5 to a demand-driven M7 per ADR-0014) — the console because operating the fleet from the CLI defers the need for a GUI, and packaging because it is a large, independent body of ops work. What is left is the runtime depth and observability that make a fleet operable at all.
 
 ## Build-time technical decisions
 
@@ -12,7 +12,7 @@ Choices recorded here so they don't get re-litigated mid-build:
 2. **The CLI inspection tool reuses the metrics/registry data, no second data path.** `atlas status` (one-shot snapshot) and `atlas top` (auto-refreshing terminal view) read the same counters `/metrics` exposes, served over the admin API. The operator SSHes to the gateway box (or points `--server` + an admin key at it) to watch the fleet. This is the stand-in for the deferred web console.
 3. **Load balancing and backpressure follow [ADR-0010](decisions/0010-load-balancing-and-backpressure.md):** least-in-flight replica selection, a bounded per-model admission queue, and retryable `429`/`529` (Anthropic envelope, mirrored on OpenAI) with `Retry-After`. It is gateway-side; no new wire protocol; the queue is in-memory (HA is M3). Session/prefix affinity is M3, not here.
 4. **New engines follow [ADR-0001](decisions/0001-orchestrate-engines-not-build-one.md) and the established managed-runtime pattern — no new ADR.** MLX and SGLang are OpenAI-compatible servers, so both reuse `internal/engines/openaichat` exactly as the vLLM adapter does, and both are provisioned as managed runtimes in the state dir (a `uv`-managed Python venv, like vLLM). Engine versions are pinned (as `VLLMVersion` already is) with an explicit upgrade flow. This is more of the same, documented here rather than in an ADR.
-5. **Web console and packaging/IaC are out of M2.** They are roadmap M6 (web console) and M5 (packaging & deployment), respectively. M2 must not grow a GUI or a deploy-recipe surface.
+5. **Web console and packaging/IaC are out of M2.** They are roadmap M6 (web console) and M7 (packaging & IaC — re-scoped from M5 per ADR-0014), respectively. M2 must not grow a GUI or a deploy-recipe surface.
 
 ## Phases
 

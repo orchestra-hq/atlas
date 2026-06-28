@@ -29,6 +29,8 @@ Two conclusions:
 
 ## Distribution: validate the plan, pull one thing forward
 
+> **Note (post-M4):** the `get.atlas.dev | sh` vanity-domain installer below was **dropped** — M4 shipped a `curl … install.sh | sh` one-liner served directly from GitHub Releases plus a Homebrew tap, no owned domain (see [ADR-0006](../decisions/0006-packaging-and-deployment.md) / [m4-build-plan.md](../m4-build-plan.md)). The reasoning in this research snapshot otherwise stands.
+
 The existing plan (Ollama playbook: `get.atlas.dev | sh` + Releases + Homebrew, Docker at M2) is right, with one change: **bring Docker images forward.** Atlas is one binary whose role is chosen by subcommand (`up`/`server`/`worker`), so it is **one image**, role by command — a slim variant that downloads its runtime like the binary, plus a CUDA "batteries-included" variant for the vLLM worker (fast cold-start, air-gapped-friendly). This is what k8s/ECS users expect and what makes the GPU nightly a one-liner.
 
 ## Deployment: lean into the differentiator, don't build the cluster

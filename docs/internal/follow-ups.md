@@ -87,6 +87,14 @@ The shed-vs-spill decision (`shouldSpill` + `spillToCloud`, `internal/server/clo
 
 When a Qwen3 thinking turn on vLLM hits `max_tokens` before emitting `</think>`, the response comes back with empty `content` _and_ empty `reasoning_content` despite a full `output_tokens` count — so neither Atlas nor any OpenAI client sees the generated text. This is why the G4 thinking tests failed at `max_tokens=128`; M0 now gates on a realistic budget instead (the model completes its trace), so this is no longer blocking. But it remains a real edge: vLLM 0.23.0 contains the upstream #35221 fix (which should route truncated output to `reasoning_content` when `enable_thinking=True`) and Atlas does send `chat_template_kwargs.enable_thinking=true` (`internal/engines/openaichat/wire.go`, `ThinkingKwargs`), yet the truncated trace still vanishes. Worth confirming on a GPU box whether the parser honors `enable_thinking` as passed (capture vLLM's raw `/v1/chat/completions` for a deliberately-truncated thinking request), and whether a short streamed budget reproduces it. Contrast: llama.cpp surfaces a partial `reasoning_content` in the same situation, so the two engines diverge on truncated reasoning.
 
+## Documentation / research sourcing
+
+### Research docs cite blog aggregators instead of primary sources
+
+**Suggested:** opportunistically, when next touching the research docs. **Surfaced:** pre-go-live internal-docs review (2026-06-28).
+
+Several load-bearing claims in `docs/internal/research/` cite third-party blog/SEO-aggregator pages rather than the primary project docs that repo rule 6 calls for. Specifically: `distribution-deployment-and-gpu-ci.md` sources some competitive distribution claims (e.g. vLLM Docker-first) to markaicode.com / spheron.network and leaves the competitor comparison table's per-row claims unlinked; `landscape.md` leaves the TensorRT-LLM and TGI rows uncited (the "TGI archived March 2026" date is a specific, dateable assertion with no source); `model-catalog-m0.md` cites comparison/aggregator sites (docsbot.ai, computertech.co, morphllm.com) for model license/context/benchmark claims. None are blocking — these are point-in-time research snapshots — but each load-bearing claim should be re-pointed at a primary source (project docs, HF model cards, official repos), keeping aggregators only for synthesis/cost commentary that has no primary equivalent. Doing it properly means re-verifying each link, so it is parked here rather than rushed.
+
 ## Minor refinements (M2 review)
 
 Low-severity items from the M2 review, none blocking. **Suggested:** opportunistically, when next touching each area.

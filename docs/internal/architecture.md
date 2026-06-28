@@ -18,7 +18,7 @@ Atlas ships as **one binary with two roles** (plus a combined mode):
                   │  gateway: /v1/messages, /v1/chat/completions│
                   │  auth & API keys      usage metering       │
                   │  scheduler            model registry       │
-                  │  worker hub           web console          │
+                  │  worker hub           web console (M6)     │
                   └───────▲───────────────▲───────────▲───────┘
                           │ outbound,     │           │
                           │ persistent    │           │   (workers dial OUT to server;
@@ -39,7 +39,7 @@ Atlas ships as **one binary with two roles** (plus a combined mode):
 | Term                       | Meaning                                                                                                                                                                                                                                |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Gateway**                | The client-facing API endpoint (`/v1/messages`, `/v1/chat/completions`). What `ANTHROPIC_BASE_URL` points at; what the DNS name fronts. It decides where each request goes based on which workers/instances are available and healthy. |
-| **Server** (control plane) | The process that hosts the gateway plus the scheduler, model registry, worker hub, auth/metering, and console. One process; "gateway" names its front door.                                                                            |
+| **Server** (control plane) | The process that hosts the gateway plus the scheduler, model registry, worker hub, and auth/metering (a web console is planned for M6). One process; "gateway" names its front door.                                                   |
 | **Worker**                 | The per-machine agent that runs engines and executes inference.                                                                                                                                                                        |
 | **Engine**                 | An inference runtime Atlas orchestrates (vLLM, SGLang, llama.cpp, MLX).                                                                                                                                                                |
 | **Instance**               | One running model on one worker (a model definition placed by the scheduler).                                                                                                                                                          |
@@ -54,7 +54,7 @@ Runs anywhere (a VPS, a container, the same box as a worker). **No GPU required.
 - **Scheduler.** Decides which worker runs which model instance. Inputs: model resource requirements (weights size, quantization, context length → VRAM estimate), worker inventory (GPUs, VRAM, RAM, platform), placement constraints (labels, pinning), desired replica count. Outputs: instance assignments. v1 policy is simple best-fit with queueing; fancier policies (prefix-affinity routing à la llm-d) are explicitly deferred.
 - **Model registry.** Catalog of model definitions: source (Hugging Face repo / GGUF URL / local path), engine + engine config, chat template / tool-call parser settings, aliases. Includes the curated "works for agents" catalog.
 - **Worker hub.** Accepts worker registrations (join token), tracks heartbeats/health, holds the persistent control channels.
-- **Auth, usage, console.** API keys (per key: allowed models, rate/budget later), per-key/per-model token usage metering, and a web console for visibility.
+- **Auth, usage, console.** API keys (per key: allowed models, rate/budget later) and per-key/per-model token usage metering. A web console for visibility is planned for M6; today the equivalent is the terminal surface (`atlas status`/`atlas top`).
 
 ### `atlas worker` — the compute agent
 
@@ -78,7 +78,7 @@ The split model is _enabled_ by the connectivity design below, never required by
 
 ### Connectivity model: workers dial out
 
-The worker opens a persistent outbound connection (gRPC or WebSocket stream — implementation detail, TBD at build time) to the server and keeps it alive. All control messages **and** proxied inference traffic flow over worker-initiated connections.
+The worker opens a persistent outbound WebSocket connection ([ADR-0007](decisions/0007-websocket-worker-channel.md)) to the server and keeps it alive. All control messages **and** proxied inference traffic flow over worker-initiated connections.
 
 Why this is load-bearing (ADR-0003): workers must never require inbound connectivity. Even in the self-contained deployment this pays off — GPU workers sit in private subnets with zero inbound security-group rules — and it's what makes the split/hybrid model possible at all (workers behind NAT, in another cloud, on networks the control-plane operator doesn't control). Only the gateway needs a reachable address. (Anthropic's own self-hosted sandbox workers use the same outbound-only pattern, as does every CI runner; it's proven.)
 
@@ -114,14 +114,22 @@ Trade-off: all inference bytes transit the server. Fine for v1 (token streams ar
 | Single-node DX?                       | Daemon + CLI client, one binary                          | Ollama                                                          |
 | API shape?                            | Anthropic `/v1/messages` + OpenAI `/v1/chat/completions` | vLLM, LiteLLM, Ollama                                           |
 
-## Repository shape (when code starts)
+## Repository shape
 
 ```text
 /cmd/atlas            # single CLI entrypoint: up | server | worker | pull | run | status ...
-/internal/server      # gateway, scheduler, registry, hub, auth, metering
-/internal/worker      # hardware detection, engine supervisors, request execution
-/internal/api         # wire types: anthropic/, openai/, admin/ (translation lives here)
-/internal/engines     # one adapter per engine: vllm/, sglang/, llamacpp/, mlx/
+/internal/cli         # cobra command tree for every subcommand
+/internal/server      # gateway, scheduler, registry, hub, auth, metering, admission, cloud-fallback
+/internal/worker      # hardware detection, engine supervisors, request execution, dial-out
+/internal/api         # client-facing surfaces: anthropic/, openai/ (translation lives here)
+/internal/engines     # one adapter per engine: vllm/, sglang/, llamacpp/, mlx/ (+ shared openaichat/)
+/internal/wire        # worker<->server WebSocket message types (ADR-0007)
+/internal/store       # model store (content-addressed weights + manifests)
+/internal/db          # SQLite persistence (keys, usage, audit) — ADR-0008
+/internal/core        # shared domain types
+/internal/runtime     # engine runtime (venv) provisioning and version pinning
+/internal/tlsx        # TLS helpers (ACME, self-signed, pinning) — ADR-0009
+/internal/version     # build/version metadata
 /catalog              # curated model definitions (yaml), agent-capability tested
-/docs                 # this design documentation
+/docs/internal        # this design documentation
 ```
