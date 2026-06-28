@@ -1,6 +1,6 @@
 # M8 build plan
 
-> **🧭 Proposed — not yet scheduled or started.** This captures a feature the project wants to build and a phased plan for it; nothing here is built. The load-bearing design choices (Build-time decisions below) are recorded in [ADR-0015](decisions/0015-bring-any-model-auto-configuration.md) (status: proposed), to be ratified before implementation. M8 refines the M8 milestone in [roadmap.md](../roadmap.md).
+> **🧭 Scheduled next — ratified, not yet started.** Ratified 2026-06-28: the owner accepted [ADR-0015](decisions/0015-bring-any-model-auto-configuration.md) and scheduled M8 **next, ahead of M6/M7** (the five open questions are resolved — see below). Nothing here is built yet; Phase 0 (ADR) is complete and implementation begins at Phase 1. M8 refines the M8 milestone in [roadmap.md](../roadmap.md).
 
 The pitch in one line: **`atlas up --model <hugging-face-repo>` for _any_ model.** Atlas fetches the model's metadata (not its weights), decides whether it can serve the model well, and then either configures and serves it or tells the user exactly how to add support. This turns the curated catalog from a fence into a fast path, and — crucially — means **nobody has to maintain a catalog**: the "list of supported models" becomes a family→config map in Atlas's own source, extended by ordinary PRs gated on the conformance suite.
 
@@ -51,7 +51,7 @@ Exit criteria are cumulative. **Phase 1 is independently shippable and useful on
 
 ## Phase notes
 
-**Phase 0 — ADR.** The decision record is written — [ADR-0015](decisions/0015-bring-any-model-auto-configuration.md) (resolution becomes metadata-driven; family map in code is the extension point; three-way verdict + default warn-and-serve policy; no community/required-user catalog), with the open questions below surfaced. It is `proposed`; the gate before any code is the owner ratifying it (→ `accepted`).
+**Phase 0 — ADR (done).** The decision record is written and **ratified** — [ADR-0015](decisions/0015-bring-any-model-auto-configuration.md) is `accepted` as of 2026-06-28 (resolution becomes metadata-driven; family map in code is the extension point; three-way verdict + default warn-and-serve policy; no community/required-user catalog), with all five open questions resolved (see below). The Phase-0 exit criterion is met; Phase 1 may begin.
 
 **Phase 1 — inspect.** A metadata fetcher (HF `resolve` URLs for `config.json`, `tokenizer_config.json`, `generation_config.json`; GGUF header reader for gguf repos; token + revision + gated-repo handling) feeding a capability resolver that derives engine candidate(s), context window, template presence, and sampling. Surfaced as `atlas inspect <model>` printing the derived plan and the verdict. No serving, no weight download — cheap to build and test against recorded metadata fixtures.
 
@@ -63,13 +63,15 @@ Exit criteria are cumulative. **Phase 1 is independently shippable and useful on
 
 **Phase 5 — conformance + acceptance.** A new G-group: auto-configure a known HF model with **no catalog row** and run the agent (tool-use, streaming) gates against it, proving the auto-config path is agent-grade. Reconcile public docs ([guides/models](../../website/src/content/docs/guides/models.md)) and the launch post's "bring your own" paragraph, which can then promise auto-config rather than "best-effort."
 
-## Open questions (for the ADR / open-questions.md)
+## Resolved questions (settled at ratification, 2026-06-28)
 
-- **Engine-arch support discovery:** maintain a static per-engine-version supported-arch list, probe the engine at runtime, or trust-and-catch the load failure? Trade-off: accuracy of the pre-download verdict vs maintenance.
-- **GGUF multi-quant repos:** when a repo holds many quant files, pick by heuristic (e.g. prefer `Q4_K_M`) or require an explicit hint?
-- **Middle-case default:** warn-and-serve-chat (most welcoming) vs refuse-by-default (most honest). Proposed: warn-and-serve, with a `--require-verified` opt-out.
-- **Gated/private HF repos:** token handling and the UX when metadata fetch is unauthorized.
-- **Metadata caching:** cache fetched metadata in the state dir keyed by repo+revision to keep repeated `up`/`inspect` fast.
+All five are decided and bind the build (full text in [ADR-0015 § Resolved at ratification](decisions/0015-bring-any-model-auto-configuration.md)):
+
+- **Engine-arch support discovery → static per-engine-version list + trust-and-catch backstop.** The static list drives the pre-download verdict; the actual engine load catches a stale list. (Phase 1/3)
+- **GGUF multi-quant repos → default heuristic (prefer `Q4_K_M`, else nearest) + `--quant` override.** Keeps the one-command flow; the heuristic is documented. (Phase 1/2)
+- **Middle-case default → warn-and-serve-chat, `--require-verified` opt-out.** Clearly labelled at startup; refusable. (Phase 4)
+- **Gated/private HF repos → `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN` env token; actionable 401/403 message.** (Phase 1)
+- **Metadata caching → state-dir cache keyed by `repo@revision`.** (Phase 1)
 
 ## Acceptance — what "M8 done" means
 
@@ -77,5 +79,5 @@ A newcomer runs `atlas up --model <a-popular-HF-repo-not-in-the-catalog>` and, f
 
 ## Who does what
 
-- **Owner:** decide M8's priority/ordering. It is numbered after M7 but is **a candidate to pull ahead** of M6 (web console) / M7 (packaging) given how central "any model just works" is to the "minutes to first token" positioning. Approve the Phase-0 ADR direction.
-- **Build:** Phase 0 ADR, then phases 1–5 as separate green-only PRs per the repo workflow.
+- **Owner (done):** ratified ADR-0015 and **scheduled M8 next, ahead of M6 (web console) / M7 (packaging)** (2026-06-28) — "any model just works" is central to the "minutes to first token" positioning. The five open questions are resolved.
+- **Build:** Phase 0 is complete (ADR accepted). Next: phases 1–5 as separate green-only PRs per the repo workflow, starting with Phase 1 (`atlas inspect`, independently shippable).
