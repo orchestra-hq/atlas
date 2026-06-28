@@ -1,0 +1,184 @@
+package modelmeta
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"path"
+	"strings"
+	"testing"
+)
+
+// fakeHF serves fixture metadata files the way Hugging Face's resolve endpoint
+// does, counting hits per file and recording the last Authorization header so
+// tests can assert auth and (in the cli package) caching behaviour.
+type fakeHF struct {
+	files    map[string]fileResp
+	hits     map[string]int
+	lastAuth string
+}
+
+type fileResp struct {
+	status int // 0 -> 200
+	body   string
+}
+
+func newFakeHF(files map[string]fileResp) *fakeHF {
+	return &fakeHF{files: files, hits: map[string]int{}}
+}
+
+func (f *fakeHF) server(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.lastAuth = r.Header.Get("Authorization")
+		name := path.Base(r.URL.Path)
+		f.hits[name]++
+		resp, ok := f.files[name]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if resp.status != 0 && resp.status != http.StatusOK {
+			w.WriteHeader(resp.status)
+			return
+		}
+		_, _ = w.Write([]byte(resp.body))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+const (
+	fxConfigQwen      = `{"architectures":["Qwen2ForCausalLM"],"model_type":"qwen2","max_position_embeddings":32768}`
+	fxConfigRope      = `{"architectures":["Qwen2ForCausalLM"],"model_type":"qwen2","max_position_embeddings":32768,"rope_scaling":{"rope_type":"yarn","factor":4.0}}`
+	fxTokenizer       = `{"chat_template":"{% for m in messages %}{{ m.content }}{% endfor %}"}`
+	fxTokenizerNoTmpl = `{"bos_token":"<s>"}`
+	fxGeneration      = `{"temperature":0.7,"top_p":0.8}`
+)
+
+func TestInspectHFDerivesPlan(t *testing.T) {
+	hf := newFakeHF(map[string]fileResp{
+		"config.json":            {body: fxConfigQwen},
+		"tokenizer_config.json":  {body: fxTokenizer},
+		"generation_config.json": {body: fxGeneration},
+	})
+	srv := hf.server(t)
+
+	res, err := Inspect(context.Background(), "org/qwen2.5-7b", Options{Endpoint: srv.URL})
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	c := res.Capabilities
+	if c.Format != FormatSafetensors {
+		t.Errorf("format = %q, want safetensors", c.Format)
+	}
+	if c.Architecture != "Qwen2ForCausalLM" || c.ModelType != "qwen2" {
+		t.Errorf("arch/type = %q/%q", c.Architecture, c.ModelType)
+	}
+	if c.ContextWindow != 32768 {
+		t.Errorf("context = %d, want 32768", c.ContextWindow)
+	}
+	if !c.HasChatTemplate {
+		t.Error("HasChatTemplate = false, want true")
+	}
+	if c.Sampling.Temperature == nil || *c.Sampling.Temperature != 0.7 {
+		t.Errorf("temperature = %v, want 0.7", c.Sampling.Temperature)
+	}
+	if c.Sampling.TopP == nil || *c.Sampling.TopP != 0.8 {
+		t.Errorf("top_p = %v, want 0.8", c.Sampling.TopP)
+	}
+	if len(c.Engines) == 0 {
+		t.Error("no candidate engines")
+	}
+	if res.Verdict.Conclusion != ConclusionInspected {
+		t.Errorf("conclusion = %q", res.Verdict.Conclusion)
+	}
+	if res.Verdict.Engine != c.Engines[0] {
+		t.Errorf("verdict engine = %q, want %q", res.Verdict.Engine, c.Engines[0])
+	}
+	if res.Verdict.Family != Pending || res.Verdict.Loadable != Pending || res.Verdict.Fits != Pending {
+		t.Errorf("expected pending family/loadable/fits, got %+v", res.Verdict)
+	}
+}
+
+func TestInspectHFRopeScaling(t *testing.T) {
+	hf := newFakeHF(map[string]fileResp{"config.json": {body: fxConfigRope}})
+	res, err := Inspect(context.Background(), "org/m", Options{Endpoint: hf.server(t).URL})
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if got := res.Capabilities.RopeScaling; got != "yarn x4" {
+		t.Errorf("rope = %q, want \"yarn x4\"", got)
+	}
+}
+
+// Negative control: drop chat_template and HasChatTemplate must flip to false.
+func TestInspectHFNoChatTemplate(t *testing.T) {
+	hf := newFakeHF(map[string]fileResp{
+		"config.json":           {body: fxConfigQwen},
+		"tokenizer_config.json": {body: fxTokenizerNoTmpl},
+	})
+	res, err := Inspect(context.Background(), "org/m", Options{Endpoint: hf.server(t).URL})
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if res.Capabilities.HasChatTemplate {
+		t.Error("HasChatTemplate = true, want false")
+	}
+}
+
+// Only config.json present: optional files 404, no crash, fields stay zero.
+func TestInspectHFOptionalFilesAbsent(t *testing.T) {
+	hf := newFakeHF(map[string]fileResp{"config.json": {body: fxConfigQwen}})
+	res, err := Inspect(context.Background(), "org/m", Options{Endpoint: hf.server(t).URL})
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if res.Capabilities.HasChatTemplate {
+		t.Error("HasChatTemplate should be false when tokenizer_config is absent")
+	}
+	if res.Capabilities.Sampling.Temperature != nil || res.Capabilities.Sampling.TopP != nil {
+		t.Error("Sampling should be empty when generation_config is absent")
+	}
+}
+
+func TestInspectHFMissingConfig(t *testing.T) {
+	hf := newFakeHF(map[string]fileResp{}) // everything 404s
+	_, err := Inspect(context.Background(), "org/not-a-model", Options{Endpoint: hf.server(t).URL})
+	if err == nil {
+		t.Fatal("expected error for missing config.json")
+	}
+	if !strings.Contains(err.Error(), "not a recognized transformers repo") {
+		t.Errorf("error = %v, want transformers hint", err)
+	}
+}
+
+func TestInspectHFGatedRepo(t *testing.T) {
+	hf := newFakeHF(map[string]fileResp{"config.json": {status: http.StatusUnauthorized}})
+	srv := hf.server(t)
+	_, err := Inspect(context.Background(), "org/gated", Options{Endpoint: srv.URL})
+	if err == nil {
+		t.Fatal("expected error for gated repo")
+	}
+	if !strings.Contains(err.Error(), "HF_TOKEN") || !strings.Contains(err.Error(), "gated") {
+		t.Errorf("error = %v, want HF_TOKEN/gated remedy", err)
+	}
+}
+
+func TestInspectHFSendsToken(t *testing.T) {
+	hf := newFakeHF(map[string]fileResp{"config.json": {body: fxConfigQwen}})
+	srv := hf.server(t)
+	if _, err := Inspect(context.Background(), "org/m", Options{Endpoint: srv.URL, Token: "secret"}); err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if hf.lastAuth != "Bearer secret" {
+		t.Errorf("Authorization = %q, want \"Bearer secret\"", hf.lastAuth)
+	}
+}
+
+func TestInspectGGUFNotYet(t *testing.T) {
+	_, err := Inspect(context.Background(), "org/model-Q4_K_M.gguf", Options{})
+	if err == nil || !strings.Contains(err.Error(), "Phase 1b") {
+		t.Errorf("expected Phase 1b not-implemented error, got %v", err)
+	}
+}
