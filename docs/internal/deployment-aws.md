@@ -48,13 +48,13 @@ Atlas does **not** ship or support Terraform as part of the product. We will pub
   ```bash
   #!/bin/bash
   curl -fsSL https://raw.githubusercontent.com/orchestra-hq/atlas/main/install.sh | sh
-  atlas worker --server https://atlas.yourco.com \
-               --join-token "$(aws secretsmanager get-secret-value --secret-id atlas/join-token --query SecretString --output text)"
+  atlas worker --join wss://atlas.yourco.com/workers/connect \
+               --token "$(aws secretsmanager get-secret-value --secret-id atlas/join-token --query SecretString --output text)"
   ```
 
   That script _is_ the integration. Join token lives in Secrets Manager/SSM; instance role grants read on it.
 
-- **Weights cache** on instance NVMe or gp3 EBS per worker. Optional **S3 weights mirror** so ten workers don't each pull 140GB from Hugging Face and cold boots are fast (registry supports `s3://` sources).
+- **Weights cache** on instance NVMe or gp3 EBS per worker, so each worker pulls a model once and cold boots are fast. (Weights are sourced from Hugging Face or an `https://` GGUF URL via the catalog; an S3 weights mirror to spare ten workers each pulling 140GB is a possible future source type, not yet implemented.)
 
 ### Scaling and spot
 

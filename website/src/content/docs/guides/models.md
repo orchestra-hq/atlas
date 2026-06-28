@@ -33,9 +33,11 @@ names to local models (e.g. `claude-sonnet-4-6 → qwen3-coder-72b`) — see
 
 ## Serving your own weights
 
-Beyond the catalog, you can serve a model by Hugging Face id or a local/`s3://`/`https://` source.
-Catalog models are the recommended path because their templates and parsers are agent-tested; raw
-weights are best-effort for template-sensitive behavior (notably reasoning toggles on hybrid models).
+Beyond the catalog, `atlas up --model <ref>` serves a model by Hugging Face repo id or a local file
+path (and an `https://` GGUF URL can be added as a catalog entry). Catalog models are the recommended
+path because their templates and parsers are agent-tested; raw weights are best-effort for
+template-sensitive behavior (notably reasoning toggles on hybrid models).
 
 See [API compatibility](/atlas/reference/api-compatibility/) for endpoint details and the
-[CLI reference](/atlas/reference/cli/) for `atlas pull` / `atlas deploy`.
+[CLI reference](/atlas/reference/cli/) for `atlas pull` (fetch weights) and `atlas deploy` (place a
+catalog model on the fleet).

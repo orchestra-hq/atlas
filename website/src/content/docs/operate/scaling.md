@@ -17,24 +17,25 @@ atlas stop <model>                 # stop a deployment
 atlas deployments                  # list deployments
 ```
 
-See the [CLI reference](/atlas/reference/cli/) for worker management (`atlas workers`,
-`atlas remove`).
+See the [CLI reference](/atlas/reference/cli/) for worker management (`atlas workers list`,
+`atlas workers remove`).
 
 ## Drain, spot, and heartbeats
 
 Workers are stateless executors that self-register and are removed on heartbeat timeout:
 
-- **Graceful drain on SIGTERM** — a worker finishes/hands off in-flight requests before exit, so
-  ASG scale-in and spot interruptions don't drop live requests.
+- **Graceful drain on SIGTERM** — a worker stops accepting new requests and lets its in-flight
+  requests finish before exit, so ASG scale-in and spot interruptions don't drop live requests.
 - **Spot instances work naturally** — an interrupted worker is just a heartbeat timeout; the scheduler
   re-places its model instances on remaining capacity.
 - **Heartbeat-timeout removal** — vanished workers leave the pool automatically.
 
 ## Weights
 
-Each worker caches weights on local NVMe or EBS. For many workers, mirror weights to **S3** (`s3://`
-sources alongside Hugging Face and `https://`) so cold boots are fast and you don't pull the same
-140GB ten times.
+Each worker caches weights on local NVMe or EBS, so a model is pulled once per worker and subsequent
+cold boots are fast. Weights are sourced from Hugging Face or an `https://` GGUF URL (via the model
+catalog); pin them to a fast local disk on each worker so you don't re-pull the same 140GB on every
+restart.
 
 ## Autoscaling
 

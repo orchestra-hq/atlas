@@ -24,17 +24,21 @@ only the topology grows.
 Joining is non-interactive (flags/env), so it drops straight into instance start-up scripts:
 
 ```sh
-atlas worker --server https://atlas.yourco.com --join-token "$ATLAS_JOIN_TOKEN"
+atlas worker --join wss://atlas.yourco.com/workers/connect --token "$ATLAS_JOIN_TOKEN"
 ```
 
-That one line _is_ the integration — install the binary, run it with a join token (kept in your
-secrets manager), and the worker appears in the fleet.
+`--join` is the server's WebSocket URL (`wss://` for a TLS-fronted endpoint, `ws://` otherwise) and
+`--token` is the join token printed by `atlas server`; both can come from the environment instead
+(`ATLAS_SERVER_URL`, `ATLAS_JOIN_TOKEN`). If the server uses a self-signed certificate, pin it with
+`--tls-pin sha256:<hex>` (printed by `atlas server --tls-self-signed`; not needed for ACME/public-CA
+certs). That one line _is_ the integration — install the binary, run it with a join token (kept in
+your secrets manager), and the worker appears in the fleet.
 
 ## Why this shape is convenient
 
 - **Elastic pools** — because workers self-register and are removed on heartbeat timeout, you can run
   each pool under an autoscaling group: scale out and a new instance joins in minutes; scale in and
-  the worker drains in-flight requests, then leaves.
+  the worker stops accepting new requests and lets its in-flight requests finish before disconnecting.
 - **Spot-friendly** — an interrupted worker is just a heartbeat timeout; the scheduler re-places its
   models on remaining capacity.
 - **Hybrid is free** — since workers dial out, the control plane can be in one place and workers

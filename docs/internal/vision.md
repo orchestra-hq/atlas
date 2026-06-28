@@ -18,14 +18,14 @@ Specific gap we target: **agent SDK redirection**. The Claude Agent SDK and Clau
 
 ## What Atlas is
 
-- A **control plane** (`atlas server`): API gateway, scheduler, model registry, auth, usage metering, web console. Runs anywhere, no GPU needed.
+- A **control plane** (`atlas server`): API gateway, scheduler, model registry, auth, usage metering (web console is M6). Runs anywhere, no GPU needed.
 - A **worker** (`atlas worker`): one process per compute machine. Detects hardware, launches and supervises the right inference engine for the model and the hardware, streams results back. Dials _out_ to the control plane.
 - A **single-node mode** (`atlas up`): both in one process, Ollama-style, for laptops and single GPU boxes.
 
 ## What Atlas is not
 
 - **Not an inference engine.** We orchestrate vLLM, SGLang, llama.cpp, and MLX; we do not write kernels (ADR-0001).
-- **Not a SaaS gateway to hosted providers.** LiteLLM/OpenRouter route to other people's clouds; Atlas serves models on hardware you control. (A passthrough/fallback-to-cloud feature may come later, but it is not the core.)
+- **Not a SaaS gateway to hosted providers.** LiteLLM/OpenRouter route to other people's clouds; Atlas serves models on hardware you control. (An opt-in cloud-fallback/passthrough exists since M3, off by default, but it is not the core.)
 - **Not a Kubernetes operator.** It must run great on bare metal and VMs. K8s deployment manifests are a packaging concern, not the architecture.
 - **Not a model-sharding research project.** Splitting one model across many small devices (exo's territory) is out of scope initially; we place whole models (or engine-managed tensor-parallel groups) on capable machines.
 

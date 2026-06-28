@@ -11,8 +11,10 @@ for watching a fleet live — the stand-in for the web console (which is its own
 ## Metrics
 
 The gateway serves Prometheus `/metrics`, including a queue-depth / utilization signal usable for
-external autoscaling (e.g. an ASG scaling policy). Point your Prometheus at it and build dashboards as
-usual.
+external autoscaling (e.g. an ASG scaling policy). The endpoint requires an admin-scoped key, so
+configure your scraper to send it — mint one with `atlas keys create --admin` and pass it as a
+`Authorization: Bearer <key>` (or `x-api-key`) header in the Prometheus scrape config. Then build
+dashboards as usual.
 
 ## CLI inspection
 
