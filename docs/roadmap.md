@@ -124,6 +124,16 @@ The deploy-recipe and packaging surface, **deferred here from M5** ([ADR-0014](i
 - Reference IaC under `examples/` — AWS Terraform first (~100-line bar, see [deployment-aws.md](internal/deployment-aws.md)); `s3://` model sources
 - TLS/ACME hardening on a real public deployment, resolving the remaining transport-security follow-ups in [follow-ups.md](internal/follow-ups.md): self-signed cert host-change handling, ACME `:443` reconciliation
 
+## M8 — Bring any model (auto-configuration)
+
+**`atlas up --model <hugging-face-repo>` for _any_ model.** Atlas fetches the model's metadata (not its weights), decides whether it can serve it well, and either auto-configures and serves it or tells the user exactly how to add support — turning the curated catalog from a fence into a fast path. The win that makes this tractable: the "list of supported models" becomes a **family→config map in Atlas's own source**, extended by ordinary PRs gated on the conformance suite — so there is **no catalog for users to maintain and no community catalog for us to maintain**. Needs its own ADR when it starts (resolution becomes metadata-driven). Numbered after M7 but a **candidate to pull ahead** of M6/M7, since "any model just works" is core to the "minutes to first token" positioning. Plan: [m8-build-plan.md](internal/m8-build-plan.md).
+
+- Metadata inspection: fetch `config.json` / `tokenizer_config.json` / `generation_config.json` (and the GGUF header for gguf repos) and derive engine, context window, chat template, and sampling — without downloading weights
+- A family→agent-config map (tool-call parser, reasoning parser, template quirks) in code, **seeded from today's `starter.yaml` `engine_args`** and extended by PR
+- A three-way verdict: known family → configure + serve; engine-loadable but agent-config unknown → serve chat with a warning (or refuse) + a precise "open a PR here" pointer; architecture the engine can't load / won't fit the hardware → clean, actionable failure
+- A new conformance gate: an auto-configured model with **no catalog row** passes the agent (tool-use) gates
+- The curated catalog's role shrinks to a few blessed, tested examples plus override/pin — no separate catalog artifact to host
+
 ## Standing tracks (every milestone)
 
 - **Docs & marketing:** each milestone ships with a polished guide + demo video; recipes for Claude Agent SDK, Claude Code, OpenAI Agents SDK, LangChain.
