@@ -142,24 +142,26 @@ func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, s
 
 // applyQuant points a multi-quant Hugging Face GGUF repo at one quantization,
 // rewriting the llama.cpp model args to -hf repo:<quant> (the engine matches the
-// tag against the repo's files). The user's --quant wins (validated against the
-// listing for a clear error); absent, the inspect-time default (caps.Selected,
-// Q4_K_M-preferring per ADR-0015) is used. Non-repo / single-file / non-GGUF
-// targets need no selection; passing --quant for one is an error.
+// tag against the repo's files). The user's --quant wins — resolved to the repo's
+// own canonical quant token so the tag handed to the engine is exact regardless
+// of the case or partial form the user typed; absent, the inspect-time default
+// (caps.Selected, Q4_K_M-preferring per ADR-0015) is used. Non-repo / single-file
+// / non-GGUF targets have no selectable quants; passing --quant for one is an error.
 func applyQuant(cmd *cobra.Command, plan *resolvedModel, engine worker.Engine, spec, quant string, caps modelmeta.Capabilities) error {
 	multiQuantRepo := engine == worker.EngineLlamaCpp && caps.Format == modelmeta.FormatGGUF && len(caps.Files) > 0
 	if !multiQuantRepo {
 		if quant != "" {
-			return fmt.Errorf("--quant %q: %s is not a multi-quant Hugging Face GGUF repo", quant, spec)
+			return fmt.Errorf("--quant %q: %s has no selectable quantizations (only a multi-quant Hugging Face GGUF repo does)", quant, spec)
 		}
 		return nil
 	}
 	if quant != "" {
-		if !quantMatches(caps.Files, quant) {
-			return fmt.Errorf("--quant %q matches no file in %s; available: %s", quant, spec, strings.Join(quantTokens(caps.Files), ", "))
+		tok, err := resolveQuant(caps.Files, quant)
+		if err != nil {
+			return fmt.Errorf("%w in %s", err, spec)
 		}
-		plan.modelArgs = []string{"-hf", spec + ":" + quant}
-		cmd.Printf("Serving quantization %s of %s\n", quant, spec)
+		plan.modelArgs = []string{"-hf", spec + ":" + tok}
+		cmd.Printf("Serving quantization %s of %s\n", tok, spec)
 		return nil
 	}
 	if tok := quantToken(caps.Selected); tok != "" {
@@ -167,6 +169,33 @@ func applyQuant(cmd *cobra.Command, plan *resolvedModel, engine worker.Engine, s
 		cmd.Printf("Serving quantization %s of %s (default; override with --quant)\n", tok, spec)
 	}
 	return nil
+}
+
+// resolveQuant maps a user --quant request to a single canonical quant token from
+// the repo's files, normalizing case and rejecting an absent or ambiguous request
+// so the -hf tag handed to llama.cpp names exactly one quantization. A request
+// "matches" a file when (case-insensitively) the file name contains it; the
+// distinct quant tokens of the matching files must come to exactly one.
+func resolveQuant(files []string, want string) (string, error) {
+	w := strings.ToUpper(strings.TrimSpace(want))
+	seen := map[string]bool{}
+	var matched []string
+	for _, f := range files {
+		tok := quantToken(f)
+		if tok == "" || !strings.Contains(strings.ToUpper(f), w) || seen[tok] {
+			continue
+		}
+		seen[tok] = true
+		matched = append(matched, tok)
+	}
+	switch len(matched) {
+	case 1:
+		return matched[0], nil
+	case 0:
+		return "", fmt.Errorf("--quant %q matches no file; available: %s", want, strings.Join(quantTokens(files), ", "))
+	default:
+		return "", fmt.Errorf("--quant %q is ambiguous; matches %s — be more specific", want, strings.Join(matched, ", "))
+	}
 }
 
 // parserNote describes the parser flags auto-config applied, for the user-facing
@@ -177,18 +206,6 @@ func parserNote(args []string) string {
 		return " (template-driven; no parser flags)."
 	}
 	return ": " + strings.Join(args, " ")
-}
-
-// quantMatches reports whether the requested quant appears in any of the repo's
-// files (case-insensitive substring), so a bad --quant fails with a clear list.
-func quantMatches(files []string, quant string) bool {
-	q := strings.ToUpper(quant)
-	for _, f := range files {
-		if strings.Contains(strings.ToUpper(f), q) {
-			return true
-		}
-	}
-	return false
 }
 
 // quantToken extracts the quant designator from a GGUF filename (e.g.
