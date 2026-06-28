@@ -220,20 +220,40 @@ func TestResolveRawQuantDefault(t *testing.T) {
 	}
 }
 
-// An explicit --quant selects that quantization (validated against the listing).
+// An explicit --quant selects that quantization, normalized to the repo's
+// canonical token even when the user types it lower-case.
 func TestResolveRawQuantExplicit(t *testing.T) {
+	cat, _ := catalog.Load()
+	repo := "org/qwen3-gguf"
+	for _, quant := range []string{"Q5_K_M", "q5_k_m"} {
+		t.Run(quant, func(t *testing.T) {
+			st := store.New(t.TempDir())
+			srv := multiQuantGGUFServer(t, repo, []string{"m-Q4_K_M.gguf", "m-Q5_K_M.gguf", "m-Q8_0.gguf"}, qwen3GGUFHeader(t))
+			t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
+
+			rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), quant, repo)
+			if err != nil {
+				t.Fatalf("resolveModel: %v", err)
+			}
+			if !reflect.DeepEqual(rm.modelArgs, []string{"-hf", repo + ":Q5_K_M"}) {
+				t.Errorf("modelArgs = %v, want -hf %s:Q5_K_M (canonical token)", rm.modelArgs, repo)
+			}
+		})
+	}
+}
+
+// An ambiguous --quant (matching more than one quantization) errors rather than
+// forwarding a partial tag that the engine would resolve unpredictably.
+func TestResolveRawQuantAmbiguous(t *testing.T) {
 	cat, _ := catalog.Load()
 	st := store.New(t.TempDir())
 	repo := "org/qwen3-gguf"
-	srv := multiQuantGGUFServer(t, repo, []string{"m-Q4_K_M.gguf", "m-Q5_K_M.gguf", "m-Q8_0.gguf"}, qwen3GGUFHeader(t))
+	srv := multiQuantGGUFServer(t, repo, []string{"m-Q4_K_M.gguf", "m-Q5_K_M.gguf"}, qwen3GGUFHeader(t))
 	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
 
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "Q5_K_M", repo)
-	if err != nil {
-		t.Fatalf("resolveModel: %v", err)
-	}
-	if !reflect.DeepEqual(rm.modelArgs, []string{"-hf", repo + ":Q5_K_M"}) {
-		t.Errorf("modelArgs = %v, want -hf %s:Q5_K_M", rm.modelArgs, repo)
+	_, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "K_M", repo)
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Errorf("error = %v, want an ambiguity error for --quant K_M", err)
 	}
 }
 
@@ -266,8 +286,8 @@ func TestResolveRawQuantOnNonRepo(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "Q4_K_M", path)
-	if err == nil || !strings.Contains(err.Error(), "not a multi-quant") {
-		t.Errorf("error = %v, want not-a-multi-quant message", err)
+	if err == nil || !strings.Contains(err.Error(), "no selectable quantizations") {
+		t.Errorf("error = %v, want no-selectable-quantizations message", err)
 	}
 }
 
