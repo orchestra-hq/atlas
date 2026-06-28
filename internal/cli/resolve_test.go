@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -37,7 +39,7 @@ func TestResolveModelRawSpecFallsBack(t *testing.T) {
 	// metadata fetch fails and resolution falls back to the pre-M8 bare passthrough.
 	t.Setenv("ATLAS_HF_ENDPOINT", notFoundServer(t).URL)
 
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "ggml-org/Qwen2.5-0.5B-Instruct-GGUF")
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "", "ggml-org/Qwen2.5-0.5B-Instruct-GGUF")
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}
@@ -77,7 +79,7 @@ func TestResolveRawAutoConfigsKnownFamily(t *testing.T) {
 	}, hits)
 	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
 
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "Qwen/Qwen3-8B")
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "Qwen/Qwen3-8B")
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}
@@ -111,7 +113,7 @@ func TestResolveRawAutoConfigsPerEngine(t *testing.T) {
 	}, hits)
 	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
 
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineSGLang, st, cat, t.TempDir(), "Qwen/Qwen3-8B")
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineSGLang, st, cat, t.TempDir(), "", "Qwen/Qwen3-8B")
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}
@@ -132,11 +134,11 @@ func TestResolveRawAutoConfigsLocalGGUF(t *testing.T) {
 	st := store.New(t.TempDir())
 
 	path := filepath.Join(t.TempDir(), "byo-qwen3.gguf")
-	if err := os.WriteFile(path, ggufHeaderArch(t, "qwen3"), 0o644); err != nil {
+	if err := os.WriteFile(path, qwen3GGUFHeader(t), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), path)
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "", path)
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}
@@ -162,7 +164,7 @@ func TestResolveRawUnknownFamilyFallsBack(t *testing.T) {
 	}, hits)
 	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
 
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "org/mamba")
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "org/mamba")
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}
@@ -171,9 +173,107 @@ func TestResolveRawUnknownFamilyFallsBack(t *testing.T) {
 	}
 }
 
-// ggufHeaderArch hand-encodes a minimal GGUF header naming one
-// general.architecture, enough for resolution to classify the family.
-func ggufHeaderArch(t *testing.T, arch string) []byte {
+// multiQuantGGUFServer serves an HF GGUF repo with several quantization files:
+// config.json 404s (not a transformers repo), the model API lists the quants, and
+// each .gguf resolve URL serves the same minimal header so inspection succeeds.
+func multiQuantGGUFServer(t *testing.T, repo string, files []string, header []byte) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/models/"+repo, func(w http.ResponseWriter, _ *http.Request) {
+		parts := make([]string, len(files))
+		for i, f := range files {
+			parts[i] = `{"rfilename":"` + f + `"}`
+		}
+		_, _ = w.Write([]byte(`{"siblings":[` + strings.Join(parts, ",") + `]}`))
+	})
+	mux.HandleFunc("/"+repo+"/resolve/main/config.json", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	for _, f := range files {
+		mux.HandleFunc("/"+repo+"/resolve/main/"+f, func(w http.ResponseWriter, r *http.Request) {
+			http.ServeContent(w, r, f, time.Time{}, bytes.NewReader(header))
+		})
+	}
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// A multi-quant GGUF repo with no --quant serves the Q4_K_M-preferring default,
+// rewriting the llama.cpp args to -hf repo:<quant> (matching inspect's report).
+func TestResolveRawQuantDefault(t *testing.T) {
+	cat, _ := catalog.Load()
+	st := store.New(t.TempDir())
+	repo := "org/qwen3-gguf"
+	srv := multiQuantGGUFServer(t, repo, []string{"m-Q4_K_M.gguf", "m-Q5_K_M.gguf", "m-Q8_0.gguf"}, qwen3GGUFHeader(t))
+	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
+
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "", repo)
+	if err != nil {
+		t.Fatalf("resolveModel: %v", err)
+	}
+	if !reflect.DeepEqual(rm.modelArgs, []string{"-hf", repo + ":Q4_K_M"}) {
+		t.Errorf("modelArgs = %v, want -hf %s:Q4_K_M", rm.modelArgs, repo)
+	}
+	if !rm.reasoning {
+		t.Error("reasoning = false, want true for qwen3 GGUF")
+	}
+}
+
+// An explicit --quant selects that quantization (validated against the listing).
+func TestResolveRawQuantExplicit(t *testing.T) {
+	cat, _ := catalog.Load()
+	st := store.New(t.TempDir())
+	repo := "org/qwen3-gguf"
+	srv := multiQuantGGUFServer(t, repo, []string{"m-Q4_K_M.gguf", "m-Q5_K_M.gguf", "m-Q8_0.gguf"}, qwen3GGUFHeader(t))
+	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
+
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "Q5_K_M", repo)
+	if err != nil {
+		t.Fatalf("resolveModel: %v", err)
+	}
+	if !reflect.DeepEqual(rm.modelArgs, []string{"-hf", repo + ":Q5_K_M"}) {
+		t.Errorf("modelArgs = %v, want -hf %s:Q5_K_M", rm.modelArgs, repo)
+	}
+}
+
+// An unknown --quant errors and lists the repo's available quantizations.
+func TestResolveRawQuantUnknown(t *testing.T) {
+	cat, _ := catalog.Load()
+	st := store.New(t.TempDir())
+	repo := "org/qwen3-gguf"
+	srv := multiQuantGGUFServer(t, repo, []string{"m-Q4_K_M.gguf", "m-Q8_0.gguf"}, qwen3GGUFHeader(t))
+	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
+
+	_, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "Q3_K_S", repo)
+	if err == nil {
+		t.Fatal("expected an error for an unavailable quant")
+	}
+	for _, want := range []string{"Q3_K_S", "Q4_K_M", "Q8_0"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+}
+
+// --quant on something that is not a multi-quant repo (here a single local .gguf)
+// is a clear error rather than a silent no-op.
+func TestResolveRawQuantOnNonRepo(t *testing.T) {
+	cat, _ := catalog.Load()
+	st := store.New(t.TempDir())
+	path := filepath.Join(t.TempDir(), "single.gguf")
+	if err := os.WriteFile(path, qwen3GGUFHeader(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "Q4_K_M", path)
+	if err == nil || !strings.Contains(err.Error(), "not a multi-quant") {
+		t.Errorf("error = %v, want not-a-multi-quant message", err)
+	}
+}
+
+// qwen3GGUFHeader hand-encodes a minimal GGUF header naming
+// general.architecture=qwen3, enough for resolution to classify the family.
+func qwen3GGUFHeader(t *testing.T) []byte {
 	t.Helper()
 	var b bytes.Buffer
 	b.WriteString("GGUF")
@@ -182,7 +282,7 @@ func ggufHeaderArch(t *testing.T, arch string) []byte {
 	putU64(&b, 1) // kv count
 	putStr(&b, "general.architecture")
 	putU32(&b, 8) // ggufString type
-	putStr(&b, arch)
+	putStr(&b, "qwen3")
 	return b.Bytes()
 }
 
@@ -199,7 +299,7 @@ func TestResolveModelEngineMismatch(t *testing.T) {
 	cat, _ := catalog.Load()
 	st := store.New(t.TempDir())
 	// qwen3.5-35b-a3b is a vLLM catalog entry; resolving it under llamacpp errors.
-	if _, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "qwen3.5-35b-a3b"); err == nil {
+	if _, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "", "qwen3.5-35b-a3b"); err == nil {
 		t.Fatal("expected engine-mismatch error")
 	}
 }
@@ -207,7 +307,7 @@ func TestResolveModelEngineMismatch(t *testing.T) {
 func TestResolveModelHFServesUnderName(t *testing.T) {
 	cat, _ := catalog.Load()
 	st := store.New(t.TempDir())
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "qwen3.5-35b-a3b")
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "qwen3.5-35b-a3b")
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}
@@ -241,7 +341,7 @@ func TestResolveModelGGUFAutoPulls(t *testing.T) {
 	cat := testCatalog(t, "small-test", srv.URL+"/m.gguf", hex.EncodeToString(sum[:]))
 	st := store.New(t.TempDir())
 
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "small-test")
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "", "small-test")
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}

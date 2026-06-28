@@ -61,12 +61,16 @@ type engineRuntime struct {
 	binPath    string
 	cat        *catalog.Catalog
 	st         *store.Store
+	// quant selects which quantization of a multi-quant Hugging Face GGUF repo to
+	// serve (M8 P8.2c); empty uses the Q4_K_M-preferring default. Single-node only
+	// (atlas up/run); the fleet worker leaves it empty.
+	quant string
 }
 
 // newEngineRuntime loads the catalog, opens the model store, and provisions the
 // engine binary (downloading it on first run) — the slow, once-per-worker setup
 // every model launch then reuses.
-func newEngineRuntime(ctx context.Context, cmd *cobra.Command, engine worker.Engine, engineArgs []string, stateDir string) (*engineRuntime, error) {
+func newEngineRuntime(ctx context.Context, cmd *cobra.Command, engine worker.Engine, engineArgs []string, stateDir, quant string) (*engineRuntime, error) {
 	cat, err := catalog.Load()
 	if err != nil {
 		return nil, err
@@ -84,6 +88,7 @@ func newEngineRuntime(ctx context.Context, cmd *cobra.Command, engine worker.Eng
 		binPath:    binPath,
 		cat:        cat,
 		st:         store.New(filepath.Join(stateDir, "store")),
+		quant:      quant,
 	}, nil
 }
 
@@ -95,7 +100,7 @@ func (r *engineRuntime) start(ctx context.Context, spec string) (startedModel, e
 	if entry, ok := r.cat.Lookup(spec); ok && worker.Engine(entry.Engine) != r.engine {
 		return startedModel{}, fmt.Errorf("model %q is a %s catalog model; rerun with --engine %s", entry.Name, entry.Engine, entry.Engine)
 	}
-	rm, err := resolveModel(ctx, r.cmd, r.engine, r.st, r.cat, r.stateDir, spec)
+	rm, err := resolveModel(ctx, r.cmd, r.engine, r.st, r.cat, r.stateDir, r.quant, spec)
 	if err != nil {
 		return startedModel{}, err
 	}
@@ -161,8 +166,8 @@ func startModelsOn(ctx context.Context, rt *engineRuntime, models []string) ([]s
 // per --model value. It is the single-node convenience used by `atlas up`;
 // `atlas worker` builds the runtime itself (newEngineRuntime) so it can also
 // serve scheduler-driven loads over the channel.
-func startModels(ctx context.Context, cmd *cobra.Command, engine worker.Engine, engineArgs, models []string, stateDir string) ([]startedModel, func(), error) {
-	rt, err := newEngineRuntime(ctx, cmd, engine, engineArgs, stateDir)
+func startModels(ctx context.Context, cmd *cobra.Command, engine worker.Engine, engineArgs, models []string, stateDir, quant string) ([]startedModel, func(), error) {
+	rt, err := newEngineRuntime(ctx, cmd, engine, engineArgs, stateDir, quant)
 	if err != nil {
 		return nil, nil, err
 	}
