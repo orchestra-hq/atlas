@@ -62,10 +62,16 @@ func TestInspectCommandPrintsPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runInspect: %v", err)
 	}
-	for _, want := range []string{"Qwen2ForCausalLM", "qwen2", "32768", "Template: present", "temperature=0.7", "Verdict:", "pending (M8 Phase 2)", "pending (M8 Phase 3)"} {
+	// The candidate engine (and thus the parser preview) is host-dependent for a
+	// safetensors repo, so assert only the host-independent rows here; parser
+	// rendering is covered by modelmeta.TestFamilyEngineArgs.
+	for _, want := range []string{"Qwen2ForCausalLM", "qwen2", "32768", "Template: present", "temperature=0.7", "Verdict:", "family:   qwen2", "parsers:", "pending (M8 Phase 3)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "pending (M8 Phase 2)") {
+		t.Errorf("family should be classified, not pending:\n%s", out)
 	}
 }
 
