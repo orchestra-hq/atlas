@@ -2,11 +2,12 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -71,9 +72,9 @@ func runInspect(ctx context.Context, cmd *cobra.Command, opts *inspectOptions, a
 		return err
 	}
 
-	if !opts.noCache {
-		writeInspectCache(opts.stateDir, repo, rev, res) // best-effort
-	}
+	// Always refresh the cache after a successful fetch, even under --no-cache:
+	// the flag means "ignore the cached entry and refresh it", not "never write".
+	writeInspectCache(opts.stateDir, repo, rev, res) // best-effort
 	return presentInspect(cmd, res, opts.asJSON)
 }
 
@@ -106,8 +107,12 @@ func presentInspect(cmd *cobra.Command, res modelmeta.Result, asJSON bool) error
 	if c.Architecture != "" || c.ModelType != "" {
 		cmd.Printf("Arch:     %s\n", archLine(c.Architecture, c.ModelType))
 	}
-	if len(c.Files) > 1 {
-		cmd.Printf("Quants:   %d files; inspected %s (default; override with the file at serve time)\n", len(c.Files), c.Selected)
+	if c.Selected != "" {
+		if len(c.Files) > 1 {
+			cmd.Printf("Quants:   %d files; inspected %s (default; override with the file at serve time)\n", len(c.Files), c.Selected)
+		} else {
+			cmd.Printf("File:     %s\n", c.Selected)
+		}
 	}
 	cmd.Printf("Context:  %s\n", contextLine(c.ContextWindow, c.RopeScaling))
 	cmd.Printf("Template: %s\n", presentBool(c.HasChatTemplate, "present", "absent"))
@@ -181,11 +186,12 @@ func pendingLine(value, phase string) string {
 
 // --- metadata cache (state dir, keyed by repo@revision; ADR-0015) ---
 
-var cacheKeyUnsafe = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
-
+// inspectCachePath maps a repo@revision to a cache file. The name is a SHA-256 of
+// the key so distinct repos/revisions never collide (a sanitize-unsafe-chars
+// scheme could map "org/a"@"b" and "org"@"a_b" to the same file).
 func inspectCachePath(stateDir, repo, rev string) string {
-	key := cacheKeyUnsafe.ReplaceAllString(repo+"@"+rev, "_")
-	return filepath.Join(stateDir, "inspect-cache", key+".json")
+	sum := sha256.Sum256([]byte(repo + "@" + rev))
+	return filepath.Join(stateDir, "inspect-cache", hex.EncodeToString(sum[:])+".json")
 }
 
 func readInspectCache(stateDir, repo, rev string) (modelmeta.Result, bool) {
@@ -209,5 +215,5 @@ func writeInspectCache(stateDir, repo, rev string, res modelmeta.Result) {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(path, data, 0o644)
+	_ = os.WriteFile(path, data, 0o600) // private-repo metadata may be cached; keep it owner-only
 }

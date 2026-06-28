@@ -90,6 +90,14 @@ func TestInspectCommandCaches(t *testing.T) {
 	if hits["config.json"] != 2 {
 		t.Errorf("config.json fetched %d times, want 2 after --no-cache", hits["config.json"])
 	}
+
+	// --no-cache also *refreshes* the cache, so a following normal run is a hit.
+	if _, err := runInspectCapture(t, &inspectOptions{stateDir: dir, endpoint: srv.URL}, []string{"org/m"}); err != nil {
+		t.Fatalf("post-refresh inspect: %v", err)
+	}
+	if hits["config.json"] != 2 {
+		t.Errorf("config.json fetched %d times, want 2 (--no-cache should have refreshed the cache)", hits["config.json"])
+	}
 }
 
 func TestInspectCommandJSON(t *testing.T) {

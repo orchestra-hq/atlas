@@ -18,6 +18,12 @@ var errShortHeader = errors.New("modelmeta: gguf header truncated")
 
 var errNotGGUF = errors.New("modelmeta: not a valid GGUF file (bad magic)")
 
+// maxGGUFField bounds a single declared string length or array element count. The
+// whole header we ever fetch is capped at ggufMaxHeaderBytes, so any field larger
+// than that is malformed — rejecting it avoids growing the fetch window chasing a
+// bogus length.
+const maxGGUFField = ggufMaxHeaderBytes
+
 // GGUF metadata value types.
 const (
 	ggufUint8 = iota
@@ -100,7 +106,10 @@ type ggufCursor struct {
 }
 
 func (c *ggufCursor) take(n int) ([]byte, error) {
-	if n < 0 || c.i+n > len(c.b) {
+	// Compare without c.i+n so an attacker-controlled n near MaxInt can't overflow
+	// the sum to a negative value that slips past the guard and panics the slice.
+	// The invariant c.i <= len(c.b) keeps len(c.b)-c.i non-negative.
+	if n < 0 || n > len(c.b)-c.i {
 		return nil, errShortHeader
 	}
 	out := c.b[c.i : c.i+n]
@@ -128,6 +137,11 @@ func (c *ggufCursor) str() (string, error) {
 	n, err := c.u64()
 	if err != nil {
 		return "", err
+	}
+	// A length beyond any plausible header is malformed, not "fetch more" — reject
+	// it outright so a bogus length doesn't drive the fetch window up to the cap.
+	if n > maxGGUFField {
+		return "", errNotGGUF
 	}
 	b, err := c.take(int(n))
 	if err != nil {
@@ -180,6 +194,11 @@ func (c *ggufCursor) valueOf(t uint32) (any, error) {
 		n, err := c.u64()
 		if err != nil {
 			return nil, err
+		}
+		// An element count exceeding the header cap is malformed (each element is at
+		// least one byte), so reject rather than loop/grow toward the bogus count.
+		if n > maxGGUFField {
+			return nil, errNotGGUF
 		}
 		for j := uint64(0); j < n; j++ {
 			if _, err := c.valueOf(elemType); err != nil {
