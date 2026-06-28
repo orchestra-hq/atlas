@@ -122,10 +122,26 @@ func presentInspect(cmd *cobra.Command, res modelmeta.Result, asJSON bool) error
 	cmd.Println()
 	cmd.Printf("Verdict:  %s — serving plan derived\n", v.Conclusion)
 	cmd.Printf("  engine:   %s\n", orDash(v.Engine))
-	cmd.Printf("  family:   %s\n", pendingLine(v.Family, "M8 Phase 2"))
+	cmd.Printf("  family:   %s\n", v.Family)
+	cmd.Printf("  parsers:  %s\n", parsersLine(c, v.Engine))
 	cmd.Printf("  loadable: %s\n", pendingLine(v.Loadable, "M8 Phase 3"))
 	cmd.Printf("  fits:     %s\n", pendingLine(v.Fits, "M8 Phase 3"))
 	return nil
+}
+
+// parsersLine previews the engine arguments metadata-driven resolution (M8 Phase
+// 2) would apply for the candidate engine: a known family's parser flags, or a
+// note when the family is unknown or the engine is template-driven (llama.cpp /
+// MLX apply the model's own chat template and need none).
+func parsersLine(c modelmeta.Capabilities, engine string) string {
+	f, ok := modelmeta.Classify(c)
+	if !ok {
+		return "(none — family unknown; served chat-only)"
+	}
+	if args := f.EngineArgs(engine); len(args) > 0 {
+		return strings.Join(args, " ")
+	}
+	return "(none — template-driven)"
 }
 
 func archLine(arch, modelType string) string {

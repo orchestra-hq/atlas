@@ -96,8 +96,11 @@ func TestInspectHFDerivesPlan(t *testing.T) {
 	if res.Verdict.Engine != c.Engines[0] {
 		t.Errorf("verdict engine = %q, want %q", res.Verdict.Engine, c.Engines[0])
 	}
-	if res.Verdict.Family != Pending || res.Verdict.Loadable != Pending || res.Verdict.Fits != Pending {
-		t.Errorf("expected pending family/loadable/fits, got %+v", res.Verdict)
+	if res.Verdict.Family != "qwen2" {
+		t.Errorf("family = %q, want qwen2 (classified, no longer pending)", res.Verdict.Family)
+	}
+	if res.Verdict.Loadable != Pending || res.Verdict.Fits != Pending {
+		t.Errorf("expected pending loadable/fits, got %+v", res.Verdict)
 	}
 }
 

@@ -76,14 +76,14 @@ const (
 // later M8 phase, so `atlas inspect` never implies support it cannot verify yet.
 const Pending = "pending"
 
-// Verdict is the three-way serving decision of ADR-0015 (Decision 4). Phase 1
-// populates only the dimensions metadata supports; Family is decided by the
-// family map (Phase 2) and Loadable/Fits by the arch-support list + fit check
-// (Phase 3), so those report Pending until built.
+// Verdict is the three-way serving decision of ADR-0015 (Decision 4). Family is
+// decided by the family map (M8 Phase 2): a known family's name, or
+// FamilyUnknown. Loadable/Fits are decided by the arch-support list + fit check
+// (Phase 3), so they report Pending until built.
 type Verdict struct {
 	Conclusion Conclusion `json:"conclusion"`
 	Engine     string     `json:"engine,omitempty"` // primary candidate engine
-	Family     string     `json:"family"`           // detected family, or Pending (Phase 2)
+	Family     string     `json:"family"`           // detected family, or FamilyUnknown
 	Loadable   string     `json:"loadable"`         // "yes"/"no"/Pending (Phase 3)
 	Fits       string     `json:"fits"`             // "yes"/"no"/Pending (Phase 3)
 }
@@ -161,18 +161,23 @@ func candidateEngines(format Format) []string {
 	}
 }
 
-// verdictFor builds the staged Phase-1 verdict from derived capabilities. Family,
-// load, and fit stay Pending until Phases 2–3 supply the family map and the
-// arch-support/fit checks.
+// verdictFor builds the staged verdict from derived capabilities. Family is
+// resolved by the family map (M8 Phase 2) — a known family's name, or
+// FamilyUnknown. Load and fit stay Pending until Phase 3 supplies the
+// arch-support list and the fit check.
 func verdictFor(c Capabilities) Verdict {
 	var engine string
 	if len(c.Engines) > 0 {
 		engine = c.Engines[0]
 	}
+	family := FamilyUnknown
+	if f, ok := Classify(c); ok {
+		family = f.Name
+	}
 	return Verdict{
 		Conclusion: ConclusionInspected,
 		Engine:     engine,
-		Family:     Pending,
+		Family:     family,
 		Loadable:   Pending,
 		Fits:       Pending,
 	}
