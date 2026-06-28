@@ -133,6 +133,22 @@ func TestParseGGUFShort(t *testing.T) {
 	}
 }
 
+// A crafted huge string length must not panic the slice bound check (the length
+// is attacker-controlled from the file). It should fail cleanly.
+func TestParseGGUFHugeLengthNoPanic(t *testing.T) {
+	var b bytes.Buffer
+	b.WriteString("GGUF")
+	writeU32(&b, 3) // version
+	writeU64(&b, 0) // tensor count
+	writeU64(&b, 1) // kv count
+	// key with an absurd length 0x7FFFFFFFFFFFFFF5 → must be rejected, not panic.
+	writeU64(&b, 0x7FFFFFFFFFFFFFF5)
+	b.WriteString("general.architecture")
+	if _, err := parseGGUFHeader(b.Bytes()); err == nil {
+		t.Fatal("expected an error for an absurd field length")
+	}
+}
+
 // --- local file ---
 
 func TestInspectGGUFLocalFile(t *testing.T) {

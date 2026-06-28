@@ -23,13 +23,13 @@ func inspectGGUF(ctx context.Context, target string, opts Options) (Result, erro
 		if err != nil {
 			return Result{}, err
 		}
-		return ggufResult(target, "", nil, data)
+		return ggufResult(target, opts.revision(), "", nil, data)
 	case fileExists(target):
 		data, err := readLocalGGUFHeader(target)
 		if err != nil {
 			return Result{}, err
 		}
-		return ggufResult(target, "", nil, data)
+		return ggufResult(target, opts.revision(), "", nil, data)
 	default:
 		return Result{}, fmt.Errorf("modelmeta: %q is not a local .gguf file or a URL — pass a path, a direct .gguf URL, or an HF repo id (for a multi-quant repo)", target)
 	}
@@ -62,11 +62,10 @@ func tryGGUFRepo(ctx context.Context, repo string, opts Options) (Result, bool, 
 	if err != nil {
 		return Result{}, false, err
 	}
-	res, err := ggufResult(repo, chosen, ggufs, data)
+	res, err := ggufResult(repo, opts.revision(), chosen, ggufs, data)
 	if err != nil {
 		return Result{}, false, err
 	}
-	res.Capabilities.Revision = opts.revision()
 	return res, true, nil
 }
 
@@ -84,14 +83,14 @@ func pickQuant(ggufs []string) string {
 
 // ggufResult parses a header blob into a Result, attaching the repo/file listing
 // for display when inspecting a multi-quant repo.
-func ggufResult(repo, selected string, files []string, header []byte) (Result, error) {
+func ggufResult(repo, revision, selected string, files []string, header []byte) (Result, error) {
 	meta, err := parseGGUFHeader(header)
 	if err != nil {
 		return Result{}, err
 	}
 	caps := Capabilities{
 		Repo:            repo,
-		Revision:        DefaultRevision,
+		Revision:        revision,
 		Format:          FormatGGUF,
 		Architecture:    meta.architecture,
 		ModelType:       meta.architecture, // GGUF carries one architecture key; model_type mirrors it
