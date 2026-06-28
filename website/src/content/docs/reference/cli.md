@@ -18,10 +18,10 @@ description: The atlas command-line interface — serving, the fleet, models, ke
 
 | Command                          | What it does                                                       |
 | -------------------------------- | ----------------------------------------------------------------- |
-| `atlas server`                   | Run the control plane only (workers dial out to it)               |
-| `atlas worker --join <token>`    | Run a worker that dials out to a server and serves models         |
-| `atlas workers`                  | List workers in the fleet                                          |
-| `atlas remove <worker-id>`       | Drain and remove a worker                                          |
+| `atlas server`                              | Run the control plane only (workers dial out to it)               |
+| `atlas worker --join <url> --token <token>` | Run a worker that dials out to a server and serves models         |
+| `atlas workers list`                        | List workers connected to the server                              |
+| `atlas workers remove <worker-id>`          | Gracefully drain and disconnect a worker                          |
 
 ## Models
 
@@ -37,7 +37,7 @@ description: The atlas command-line interface — serving, the fleet, models, ke
 
 | Command                          | What it does                                                       |
 | -------------------------------- | ----------------------------------------------------------------- |
-| `atlas keys create`              | Mint an API key (optionally model-scoped with `--allow`)          |
+| `atlas keys create`              | Mint an API key (model-scoped with `--allow`, admin-scoped with `--admin`) |
 | `atlas keys list`                | List keys                                                         |
 | `atlas keys revoke <key-id>`     | Revoke a key                                                      |
 | `atlas usage`                    | Summarize the usage ledger (`--json` for machine-readable)        |
@@ -56,5 +56,6 @@ description: The atlas command-line interface — serving, the fleet, models, ke
 | --------------------------- | -------------------------------------------------------- |
 | `atlas runtime provision`   | Provision an engine runtime                              |
 | `atlas runtime upgrade`     | Upgrade/pin an engine runtime version                    |
+| `atlas runtime list`        | Show each engine's pinned and provisioned versions      |
 
-See [Operate](/atlas/operate/) for keys, usage, observability, and TLS in depth (coming in M5).
+See [Operate](/atlas/operate/) for keys, usage, observability, and TLS in depth.

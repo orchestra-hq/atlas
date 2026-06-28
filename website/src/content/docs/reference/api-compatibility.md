@@ -61,8 +61,7 @@ Target clients: OpenAI SDKs, LangChain, llama-index, Continue, Open WebUI, and m
 | `POST /v1/chat/completions` | System prompts, multi-turn, streaming, `tools`/`tool_calls`, `stop`, `max_tokens`, sampling, `finish_reason` |
 | `POST /v1/embeddings`       | OpenAI embeddings shape; routes only to an `embedding`-class model                                          |
 | `POST /v1/rerank`           | De-facto Cohere rerank shape; routes only to a `reranker`-class model                                       |
-| `GET /v1/models`            | OpenAI list shape                                                                                           |
-| `POST /v1/completions`      | Legacy text completion — passthrough where the engine supports it                                           |
+| `GET /v1/models`            | Shared handler with the Anthropic surface (Anthropic list shape); lenient OpenAI SDKs read `data[].id`      |
 
 Atlas **owns** this surface rather than proxying the engine's endpoint, so behavior is identical
 across engines and matches the Anthropic surface's semantics. Reasoning output is not surfaced here —

@@ -12,6 +12,9 @@ start it mints a default full-access admin key and prints it once. There is no s
 # a model-scoped client key, printed once
 atlas keys create --allow qwen3-0.6b
 
+# an admin-scoped key (for /admin/*, fleet commands, and the /metrics scrape)
+atlas keys create --admin
+
 # scripting: print only the secret
 atlas keys create --quiet
 

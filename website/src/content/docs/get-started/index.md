@@ -18,8 +18,8 @@ Atlas is one binary that scales from a laptop to a fleet. Every path ends the sa
 | You have…                      | Engine    | Path                                                       |
 | ------------------------------ | --------- | ---------------------------------------------------------- |
 | A laptop / dev box (no GPU)    | llama.cpp | [Quickstart](/atlas/get-started/quickstart/)              |
-| One rented cloud GPU           | vLLM      | [Deploy → single GPU box](/atlas/deploy/)                 |
-| Several machines, one endpoint | either    | [Deploy → cloud fleet](/atlas/deploy/)                   |
+| One rented cloud GPU           | vLLM      | [Deploy → single GPU box](/atlas/deploy/single-gpu-box/)  |
+| Several machines, one endpoint | either    | [Deploy → cloud fleet](/atlas/deploy/cloud-fleet/)       |
 
 A small model on a laptop is great for development, evals, and offline work, but drives Claude Code
 only intermittently. For reliable agentic use, serve a capable model on a GPU.
