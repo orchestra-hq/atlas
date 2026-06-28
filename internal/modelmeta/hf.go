@@ -20,7 +20,14 @@ func inspectHF(ctx context.Context, repo string, opts Options) (Result, error) {
 		return Result{}, err
 	}
 	if !found {
-		return Result{}, fmt.Errorf("modelmeta: %s has no config.json — not a recognized transformers repo (for a GGUF model, pass the .gguf file)", repo)
+		// No config.json — the repo may instead hold GGUF weights. Detect and inspect
+		// those before giving up.
+		if res, ok, gerr := tryGGUFRepo(ctx, repo, opts); gerr != nil {
+			return Result{}, gerr
+		} else if ok {
+			return res, nil
+		}
+		return Result{}, fmt.Errorf("modelmeta: %s has no config.json and no .gguf files — not a recognized transformers or GGUF repo", repo)
 	}
 
 	var cfg hfConfig
