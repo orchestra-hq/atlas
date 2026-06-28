@@ -73,6 +73,8 @@ Phase 4b made the `enable_thinking` kwarg catalog-driven: `ThinkingKwargs` (`int
 
 **Decision (2026-06-22):** document raw-served hybrids as best-effort — the catalog is required for thinking control. No code change. The `ThinkingKwargs` doc comment already notes this; no further action until a hybrid model enters the shipped catalog on the raw path.
 
+**Update (2026-06-28):** **M8 ([ADR-0015](decisions/0015-bring-any-model-auto-configuration.md), accepted) closes this.** Metadata-driven resolution applies a **family** reasoning parser to raw HF/`.gguf` specs, so a hybrid like Qwen3 served outside the catalog gets its `enable_thinking` config from its family rather than falling through to the best-effort path. Track the fix in M8 Phase 2 (family→agent-config map wired into the raw-spec branch); this follow-up can close when that lands.
+
 ### Cloud-fallback spill wired into two handlers by hand
 
 **Suggested:** opportunistically, when next touching the dispatch surfaces. **Surfaced:** M3 review (all-of-M3).

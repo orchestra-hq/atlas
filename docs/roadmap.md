@@ -110,6 +110,8 @@ Deferred from M3 (revisit by traction):
 
 ## M6 — Web console
 
+> **Sequencing:** [M8](#m8--bring-any-model-auto-configuration) runs before M6 and M7 (owner's call, 2026-06-28). The milestone numbers reflect original ordering, not build order.
+
 The graphical operate surface, held until the very end: M2's `atlas status`/`atlas top` CLI covers "see what the fleet is doing" from the terminal, so the console is a convenience layer, not a prerequisite. The SPA-vs-separate-service architecture decision is made when this milestone starts (it needs its own ADR then).
 
 - Web console (workers, models, instances, keys, usage) served by `atlas server`, gated by the existing admin-scoped API key
@@ -126,7 +128,7 @@ The deploy-recipe and packaging surface, **deferred here from M5** ([ADR-0014](i
 
 ## M8 — Bring any model (auto-configuration)
 
-**`atlas up --model <hugging-face-repo>` for _any_ model.** Atlas fetches the model's metadata (not its weights), decides whether it can serve it well, and either auto-configures and serves it or tells the user exactly how to add support — turning the curated catalog from a fence into a fast path. The win that makes this tractable: the "list of supported models" becomes a **family→config map in Atlas's own source**, extended by ordinary PRs gated on the conformance suite — so there is **no catalog for users to maintain and no community catalog for us to maintain**. Resolution becomes metadata-driven — design recorded in [ADR-0015](internal/decisions/0015-bring-any-model-auto-configuration.md) (proposed). Numbered after M7 but a **candidate to pull ahead** of M6/M7, since "any model just works" is core to the "minutes to first token" positioning. Plan: [m8-build-plan.md](internal/m8-build-plan.md).
+**`atlas up --model <hugging-face-repo>` for _any_ model.** Atlas fetches the model's metadata (not its weights), decides whether it can serve it well, and either auto-configures and serves it or tells the user exactly how to add support — turning the curated catalog from a fence into a fast path. The win that makes this tractable: the "list of supported models" becomes a **family→config map in Atlas's own source**, extended by ordinary PRs gated on the conformance suite — so there is **no catalog for users to maintain and no community catalog for us to maintain**. Resolution becomes metadata-driven — design recorded in [ADR-0015](internal/decisions/0015-bring-any-model-auto-configuration.md) (**accepted 2026-06-28**, all open questions resolved). **Scheduled next, ahead of M6/M7** (owner's call, 2026-06-28): though numbered last, "any model just works" is core to the "minutes to first token" positioning, so it is built before the web console and packaging. Plan: [m8-build-plan.md](internal/m8-build-plan.md).
 
 - Metadata inspection: fetch `config.json` / `tokenizer_config.json` / `generation_config.json` (and the GGUF header for gguf repos) and derive engine, context window, chat template, and sampling — without downloading weights
 - A family→agent-config map (tool-call parser, reasoning parser, template quirks) in code, **seeded from today's `starter.yaml` `engine_args`** and extended by PR

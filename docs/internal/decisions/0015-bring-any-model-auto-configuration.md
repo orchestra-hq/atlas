@@ -2,9 +2,9 @@
 
 ## Status
 
-proposed
+accepted
 
-This is the Phase-0 design record for **M8** ([m8-build-plan.md](../m8-build-plan.md), [roadmap.md](../roadmap.md)). It is `proposed`: it captures the intended direction so implementation doesn't re-litigate it, and flips to `accepted` when the owner greenlights the build (and may be revised by that review). Nothing here is built.
+This is the Phase-0 design record for **M8** ([m8-build-plan.md](../m8-build-plan.md), [roadmap.md](../roadmap.md)). Ratified 2026-06-28: the owner greenlit the build and scheduled M8 **next, ahead of M6/M7**, after settling the five open questions (resolutions folded into the Decision and Consequences below). Nothing here is built yet — implementation begins at Phase 1.
 
 ## Context
 
@@ -53,4 +53,13 @@ This change touches resolution, adds a metadata-inspection layer and a fit/decis
 - **New ongoing costs, accepted:** the per-engine-version supported-arch mapping must be refreshed when runtimes are bumped; GGUF header parsing is a new code path; metadata fetch adds failure modes (network, gated/private repos, missing files) that need graceful handling. These are bounded and local.
 - **A surprise risk, mitigated:** default warn-and-serve for an unknown family means a model may serve as chat-only without tool-calling — acceptable only because it is clearly labelled at startup and refusable via flag; silent degradation is not acceptable.
 - **Drop-in surface unchanged.** This is purely about how a model is _resolved and configured_; the Anthropic/OpenAI API surfaces, aliases, and the catalog/local-path paths are untouched ([ADR-0002](0002-anthropic-api-first.md) holds).
-- **Open questions to settle during the build** (also in the build plan): static per-engine supported-arch list vs runtime probe vs trust-and-catch; GGUF multi-quant selection; the precise warn-vs-refuse default and flag name; gated/private-repo token UX; metadata caching in the state dir.
+
+## Resolved at ratification (2026-06-28)
+
+The five open questions are settled; these bind the build:
+
+1. **Engine-arch discovery → static list + trust-and-catch backstop.** A per-pinned-engine-version supported-arch list, maintained in code, is the source of the pre-download verdict (honoring "inspect before download"); the actual engine load is the backstop that catches a stale/wrong list. Refreshing the list when a runtime is bumped is an accepted ongoing cost (Decision 6).
+2. **GGUF multi-quant → default heuristic + explicit override.** When a GGUF repo holds many quant files, pick a documented default (prefer `Q4_K_M`, else the nearest sensible quant) so the one-command flow works; a `--quant <name-or-filename>` hint overrides. The heuristic must be documented and defensible.
+3. **Unknown-family default → warn-and-serve-chat, `--require-verified` to opt out.** An engine-loadable but unknown-family model serves as plain chat, clearly labelled at startup that tool-calling isn't configured for the family, with the one-file-PR pointer; `--require-verified` refuses unverified models instead (Decision 4). Silent degradation stays unacceptable.
+4. **Gated/private repos → env token + clear failure.** Metadata fetch reads a token from `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN`; on 401/403 it emits an actionable message ("repo is gated — set `HF_TOKEN` and accept the license at `<url>`") rather than a raw HTTP error.
+5. **Metadata caching → yes, state-dir cache keyed by `repo@revision`.** Fetched metadata is cached in the state dir so repeated `inspect`/`up` are instant and don't re-hit Hugging Face.
