@@ -6,13 +6,17 @@
 
 Today we're releasing Atlas v0.1.0 under Apache 2.0.
 
-## The gap
+## Why we built this
 
-Open-weight models have quietly closed most of the capability gap that mattered — especially for the agentic, tool-calling workloads people actually build on now. You can run a model that drives Claude Code or a Claude Agent SDK app perfectly well on a single rented GPU, a Mac Studio, or a rack you already own.
+Over the last several months we kept having the same conversation. We'd be talking to a developer building an agent, or a small platform team running a couple of GPU boxes, or a company shipping an AI product to security-conscious customers — and the shape of the problem was always the same.
 
-What's still painful is _serving_ them. The Claude Agent SDK and Claude Code can already be pointed at any endpoint that speaks the Anthropic Messages API — that's what `ANTHROPIC_BASE_URL` is for. But standing up "the endpoint" on your own compute is an integration project: pick an inference engine, tune it for each GPU, build an Anthropic-compatible API layer in front of it, add auth and usage tracking, and then do it again for every machine you want to add.
+They liked building on the Claude Agent SDK and the Anthropic API. They didn't love that every request left their network, that the bill scaled with someone else's pricing, or that their roadmap now depended on someone else's rate limits and SLA. And they'd noticed the thing everyone has noticed: open-weight models have gotten genuinely good — good enough to drive real agentic, tool-calling work, not just demos.
 
-Atlas is that project, done once, as a product.
+So the obvious question kept coming up: _why can't I just point this at my own hardware?_
+
+The frustrating part is that you almost can. The Claude Agent SDK and Claude Code already let you redirect to any endpoint that speaks the Anthropic Messages API — that's exactly what `ANTHROPIC_BASE_URL` is for. The missing piece was never the SDK. It was that _standing up the endpoint_ on your own compute is a project: choose an inference engine, tune it for each GPU, build and maintain an Anthropic-compatible API layer in front of it, add auth and usage tracking, and then repeat the whole thing for every machine you want to add. Everyone we spoke to had either started building that glue, abandoned building that glue, or was paying someone else's cloud to avoid building that glue.
+
+Atlas is that glue, done once, as a product you install. The goal is narrow and specific: make "the endpoint" trivial to stand up on machines you own — one laptop or a fleet — so that pointing your agents at your own hardware is a one-line change and nothing else.
 
 ## What it looks like
 
@@ -37,6 +41,28 @@ claude
 
 That's the whole thing. No Python on the host for the slim path, no translation layer to write, no reverse proxy to configure. The same binary scales from a laptop to a multi-machine fleet — only the topology grows.
 
+## Models that work out of the box
+
+One of the things people burn the most time on with a DIY setup isn't the API layer — it's getting a model to actually behave: the right chat template, the right tool-call parser, sane sampling defaults, reasoning toggles that don't leak `<think>` blocks into normal replies. A model that scores well on a leaderboard can still be useless for agents if its tool-calling config is wrong.
+
+So Atlas ships a curated, agent-tested catalog. Each entry comes with the engine, the parser flags, and the defaults that make tool calling and reasoning work correctly — you just name the model. The starter catalog spans all four engines and three rough capability tiers:
+
+| Where you run it     | Engine       | Models in the starter catalog                                       |
+| -------------------- | ------------ | ------------------------------------------------------------------- |
+| **Laptop / CPU box** | llama.cpp    | Qwen2.5-1.5B-Instruct, Qwen3-0.6B (reasoning)                       |
+| **NVIDIA GPU**       | vLLM, SGLang | Qwen3-8B (reasoning), Qwen3.5-35B-A3B, GLM-5.1, Qwen2.5-7B-Instruct |
+| **Apple Silicon**    | MLX (Metal)  | Qwen2.5-1.5B-Instruct, Qwen2.5-7B-Instruct                          |
+| **Coding**           | llama.cpp    | Gemma-4-12B coder finetune (reasoning, 256K context, Apache-2.0)    |
+
+The small llama.cpp tier cold-boots on a plain CPU — it's what runs in our own CI on every change — and is great for development, evals, and offline work. The capable GPU tiers are sized to drive Claude Code for real.
+
+Agents need more than chat, so the catalog also includes the rest of the stack:
+
+- **Embeddings** — `nomic-embed-text-v1.5`, served on the OpenAI `/v1/embeddings` shape.
+- **Reranking** — `bge-reranker-v2-m3`, on the de-facto Cohere `/v1/rerank` shape.
+
+A couple of conveniences fall out of the catalog. **Model aliases** map the Claude names your code already uses — `claude-sonnet-*`, `claude-opus-*`, `claude-haiku-*` — onto whatever you've actually deployed, so you don't have to touch model strings scattered through an app. And when the catalog isn't enough, **bring your own**: point Atlas at any Hugging Face repo id or a local weights file and it'll serve it best-effort. The catalog is the curated fast path, not a fence.
+
 ## Why we built it the way we did
 
 The pieces of a private inference platform exist, and other projects combine them. Atlas's bet is that the _framing, the developer experience, and the curation_ are what's actually missing. A few choices fall out of that:
@@ -46,8 +72,6 @@ The pieces of a private inference platform exist, and other projects combine the
 - **Workers dial out.** Each GPU machine runs an `atlas worker` that opens an _outbound_ connection to the control plane and keeps it alive — inference traffic flows back over that same connection. Workers need no inbound ports, no public IPs, and no SSH to operate. The security review takes minutes, and the same design makes hybrid free: a control plane in one cloud and workers anywhere — on-prem, another cloud, a Mac behind home NAT — all behind one endpoint.
 
 - **Spot-friendly by construction.** Because workers are disposable, a spot interruption is just a heartbeat timeout; the scheduler re-places the model on whatever capacity is left. You can run an inference fleet at spot prices without building the recovery logic yourself.
-
-- **A curated, agent-capable catalog.** Open models vary wildly in how well they actually do tool calling, and getting the chat template and engine config right is where DIY setups bleed time. Atlas ships a tested set of models that work for agents, with the correct configs out of the box.
 
 - **Honest about scope.** Atlas documents exactly what it _doesn't_ emulate — server-side tools, batches, prompt caching — instead of half-faking them. And where it supports a genuinely hard feature, like reasoning/thinking blocks from models such as DeepSeek-R1, Qwen3, and gpt-oss, it says exactly how. We'd rather you trust the surface than be surprised by it.
 
@@ -61,11 +85,31 @@ Atlas is one Go binary with two roles:
 
 Crucially, **Atlas doesn't reimplement inference.** It orchestrates the engines that already do it well — vLLM, SGLang, llama.cpp, and MLX — and puts a consistent, Anthropic- and OpenAI-compatible API in front of them. It's the layer that turns "I have some GPUs" into "we have a private, agent-ready LLM service," not another attention kernel.
 
-## What it's not (yet)
+## Who it's for
 
-Atlas is not a SaaS gateway that routes your prompts to someone else's cloud — it serves models on hardware you control. (There's an opt-in cloud-fallback for spillover, but it's off by default and not the point.) It's not a Kubernetes operator either; it runs great on bare metal and plain VMs, and manifests are a packaging concern, not the architecture.
+The conversations that led here clustered into three groups, and Atlas is built for all three:
 
-This is a 0.1.0. The platform is solid — single box to multi-machine fleet, two API surfaces, auth, usage, observability from the terminal — and we're being deliberate about what comes next: a web console, and turnkey packaging (Compose / systemd / Kubernetes manifests and reference IaC) shaped by how people actually deploy rather than guessed at up front.
+- **Developers building agents.** One GPU box, a beefy Mac, or even a laptop, an app on the Anthropic or OpenAI SDKs, and the wish that `ANTHROPIC_BASE_URL=http://localhost:8080` just works. Atlas is the shortest path from "I have a model" to "my agent is running on it."
+
+- **Small platform and infra teams.** Two to twenty GPU machines spread across on-prem and cloud, who want a private LLM-as-a-service for their org — API keys, usage visibility, model lifecycle — without adopting a Kubernetes mandate to get it.
+
+- **Product companies offering "bring your own compute."** Ship an agent product where customers run inference on their _own_ hardware: Atlas workers on the customer's machines dialing out to one control plane, prompts and weights never leaving their environment. The dial-out design makes this a configuration, not a re-architecture.
+
+## Where it's going
+
+This is a 0.1.0, and the foundation is deliberately solid: single box to multi-machine fleet, Anthropic- and OpenAI-compatible APIs, per-key auth, durable usage metering, backpressure, embeddings and reranking, and full fleet observability from the terminal. We shipped that first because it's the part you can't fake.
+
+What's next, roughly in order:
+
+- **A web console.** The terminal tools (`atlas status`, `atlas top`) already let you operate a fleet; a visual console is the natural next surface for people who'd rather click than SSH.
+- **Turnkey packaging and reference IaC.** Compose files, systemd units, Kubernetes manifests, and a reference cloud module — shaped by how people actually deploy Atlas rather than guessed at up front. We'd rather build these against real demand than ship manifests nobody asked for.
+- **Further out:** a high-availability control plane for teams who outgrow a single always-on box, and deeper support for the "bring your own compute" product pattern.
+
+We're building this in the open, and the roadmap is genuinely shaped by what we hear. If your use case isn't quite covered yet, tell us — that's how the last six months of conversations turned into this release, and it's how the next ones will turn into the next.
+
+## What it's not
+
+To set expectations honestly: Atlas is not a SaaS gateway that routes your prompts to someone else's cloud — it serves models on hardware you control. (There's an opt-in cloud-fallback for spillover, but it's off by default and not the point.) And it's not a Kubernetes operator; it runs great on bare metal and plain VMs, and manifests are a packaging concern, not the architecture.
 
 ## Try it
 
