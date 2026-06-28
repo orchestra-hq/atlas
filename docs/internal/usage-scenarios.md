@@ -37,7 +37,7 @@ ANTHROPIC_BASE_URL=http://<your-endpoint> ANTHROPIC_API_KEY=<your key> claude
 
 ## Fleet (several machines)
 
-> Lands in **M1** ([roadmap](../roadmap.md)) — described here so you can see where it goes.
+> Shipped in **M1** ([roadmap](../roadmap.md)) — `atlas server` + `atlas worker --join`.
 
 Run `atlas server` on a small always-on box, then `atlas worker --join <token>` on each GPU machine (a 4090 under your desk, a cloud box, a customer's host). Workers **dial out** to the server (ADR-0003) — no inbound ports on the compute boxes — and one authenticated endpoint serves models across all of them. The same binary, the same API surface; only the topology grows.
 

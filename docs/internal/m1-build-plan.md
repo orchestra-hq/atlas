@@ -73,7 +73,7 @@ These extend the suite defined in [conformance-suite.md](conformance-suite.md).
 
 ### G11 — Multi-worker routing
 
-Two workers registered, each running a different model. Requests for model A route to worker A; requests for model B route to worker B. G1–G8+G10 pass against both workers independently. A request for an undeployed model returns a well-formed 503.
+Two workers registered, each running a different model. Requests for model A route to worker A; requests for model B route to worker B. G1–G8+G10 pass against both workers independently. A request for an undeployed model returns a well-formed 404 (`not_found_error`).
 
 Route-identity cases (review finding): (1) a worker holding model A reconnects (drop + rejoin) while the old connection's teardown is still in flight — model A stays routable throughout, never transiently 404s. (2) Two workers both advertise model A; when one disconnects, requests for A continue to be served by the other. Both fail on a name-keyed registry and pass only once routes carry connection/worker identity.
 

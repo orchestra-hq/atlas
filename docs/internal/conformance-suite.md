@@ -2,6 +2,8 @@
 
 The executable definition of M0's API surface. Each acceptance criterion in [m0-acceptance.md](m0-acceptance.md) maps to a test group here; the suite is the M0 release gate (breaking `ANTHROPIC_BASE_URL` drop-in blocks any release — roadmap standing track), and its published results are the compat matrix that proves positioning angle #1.
 
+> **Status:** the suite has grown with the project — groups G1–G22 (M0 through M3) are all implemented and run green per the m0–m3 acceptance reports. Sections below labelled by milestone describe when each group was introduced, not work that is still outstanding.
+
 ## Principles
 
 1. **Real SDKs, not hand-rolled clients.** The product promise is "your existing client works", so the clients under test are the Anthropic Python and TypeScript SDKs, the OpenAI Python SDK, the Claude Agent SDK, and Claude Code itself.
@@ -98,7 +100,7 @@ These extend the matrix and the pass policy when M1 ships. See [m1-build-plan.md
 
 ### G11 — Multi-worker routing (M1 phase 4)
 
-Two workers registered, each running a different model. Requests for model A route to worker A; requests for model B route to worker B. G1–G8+G10 pass against both workers independently. A request for an undeployed model returns a well-formed 503.
+Two workers registered, each running a different model. Requests for model A route to worker A; requests for model B route to worker B. G1–G8+G10 pass against both workers independently. A request for an undeployed model returns a well-formed 404 (`not_found_error`).
 
 ### G12 — Auth (M1 phase 5)
 
