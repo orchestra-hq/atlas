@@ -1,0 +1,86 @@
+# Serve a capable model on ONE cloud GPU, staged: prove the pipe cheap, then
+# scale up to the best a single GPU can hold. Companion to atlas-serve.sky.yaml
+# (which just grabs the cheapest ~24GB GPU and serves an 8B). This recipe is for
+# when you want the strongest single-GPU model and want to size the box yourself.
+#
+# AWS single-GPU ladder (no single-H100 instance exists on AWS):
+#   g6.xlarge    1xL4    24GB   prove-the-pipe tier (Qwen3-8B) — PROVEN with Claude Code
+#   g5.xlarge    1xA10G  24GB   same tier
+#   g6e.xlarge   1xL40S  48GB   best single GPU AWS sells — 35B MoE at FP8
+# The opus-tier glm-5.1 (~355B) is NOT a single-GPU model; it needs a multi-GPU
+# node (p5.48xlarge = 8xH100, or p4de.24xlarge = 8xA100-80GB) with tensor parallel.
+#
+#   pip install 'skypilot[aws]'
+#   sky check
+#
+#   # Stage 0 — prove the pipe with the KNOWN-GREEN 8B (cheap, fast, low risk):
+#   sky launch -c atlas examples/serve/atlas-serve-staged.sky.yaml --down -y \
+#       --gpus L4:1 \
+#       --env ATLAS_MODEL=Qwen/Qwen3-8B \
+#       --env ATLAS_ENGINE_ARGS='--tool-call-parser hermes --reasoning-parser qwen3'
+#
+#   # Stage 1 — best single-GPU quality (the recipe default: 35B MoE on the L40S):
+#   sky launch -c atlas examples/serve/atlas-serve-staged.sky.yaml --down -y
+#
+#   sky logs atlas | grep 'ATLAS API KEY'      # grab the minted key
+#
+# From your laptop (SSH tunnel — nothing exposed to the internet):
+#   ssh -N -L 8080:localhost:8080 <sky-ssh-target> &
+#   ANTHROPIC_BASE_URL=http://localhost:8080 ANTHROPIC_API_KEY=<key> claude
+#
+# Tear down (STOP THE METER):  sky down atlas
+#
+# Stage 2 (opus tier, a separate shakeout) — glm-5.1 on 8xH100:
+#   sky launch -c atlas-opus examples/serve/atlas-serve-staged.sky.yaml --down -y \
+#       --gpus H100:8 --disk-size 1024 \
+#       --env ATLAS_MODEL=zai-org/GLM-5.1 \
+#       --env ATLAS_ENGINE_ARGS='--tool-call-parser glm47 --reasoning-parser glm45 --tensor-parallel-size 8 --max-model-len 32768'
+#
+# !! EXPERIMENTAL TIERS !! Only the L4/A10G 8B path (Stage 0) is in the Atlas
+# acceptance matrix today. The 35B (Stage 1 default) and glm-5.1 (Stage 2) configs
+# — FP8 quant, tensor-parallel, their tool/reasoning parsers — have NOT been run
+# end-to-end against Claude Code yet. Shake them out on your own clock before any
+# demo. Sizes/flags here are starting points, not verified-good.
+
+name: atlas-serve-staged
+
+resources:
+  accelerators: { L40S: 1, A10G: 1, L4: 1 } # 48GB L40S (AWS g6e) wins for the 35B
+  ports: 8080
+  disk_size: 256 # 35B weights + KV; bump to 1024 for glm-5.1
+
+workdir: .
+
+envs:
+  # Stage 1 default — best single-GPU quality: 35B MoE (3B active), reasoning +
+  # tools, served at FP8 (~35GB) so it fits the 48GB L40S with room for the KV
+  # cache. bf16 (~70GB) does NOT fit. Override per launch with `sky launch --env`.
+  ATLAS_MODEL: Qwen/Qwen3.5-35B-A3B
+  ATLAS_ENGINE_ARGS: --tool-call-parser hermes --reasoning-parser qwen3 --quantization fp8 --max-model-len 32768
+  GO_VERSION: 1.26.4
+
+setup: |
+  set -euo pipefail
+  if ! /usr/local/go/bin/go version 2>/dev/null | grep -q "go${GO_VERSION}"; then
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tgz
+    sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf /tmp/go.tgz
+  fi
+  export PATH="/usr/local/go/bin:$PATH"
+  go build -o "$HOME/atlas" ./cmd/atlas
+
+run: |
+  set -euo pipefail
+  nvidia-smi || { echo "no GPU visible on the host" >&2; exit 1; }
+  # API keys replaced the shared secret in phase 5 (ADR-0008): mint one into the
+  # state-dir store the gateway reads and print it so `sky logs` surfaces it. The
+  # port is exposed, but the endpoint always requires this key — it is never open.
+  KEY=$("$HOME/atlas" keys create --quiet)
+  echo "================ ATLAS API KEY: $KEY ================"
+  # shellcheck disable=SC2086
+  "$HOME/atlas" up \
+    --engine vllm \
+    --model "$ATLAS_MODEL" \
+    --alias "claude-sonnet-4-6=$ATLAS_MODEL" \
+    --alias "claude-opus-4-1=$ATLAS_MODEL" \
+    --addr 0.0.0.0:8080 \
+    $(for a in $ATLAS_ENGINE_ARGS; do printf -- '--engine-arg %s ' "$a"; done)
