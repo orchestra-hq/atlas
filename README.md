@@ -62,6 +62,7 @@ source docs — for contributors and agents working in the repo.
 | [docs/internal/m4-build-plan.md](docs/internal/m4-build-plan.md)                                                             | M4 phased build order (deliverability: Homebrew tap + installer)  |
 | [docs/internal/m5-build-plan.md](docs/internal/m5-build-plan.md)                                                             | M5 phased build order (documentation: Starlight docs site)        |
 | [docs/internal/m8-build-plan.md](docs/internal/m8-build-plan.md)                                                             | M8 phased plan (proposed: bring-any-model auto-configuration)     |
+| [docs/internal/contributing-model-families.md](docs/internal/contributing-model-families.md)                                 | How to add agent-config support for a new model family (one PR)   |
 | [docs/internal/positioning.md](docs/internal/positioning.md)                                                                 | Marketing differentiators and the proof each one requires         |
 | [docs/internal/decisions/](docs/internal/decisions/)                                                                         | Architecture decision records (ADRs)                              |
 | [docs/internal/open-questions.md](docs/internal/open-questions.md)                                                           | Unresolved decisions that need an owner call                      |
