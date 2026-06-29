@@ -53,6 +53,11 @@ type Capabilities struct {
 	HasChatTemplate bool             `json:"has_chat_template"`        // engine can apply the model's own template
 	Sampling        catalog.Sampling `json:"sampling,omitempty"`       // author defaults, when published
 	Engines         []string         `json:"engines,omitempty"`        // candidate engines (worker.Engine values)
+	// WeightBytes is the summed size of the model's weight files, captured before
+	// any download: HF safetensors sum their *.safetensors shards; a GGUF repo
+	// reports the selected quant's size; a local/url .gguf its own size. 0 means
+	// unknown, which skips the fit check (FitEstimate, M8 Phase 3).
+	WeightBytes int64 `json:"weight_bytes,omitempty"`
 	// GGUF-only: when a repo holds multiple quantizations, Files lists them and
 	// Selected names the one inspected (the Q4_K_M-preferring default). Empty for
 	// safetensors repos and single-file GGUF targets.
@@ -163,8 +168,12 @@ func candidateEngines(format Format) []string {
 
 // verdictFor builds the staged verdict from derived capabilities. Family is
 // resolved by the family map (M8 Phase 2) — a known family's name, or
-// FamilyUnknown. Load and fit stay Pending until Phase 3 supplies the
-// arch-support list and the fit check.
+// FamilyUnknown. Loadable (M8 Phase 3) is host-independent — it depends only on
+// the pinned engine version and the model's architecture — so it is decided here.
+// Fits is host-dependent (it weighs the model against this host's free memory) and
+// so is deliberately left Pending in the record: it must not be baked into the
+// host-neutral inspect cache. The consumer computes Fits live from local hardware
+// at the point of use (`atlas inspect` for display, resolveRaw for the gate).
 func verdictFor(c Capabilities) Verdict {
 	var engine string
 	if len(c.Engines) > 0 {
@@ -174,11 +183,15 @@ func verdictFor(c Capabilities) Verdict {
 	if f, ok := Classify(c); ok {
 		family = f.Name
 	}
+	loadable := "yes"
+	if ok, _ := ArchLoadable(engine, c); !ok {
+		loadable = "no"
+	}
 	return Verdict{
 		Conclusion: ConclusionInspected,
 		Engine:     engine,
 		Family:     family,
-		Loadable:   Pending,
+		Loadable:   loadable,
 		Fits:       Pending,
 	}
 }

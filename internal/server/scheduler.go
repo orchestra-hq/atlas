@@ -11,14 +11,16 @@ import (
 	"time"
 
 	"github.com/orchestra-hq/atlas/catalog"
+	"github.com/orchestra-hq/atlas/internal/modelmeta"
 	"github.com/orchestra-hq/atlas/internal/wire"
 )
 
 // kvOverheadFraction pads a model's on-disk weight size to estimate the VRAM it
 // needs once loaded — weights plus KV cache and activations — per build-time
 // decision 5. Conservative: a worker is chosen only if its free capacity meets
-// the padded estimate.
-const kvOverheadFraction = 0.2
+// the padded estimate. It is the same constant the single-node pre-download fit
+// gate uses (modelmeta.FitEstimate, M8 Phase 3), shared so the two cannot drift.
+const kvOverheadFraction = modelmeta.KVOverheadFraction
 
 // engineVLLM and engineSGLang are the catalog engine values whose models require
 // an NVIDIA GPU; placement filters them onto GPU workers. (The worker package's

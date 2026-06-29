@@ -234,6 +234,35 @@ func TestInspectGGUFRepo(t *testing.T) {
 	}
 }
 
+func TestInspectGGUFRepoWeightBytes(t *testing.T) {
+	full := qwenGGUF()
+	mux := http.NewServeMux()
+	// The listing reports the selected quant's size; WeightBytes takes that one
+	// (the served quant), not the sum across quantizations.
+	mux.HandleFunc("/api/models/org/repo", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"siblings":[
+			{"rfilename":"model-Q8_0.gguf","size":8000000000},
+			{"rfilename":"model-Q4_K_M.gguf","size":4000000000}
+		]}`))
+	})
+	mux.HandleFunc("/org/repo/resolve/main/config.json", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/org/repo/resolve/main/model-Q4_K_M.gguf", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeContent(w, r, "model.gguf", time.Time{}, bytes.NewReader(full))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	res, err := Inspect(context.Background(), "org/repo", Options{Endpoint: srv.URL})
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if got, want := res.Capabilities.WeightBytes, int64(4_000_000_000); got != want {
+		t.Errorf("WeightBytes = %d, want %d (the selected Q4_K_M quant)", got, want)
+	}
+}
+
 func TestPickQuant(t *testing.T) {
 	if got := pickQuant([]string{"m-Q8_0.gguf", "m-Q4_K_M.gguf"}); !strings.Contains(got, "Q4_K_M") {
 		t.Errorf("pickQuant = %q, want Q4_K_M", got)
