@@ -115,6 +115,34 @@ func TestInspectFitsVerdict(t *testing.T) {
 	}
 }
 
+// Regression for the P8.3 review: a cache entry written by an older binary carries
+// a stale Verdict (here Loadable="pending"); inspect must recompute the verdict
+// from the cached Capabilities rather than display the stale value.
+func TestInspectCacheHitRecomputesLoadable(t *testing.T) {
+	dir := t.TempDir()
+	repo := "org/cached"
+	stale := modelmeta.Result{
+		Capabilities: modelmeta.Capabilities{
+			Repo: repo, Revision: "main", Format: modelmeta.FormatSafetensors,
+			Architecture: "Qwen2ForCausalLM", ModelType: "qwen2", Engines: []string{"vllm"},
+		},
+		Verdict: modelmeta.Verdict{Conclusion: modelmeta.ConclusionInspected, Engine: "vllm", Family: "qwen2", Loadable: modelmeta.Pending, Fits: modelmeta.Pending},
+	}
+	writeInspectCache(dir, repo, "main", stale)
+
+	// No endpoint: a cache miss would fail to fetch, so a clean run proves the hit.
+	out, err := runInspectCapture(t, &inspectOptions{stateDir: dir, vram: 80}, []string{repo})
+	if err != nil {
+		t.Fatalf("runInspect: %v", err)
+	}
+	if !strings.Contains(out, "loadable: yes") {
+		t.Errorf("stale cached Loadable should be recomputed to yes:\n%s", out)
+	}
+	if strings.Contains(out, "loadable: pending") {
+		t.Errorf("stale 'pending' Loadable leaked from the cache:\n%s", out)
+	}
+}
+
 func TestInspectUnsupportedArch(t *testing.T) {
 	srv := sizedRepoServer(t, "org/exotic", "FooBarForCausalLM", "foobar", 1<<30)
 	out, err := runInspectCapture(t, &inspectOptions{stateDir: t.TempDir(), endpoint: srv.URL, vram: 80}, []string{"org/exotic"})

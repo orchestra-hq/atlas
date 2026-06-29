@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/orchestra-hq/atlas/internal/modelmeta"
+	"github.com/orchestra-hq/atlas/internal/server"
 	"github.com/orchestra-hq/atlas/internal/worker"
 )
 
@@ -83,8 +84,11 @@ func runInspect(ctx context.Context, cmd *cobra.Command, opts *inspectOptions, a
 		writeInspectCache(opts.stateDir, repo, rev, res) // best-effort
 	}
 
-	// Fits is host-dependent, so it is never cached (the cache is host-neutral):
-	// compute it live against this host's capacity, or the --vram/--ram override.
+	// Recompute the host-independent verdict from the (stable) Capabilities rather
+	// than trusting the stored Verdict: a cache entry written by an older binary
+	// can carry a stale Loadable (e.g. a pre-P8.3 "pending") or an engine chosen on
+	// a different host. Then fill Fits live — it is host-dependent and never cached.
+	res.Verdict = modelmeta.VerdictFor(res.Capabilities)
 	capacity, hasGPU := inspectCapacity(opts)
 	res.Verdict.Fits = fitsVerdict(res.Capabilities, capacity)
 	return presentInspect(cmd, res, opts.asJSON, capacity, hasGPU)
@@ -195,19 +199,12 @@ func fitsLine(fits string, c modelmeta.Capabilities, capacity int64, hasGPU bool
 	return fmt.Sprintf("%s (needs ~%s, target has %s %s)", fits, humanBytes(est), humanBytes(capacity), mem)
 }
 
-// detectCapacity reports this host's schedulable memory and whether it has a GPU:
-// summed GPU VRAM if any, else system RAM — mirroring the scheduler's capacityOf.
-// It is a package var so tests inject a capacity without real hardware.
+// detectCapacity reports this host's schedulable memory and whether it has a GPU,
+// reusing the scheduler's CapacityOf so the single-node fit gate and the fleet
+// placer share one capacity definition. It is a package var so tests inject a
+// capacity without real hardware.
 var detectCapacity = func() (int64, bool) {
-	hw := worker.Detect()
-	if len(hw.GPUs) > 0 {
-		var sum int64
-		for _, g := range hw.GPUs {
-			sum += g.VRAMBytes
-		}
-		return sum, true
-	}
-	return hw.RAMBytes, false
+	return server.CapacityOf(worker.Detect())
 }
 
 // parsersLine previews the engine arguments metadata-driven resolution (M8 Phase

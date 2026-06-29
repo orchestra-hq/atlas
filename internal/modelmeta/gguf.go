@@ -81,7 +81,8 @@ func tryGGUFRepo(ctx context.Context, repo string, opts Options) (Result, bool, 
 	if err != nil {
 		return Result{}, false, err
 	}
-	res.Capabilities.WeightBytes = sizes[chosen] // the served quant's size (M8 Phase 3 fit)
+	res.Capabilities.WeightBytes = sizes[chosen] // the default-selected quant's size (M8 Phase 3 fit)
+	res.Capabilities.FileBytes = sizes           // per-quant sizes so --quant can be fit-checked
 	return res, true, nil
 }
 
@@ -116,7 +117,7 @@ func ggufResult(repo, revision, selected string, files []string, header []byte) 
 		Files:           files,
 		Selected:        selected,
 	}
-	return Result{Capabilities: caps, Verdict: verdictFor(caps)}, nil
+	return Result{Capabilities: caps, Verdict: VerdictFor(caps)}, nil
 }
 
 // repoFile is one file in an HF repo listing: its name and, when the API reports
@@ -231,7 +232,15 @@ func fetchRange(ctx context.Context, opts Options, url string, n int64) ([]byte,
 		if err != nil {
 			return nil, 0, err
 		}
-		return data, totalFromContentRange(resp.Header.Get("Content-Range")), nil
+		// Prefer the Content-Range total (a 206 partial response). On a 200 the
+		// server ignored Range and served (conceptually) the whole file, so its
+		// Content-Length is the full size — use it as the total fallback so the fit
+		// check still has a size when Range is unsupported.
+		total := totalFromContentRange(resp.Header.Get("Content-Range"))
+		if total == 0 && resp.StatusCode == http.StatusOK && resp.ContentLength > 0 {
+			total = resp.ContentLength
+		}
+		return data, total, nil
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return nil, 0, fmt.Errorf("modelmeta: %s is gated or private — set HF_TOKEN (or HUGGING_FACE_HUB_TOKEN)", url)
 	case http.StatusNotFound:

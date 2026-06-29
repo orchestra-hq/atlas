@@ -60,9 +60,26 @@ type Capabilities struct {
 	WeightBytes int64 `json:"weight_bytes,omitempty"`
 	// GGUF-only: when a repo holds multiple quantizations, Files lists them and
 	// Selected names the one inspected (the Q4_K_M-preferring default). Empty for
-	// safetensors repos and single-file GGUF targets.
-	Files    []string `json:"files,omitempty"`
-	Selected string   `json:"selected,omitempty"`
+	// safetensors repos and single-file GGUF targets. FileBytes maps each listed
+	// file to its byte size (when the listing reports it) so the fit check can
+	// weigh the quant actually selected at serve time, not just the default.
+	Files     []string         `json:"files,omitempty"`
+	Selected  string           `json:"selected,omitempty"`
+	FileBytes map[string]int64 `json:"file_bytes,omitempty"`
+}
+
+// QuantBytes returns the byte size of the listed GGUF file whose quant token
+// matches token (e.g. "Q5_K_M"), or 0 when the size is unknown or no file
+// matches. It lets resolution weigh the user-selected quant against host memory
+// rather than the inspect-time default.
+func (c Capabilities) QuantBytes(token string) int64 {
+	token = strings.ToUpper(strings.TrimSpace(token))
+	for _, f := range c.Files {
+		if QuantToken(f) == token {
+			return c.FileBytes[f]
+		}
+	}
+	return 0
 }
 
 // Conclusion is the headline of a Verdict. Phase 1 always reports
@@ -166,7 +183,7 @@ func candidateEngines(format Format) []string {
 	}
 }
 
-// verdictFor builds the staged verdict from derived capabilities. Family is
+// VerdictFor builds the staged verdict from derived capabilities. Family is
 // resolved by the family map (M8 Phase 2) — a known family's name, or
 // FamilyUnknown. Loadable (M8 Phase 3) is host-independent — it depends only on
 // the pinned engine version and the model's architecture — so it is decided here.
@@ -174,7 +191,12 @@ func candidateEngines(format Format) []string {
 // so is deliberately left Pending in the record: it must not be baked into the
 // host-neutral inspect cache. The consumer computes Fits live from local hardware
 // at the point of use (`atlas inspect` for display, resolveRaw for the gate).
-func verdictFor(c Capabilities) Verdict {
+//
+// It is exported and pure so a consumer can recompute the verdict from cached
+// Capabilities — e.g. on an inspect-cache hit, where a Verdict written by an
+// older binary (a pre-P8.3 "pending" Loadable, or an engine chosen on a different
+// host) must not be trusted verbatim.
+func VerdictFor(c Capabilities) Verdict {
 	var engine string
 	if len(c.Engines) > 0 {
 		engine = c.Engines[0]

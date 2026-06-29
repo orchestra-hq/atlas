@@ -77,17 +77,29 @@ func inspectHF(ctx context.Context, repo string, opts Options) (Result, error) {
 		caps.WeightBytes = sumSafetensorBytes(files)
 	}
 
-	return Result{Capabilities: caps, Verdict: verdictFor(caps)}, nil
+	return Result{Capabilities: caps, Verdict: VerdictFor(caps)}, nil
 }
 
 // sumSafetensorBytes totals the byte sizes of a repo's *.safetensors shards,
-// ignoring tokenizer/config/readme files. 0 when none carry a known size.
+// ignoring tokenizer/config/readme files. It returns 0 ("unknown", which skips
+// the fit check) when there are no shards OR when any shard's size is missing — a
+// partial sum would undercount and could pass an oversized model through the fit
+// gate, so an incomplete listing is treated as unknown rather than too-low.
 func sumSafetensorBytes(files []repoFile) int64 {
 	var sum int64
+	var seen bool
 	for _, f := range files {
-		if strings.HasSuffix(strings.ToLower(f.name), ".safetensors") {
-			sum += f.size
+		if !strings.HasSuffix(strings.ToLower(f.name), ".safetensors") {
+			continue
 		}
+		seen = true
+		if f.size <= 0 {
+			return 0 // a shard with no reported size makes the total untrustworthy
+		}
+		sum += f.size
+	}
+	if !seen {
+		return 0
 	}
 	return sum
 }

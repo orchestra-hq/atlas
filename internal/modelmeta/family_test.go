@@ -97,13 +97,13 @@ func TestFamilyEngineArgs(t *testing.T) {
 	}
 }
 
-// verdictFor (and thus Inspect) reports a real family, not the Pending sentinel.
+// VerdictFor (and thus Inspect) reports a real family, not the Pending sentinel.
 func TestVerdictReportsFamily(t *testing.T) {
-	known := verdictFor(Capabilities{ModelType: "qwen3", Engines: []string{"vllm"}})
+	known := VerdictFor(Capabilities{ModelType: "qwen3", Engines: []string{"vllm"}})
 	if known.Family != "qwen3" {
 		t.Errorf("family = %q, want qwen3", known.Family)
 	}
-	unknown := verdictFor(Capabilities{ModelType: "mamba"})
+	unknown := VerdictFor(Capabilities{ModelType: "mamba"})
 	if unknown.Family != FamilyUnknown {
 		t.Errorf("family = %q, want %q", unknown.Family, FamilyUnknown)
 	}

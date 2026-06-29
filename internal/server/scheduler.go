@@ -189,9 +189,11 @@ func (s *Scheduler) used(w *schedWorker) int64 {
 	return sum
 }
 
-// capacityOf reports a worker's schedulable memory and whether it has a GPU: the
-// summed GPU VRAM if any, else system RAM (CPU/Metal workers).
-func capacityOf(hw wire.Hardware) (int64, bool) {
+// CapacityOf reports a host's schedulable memory and whether it has a GPU: the
+// summed GPU VRAM if any, else system RAM (CPU/Metal hosts). It is the single
+// definition of "schedulable capacity" shared by the fleet placer and the
+// single-node pre-download fit gate (M8 Phase 3), so the two cannot drift.
+func CapacityOf(hw wire.Hardware) (int64, bool) {
 	if len(hw.GPUs) > 0 {
 		var sum int64
 		for _, g := range hw.GPUs {
@@ -205,7 +207,7 @@ func capacityOf(hw wire.Hardware) (int64, bool) {
 // WorkerJoined registers a worker's inventory and reconciles every deployment —
 // a new worker may host an under-replicated one.
 func (s *Scheduler) WorkerJoined(snap WorkerSnapshot) {
-	capacity, hasGPU := capacityOf(snap.Hardware)
+	capacity, hasGPU := CapacityOf(snap.Hardware)
 	w := &schedWorker{
 		engine:   snap.Engine,
 		capacity: capacity,

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -291,12 +292,12 @@ func TestResolveRawQuantOnNonRepo(t *testing.T) {
 	}
 }
 
-// withCapacity overrides the detected host capacity for the duration of a test so
-// the fit gate is deterministic without real hardware.
-func withCapacity(t *testing.T, bytes int64, hasGPU bool) {
+// withCapacity overrides the detected host capacity (as GPU VRAM) for the duration
+// of a test so the fit gate is deterministic without real hardware.
+func withCapacity(t *testing.T, bytes int64) {
 	t.Helper()
 	old := detectCapacity
-	detectCapacity = func() (int64, bool) { return bytes, hasGPU }
+	detectCapacity = func() (int64, bool) { return bytes, true }
 	t.Cleanup(func() { detectCapacity = old })
 }
 
@@ -305,7 +306,7 @@ func withCapacity(t *testing.T, bytes int64, hasGPU bool) {
 func TestResolveRawRefusesUnsupportedArch(t *testing.T) {
 	cat, _ := catalog.Load()
 	st := store.New(t.TempDir())
-	withCapacity(t, 80<<30, true) // roomy: the arch gate, not fit, must be what fires
+	withCapacity(t, 80<<30) // roomy: the arch gate, not fit, must be what fires
 	srv := sizedRepoServer(t, "org/exotic", "FooBarForCausalLM", "foobar", 1<<30)
 	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
 
@@ -325,7 +326,7 @@ func TestResolveRawRefusesUnsupportedArch(t *testing.T) {
 func TestResolveRawRefusesOversized(t *testing.T) {
 	cat, _ := catalog.Load()
 	st := store.New(t.TempDir())
-	withCapacity(t, 2<<30, true) // 2 GiB VRAM
+	withCapacity(t, 2<<30) // 2 GiB VRAM
 	srv := sizedRepoServer(t, "org/big", "Qwen2ForCausalLM", "qwen2", 40<<30)
 	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
 
@@ -345,7 +346,7 @@ func TestResolveRawRefusesOversized(t *testing.T) {
 func TestResolveRawGatePassesKnownFamily(t *testing.T) {
 	cat, _ := catalog.Load()
 	st := store.New(t.TempDir())
-	withCapacity(t, 80<<30, true)
+	withCapacity(t, 80<<30)
 	srv := sizedRepoServer(t, "org/q2", "Qwen2ForCausalLM", "qwen2", 8<<30)
 	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
 
@@ -355,6 +356,58 @@ func TestResolveRawGatePassesKnownFamily(t *testing.T) {
 	}
 	if !containsPair(rm.engineArgs, "--tool-call-parser", "hermes") {
 		t.Errorf("a fitting known family should still be auto-configured: %v", rm.engineArgs)
+	}
+}
+
+// multiQuantSizedServer serves an HF GGUF repo whose listing reports a size per
+// quant file, so the fit gate can be exercised against the *selected* quant.
+func multiQuantSizedServer(t *testing.T, repo string, sizes map[string]int64, header []byte) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/models/"+repo, func(w http.ResponseWriter, _ *http.Request) {
+		parts := make([]string, 0, len(sizes))
+		for f, sz := range sizes {
+			parts = append(parts, fmt.Sprintf(`{"rfilename":%q,"size":%d}`, f, sz))
+		}
+		_, _ = fmt.Fprintf(w, `{"siblings":[%s]}`, strings.Join(parts, ","))
+	})
+	mux.HandleFunc("/"+repo+"/resolve/main/config.json", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	for f := range sizes {
+		mux.HandleFunc("/"+repo+"/resolve/main/"+f, func(w http.ResponseWriter, r *http.Request) {
+			http.ServeContent(w, r, f, time.Time{}, bytes.NewReader(header))
+		})
+	}
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// Regression for the P8.3 review --quant fit-gate bug: the default quant fits but
+// an explicitly requested larger quant does not — the gate must weigh the selected
+// quant's size, not the inspect-time default.
+func TestResolveRawQuantFitWeighsSelected(t *testing.T) {
+	cat, _ := catalog.Load()
+	repo := "org/qwen3-gguf"
+	sizes := map[string]int64{"m-Q4_K_M.gguf": 4 << 30, "m-Q8_0.gguf": 40 << 30}
+	withCapacity(t, 10<<30) // fits Q4_K_M (~4.8 GiB padded), not Q8_0 (~48 GiB)
+
+	// No --quant: the default Q4_K_M is weighed and fits.
+	st := store.New(t.TempDir())
+	srv := multiQuantSizedServer(t, repo, sizes, qwen3GGUFHeader(t))
+	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
+	if _, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "", repo); err != nil {
+		t.Fatalf("default quant should fit: %v", err)
+	}
+
+	// --quant Q8_0: the larger selected quant is weighed and is refused.
+	st2 := store.New(t.TempDir())
+	srv2 := multiQuantSizedServer(t, repo, sizes, qwen3GGUFHeader(t))
+	t.Setenv("ATLAS_HF_ENDPOINT", srv2.URL)
+	_, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st2, cat, t.TempDir(), "Q8_0", repo)
+	if err == nil || !strings.Contains(err.Error(), "needs") {
+		t.Fatalf("a too-large --quant must be refused by the fit gate, got %v", err)
 	}
 }
 
