@@ -5,6 +5,39 @@ import (
 	"testing"
 )
 
+// reserveFit weighs a model against the runtime's *free* capacity (total minus
+// already-committed), reserving on success — the fleet/multi-model fix (M8 P8.3).
+func TestEngineRuntimeReserveFit(t *testing.T) {
+	const giB = 1 << 30
+	rt := &engineRuntime{capacity: 10 * giB, hasGPU: true}
+
+	if free, ok := rt.reserveFit(4 * giB); !ok || free != 10*giB {
+		t.Fatalf("first reserve: free=%d ok=%v, want 10 GiB free, ok", free, ok)
+	}
+	if free, ok := rt.reserveFit(4 * giB); !ok || free != 6*giB {
+		t.Fatalf("second reserve: free=%d ok=%v, want 6 GiB free, ok", free, ok)
+	}
+	// 2 GiB free now; a 4 GiB model does not fit and is refused (committed unchanged).
+	if free, ok := rt.reserveFit(4 * giB); ok || free != 2*giB {
+		t.Fatalf("over-commit: free=%d ok=%v, want 2 GiB free, refused", free, ok)
+	}
+	// Unloading one model frees its reservation, so the 4 GiB model now fits.
+	rt.releaseFit(4 * giB)
+	if _, ok := rt.reserveFit(4 * giB); !ok {
+		t.Error("after release, a 4 GiB model should fit again")
+	}
+	// An unknown size always fits and reserves nothing.
+	rt.committed = rt.capacity // full
+	if _, ok := rt.reserveFit(0); !ok {
+		t.Error("unknown size (0) must always fit")
+	}
+	// Unknown host capacity never refuses.
+	none := &engineRuntime{capacity: 0}
+	if _, ok := none.reserveFit(100 * giB); !ok {
+		t.Error("unknown capacity (0) must not refuse")
+	}
+}
+
 // mergeEngineArgs puts the user's --engine-arg after the model's defaults so that
 // for argparse-style engines (last value wins) an explicit user flag overrides an
 // auto-configured / catalog default of the same name.
