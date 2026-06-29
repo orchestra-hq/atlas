@@ -25,14 +25,15 @@ import (
 )
 
 type upOptions struct {
-	models     []string
-	aliases    []string
-	engine     string
-	engineArgs []string
-	quant      string
-	force      bool
-	addr       string
-	stateDir   string
+	models          []string
+	aliases         []string
+	engine          string
+	engineArgs      []string
+	quant           string
+	force           bool
+	requireVerified bool
+	addr            string
+	stateDir        string
 }
 
 func newUpCmd() *cobra.Command {
@@ -60,6 +61,8 @@ func newUpCmd() *cobra.Command {
 		"for a multi-quant Hugging Face GGUF repo, the quantization to serve (e.g. Q4_K_M); default prefers Q4_K_M")
 	cmd.Flags().BoolVar(&opts.force, "force", false,
 		"serve even if the model's architecture is not in the supported list (the engine load is the final authority)")
+	cmd.Flags().BoolVar(&opts.requireVerified, "require-verified", false,
+		"refuse a model whose family Atlas has no tested tool-call/reasoning config for (instead of serving it as plain chat)")
 	cmd.Flags().StringVar(&opts.addr, "addr", "127.0.0.1:8080", "address the gateway listens on")
 	cmd.Flags().StringVar(&opts.stateDir, "state-dir", defaultStateDir(), "directory for runtimes, weights, logs, and the key store")
 	_ = cmd.MarkFlagRequired("model")
@@ -90,7 +93,7 @@ func runUp(ctx context.Context, cmd *cobra.Command, opts *upOptions) error {
 	// its own subprocess; the gateway routes by served name. Once a model is
 	// ready its context window is read from the engine (falling back to the
 	// catalog hint), so the gateway can assert request fit and report it.
-	started, cleanup, err := startModels(ctx, cmd, engine, opts.engineArgs, opts.models, opts.stateDir, opts.quant, opts.force)
+	started, cleanup, err := startModels(ctx, cmd, engine, opts.engineArgs, opts.models, opts.stateDir, opts.quant, opts.force, opts.requireVerified)
 	if err != nil {
 		return err
 	}

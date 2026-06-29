@@ -1,6 +1,9 @@
 package modelmeta
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // FamilyUnknown is the Verdict.Family value for a model whose family Atlas has no
 // agent-config for. It is distinct from Pending (a dimension a later phase fills):
@@ -101,6 +104,35 @@ func Classify(c Capabilities) (Family, bool) {
 		}
 	}
 	return Family{}, false
+}
+
+// UnknownFamilyReason renders the middle-case (ADR-0015 Decision 3b) contribution
+// pointer for a model the pinned engine can load and that fits, but whose family
+// Atlas has no tested tool-call/reasoning config for (Classify reports false). It
+// names the model's architecture/type, the agent-behavior caveat, and the family
+// map + the one-line PR — the family-map analogue of arch.go's archReason, so the
+// two contribution funnels read alike. It states the bare fact; the cli layer
+// frames the consequence (warn-and-serve default vs. --require-verified refusal).
+func UnknownFamilyReason(c Capabilities) string {
+	return fmt.Sprintf("no tested tool-call/reasoning config for %s, so tool-calling and "+
+		"reasoning may misbehave. To add agent support, add the family to "+
+		"internal/modelmeta/family.go and open a PR", familyDisplay(c))
+}
+
+// familyDisplay names a model's family signal for a message: its architecture with
+// the model_type in parentheses when both are present, whichever exists otherwise,
+// or "this model" when neither does.
+func familyDisplay(c Capabilities) string {
+	switch {
+	case c.Architecture != "" && c.ModelType != "":
+		return fmt.Sprintf("%s (%s)", c.Architecture, c.ModelType)
+	case c.Architecture != "":
+		return c.Architecture
+	case c.ModelType != "":
+		return c.ModelType
+	default:
+		return "this model"
+	}
 }
 
 // familyToken reduces a model's type/architecture to a canonical family token. It
