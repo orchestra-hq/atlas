@@ -83,6 +83,32 @@ func TestInspectHFWeightBytes(t *testing.T) {
 	}
 }
 
+// Regression for the P8.3 review: a listing where one safetensors shard reports a
+// size and another reports none must yield WeightBytes=0 (unknown → fit skipped),
+// not a too-low partial sum that could pass an oversized model.
+func TestInspectHFWeightBytesPartialIsUnknown(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/org/m/resolve/main/config.json", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(fxConfigQwen))
+	})
+	mux.HandleFunc("/api/models/org/m", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"siblings":[
+			{"rfilename":"model-00001-of-00002.safetensors","size":30000000000},
+			{"rfilename":"model-00002-of-00002.safetensors"}
+		]}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	res, err := Inspect(context.Background(), "org/m", Options{Endpoint: srv.URL})
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if res.Capabilities.WeightBytes != 0 {
+		t.Errorf("WeightBytes = %d, want 0 (a missing shard size makes the total untrustworthy)", res.Capabilities.WeightBytes)
+	}
+}
+
 func TestInspectHFDerivesPlan(t *testing.T) {
 	hf := newFakeHF(map[string]fileResp{
 		"config.json":            {body: fxConfigQwen},

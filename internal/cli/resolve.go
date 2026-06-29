@@ -117,6 +117,13 @@ func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, s
 		}
 		return plan, nil
 	}
+	// Quant selection for a multi-quant GGUF repo runs first so the fit gate weighs
+	// the quant that will actually be served — a larger --quant than the inspect-time
+	// default must be fit-checked, not the default. applyQuant updates
+	// caps.WeightBytes to the selected quant's size.
+	if err := applyQuant(cmd, &plan, &caps, engine, spec, quant); err != nil {
+		return resolvedModel{}, err
+	}
 	// Fit/load gating (M8 Phase 3): refuse, before any weight download, a model the
 	// pinned engine cannot load or that will not fit this host's memory — a hard
 	// failure (ADR-0015 Decision 3c), distinct from an unknown family, which stays
@@ -134,10 +141,6 @@ func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, s
 		plan.ctxHint = caps.ContextWindow
 		cmd.Printf("Auto-configured %q as the %s family: %s\n", spec, fam.Name, parserSummary(plan.engineArgs))
 	}
-	// Quant selection for a multi-quant GGUF repo (independent of family).
-	if err := applyQuant(cmd, &plan, engine, spec, quant, caps); err != nil {
-		return resolvedModel{}, err
-	}
 	return plan, nil
 }
 
@@ -148,7 +151,7 @@ func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, s
 // of the case or partial form the user typed; absent, the inspect-time default
 // (caps.Selected, Q4_K_M-preferring per ADR-0015) is used. Non-repo / single-file
 // / non-GGUF targets have no selectable quants; passing --quant for one is an error.
-func applyQuant(cmd *cobra.Command, plan *resolvedModel, engine worker.Engine, spec, quant string, caps modelmeta.Capabilities) error {
+func applyQuant(cmd *cobra.Command, plan *resolvedModel, caps *modelmeta.Capabilities, engine worker.Engine, spec, quant string) error {
 	multiQuantRepo := engine == worker.EngineLlamaCpp && caps.Format == modelmeta.FormatGGUF && len(caps.Files) > 0
 	if !multiQuantRepo {
 		if quant != "" {
@@ -162,14 +165,25 @@ func applyQuant(cmd *cobra.Command, plan *resolvedModel, engine worker.Engine, s
 			return fmt.Errorf("--quant %w (in %s)", err, spec)
 		}
 		plan.modelArgs = []string{"-hf", spec + ":" + tok}
+		setServedQuantBytes(caps, tok)
 		cmd.Printf("Serving quantization %s of %s\n", tok, spec)
 		return nil
 	}
 	if tok := caps.DefaultQuantToken(); tok != "" {
 		plan.modelArgs = []string{"-hf", spec + ":" + tok}
+		setServedQuantBytes(caps, tok)
 		cmd.Printf("Serving quantization %s of %s (default; override with --quant)\n", tok, spec)
 	}
 	return nil
+}
+
+// setServedQuantBytes points the fit check at the selected quant's size (so a
+// larger --quant than the default is weighed correctly); it leaves the existing
+// WeightBytes in place when the listing did not report that quant's size.
+func setServedQuantBytes(caps *modelmeta.Capabilities, tok string) {
+	if b := caps.QuantBytes(tok); b > 0 {
+		caps.WeightBytes = b
+	}
 }
 
 // gateLoadFit is the M8 Phase 3 pre-download gate. It runs only on a successful
