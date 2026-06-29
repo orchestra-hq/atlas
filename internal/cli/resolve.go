@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -14,11 +13,6 @@ import (
 	"github.com/orchestra-hq/atlas/internal/store"
 	"github.com/orchestra-hq/atlas/internal/worker"
 )
-
-// quantRE matches a GGUF quantization designator in a filename, e.g. Q4_K_M,
-// Q8_0, IQ3_XXS, F16, BF16. Used to derive the -hf quant tag from a chosen file
-// and to summarize a repo's available quants.
-var quantRE = regexp.MustCompile(`(?i)\b(IQ\d+[A-Z0-9_]*|Q\d+[A-Z0-9_]*|BF16|F16|F32)\b`)
 
 // resolvedModel is the outcome of turning one --model value into the inputs a
 // worker needs: the logical name the gateway serves under, the engine's
@@ -156,46 +150,19 @@ func applyQuant(cmd *cobra.Command, plan *resolvedModel, engine worker.Engine, s
 		return nil
 	}
 	if quant != "" {
-		tok, err := resolveQuant(caps.Files, quant)
+		tok, err := caps.ResolveQuantToken(quant)
 		if err != nil {
-			return fmt.Errorf("%w in %s", err, spec)
+			return fmt.Errorf("--quant %w (in %s)", err, spec)
 		}
 		plan.modelArgs = []string{"-hf", spec + ":" + tok}
 		cmd.Printf("Serving quantization %s of %s\n", tok, spec)
 		return nil
 	}
-	if tok := quantToken(caps.Selected); tok != "" {
+	if tok := caps.DefaultQuantToken(); tok != "" {
 		plan.modelArgs = []string{"-hf", spec + ":" + tok}
 		cmd.Printf("Serving quantization %s of %s (default; override with --quant)\n", tok, spec)
 	}
 	return nil
-}
-
-// resolveQuant maps a user --quant request to a single canonical quant token from
-// the repo's files, normalizing case and rejecting an absent or ambiguous request
-// so the -hf tag handed to llama.cpp names exactly one quantization. A request
-// "matches" a file when (case-insensitively) the file name contains it; the
-// distinct quant tokens of the matching files must come to exactly one.
-func resolveQuant(files []string, want string) (string, error) {
-	w := strings.ToUpper(strings.TrimSpace(want))
-	seen := map[string]bool{}
-	var matched []string
-	for _, f := range files {
-		tok := quantToken(f)
-		if tok == "" || !strings.Contains(strings.ToUpper(f), w) || seen[tok] {
-			continue
-		}
-		seen[tok] = true
-		matched = append(matched, tok)
-	}
-	switch len(matched) {
-	case 1:
-		return matched[0], nil
-	case 0:
-		return "", fmt.Errorf("--quant %q matches no file; available: %s", want, strings.Join(quantTokens(files), ", "))
-	default:
-		return "", fmt.Errorf("--quant %q is ambiguous; matches %s — be more specific", want, strings.Join(matched, ", "))
-	}
 }
 
 // parserNote describes the parser flags auto-config applied, for the user-facing
@@ -206,30 +173,6 @@ func parserNote(args []string) string {
 		return " (template-driven; no parser flags)."
 	}
 	return ": " + strings.Join(args, " ")
-}
-
-// quantToken extracts the quant designator from a GGUF filename (e.g.
-// "Qwen3-8B-Q4_K_M.gguf" -> "Q4_K_M"), uppercased; "" when none is recognizable.
-func quantToken(file string) string {
-	m := quantRE.FindAllString(file, -1)
-	if len(m) == 0 {
-		return ""
-	}
-	return strings.ToUpper(m[len(m)-1]) // the quant tag sits at the tail of the name
-}
-
-// quantTokens lists the distinct quant designators across a repo's files, in
-// first-seen order, for an actionable --quant error message.
-func quantTokens(files []string) []string {
-	seen := map[string]bool{}
-	var toks []string
-	for _, f := range files {
-		if t := quantToken(f); t != "" && !seen[t] {
-			seen[t] = true
-			toks = append(toks, t)
-		}
-	}
-	return toks
 }
 
 // inspectForResolve fetches a raw spec's metadata for auto-configuration. A local
