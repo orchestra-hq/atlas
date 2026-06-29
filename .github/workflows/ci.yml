@@ -631,6 +631,64 @@ jobs:
             atlas-m3-w2.log
           if-no-files-found: ignore
 
+  conformance-m8:
+    name: Conformance (M8)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # The per-PR M8 conformance tier (docs/internal/m8-acceptance.md): G23 proves
+    # `atlas up --model <hugging-face-repo>` for a known-family repo with NO catalog
+    # row auto-configures from the model's metadata and serves an agent-grade
+    # endpoint — driven end to end against a real single-node llama.cpp deployment
+    # by scripts/conformance-m8.sh (build atlas, mint a key, `atlas up` the repo,
+    # assert the auto-config line, then run the harness's agent-critical gates
+    # G1,G2,G3,G4,G9). CPU-only; GPU-engine breadth (parser-flag families on
+    # vLLM/SGLang, auto-config on MLX) is the nightly tier.
+    env:
+      ATLAS_STATE_DIR: ${{ github.workspace }}/.atlas-m8
+      ATLAS_ADDR: 127.0.0.1:9093
+      ATLAS_LOG_FILE: ${{ github.workspace }}/atlas-m8.log
+      # The known-family GGUF repo G23 auto-configures (no catalog row). Kept in
+      # sync with scripts/conformance-m8.sh's default; the cache key keys on it.
+      CONF_M8_MODEL: Qwen/Qwen3-0.6B-GGUF
+      LLAMA_CACHE: ${{ github.workspace }}/.atlas-m8/llama-cache
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: astral-sh/setup-uv@v8.2.0 # no floating major tag — pin exact
+        with:
+          enable-cache: true
+          cache-dependency-glob: conformance/uv.lock
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: conformance/ts/package-lock.json
+      - run: npm ci --no-fund --no-audit
+        working-directory: conformance/ts
+      - name: Cache llama.cpp runtime
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ATLAS_STATE_DIR }}/runtimes
+          key: llamacpp-runtime-${{ runner.os }}-${{ runner.arch }}-b9611
+      # The gate model is served via llama.cpp's -hf (downloaded into LLAMA_CACHE),
+      # not the content-addressed store. Cache that download keyed on the repo id so
+      # only a cold cache pays the Hugging Face fetch.
+      - name: Cache auto-config gate model
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.LLAMA_CACHE }}
+          key: conf-m8-hf-${{ env.CONF_M8_MODEL }}
+      - name: M8 conformance (G23)
+        run: bash scripts/conformance-m8.sh
+      - uses: actions/upload-artifact@v7
+        if: always()
+        continue-on-error: true # never red a green gate on an artifact-quota blip
+        with:
+          name: conformance-m8-logs
+          path: atlas-m8.log
+          if-no-files-found: ignore
+
   docs:
     name: Docs lint
     runs-on: blacksmith-2vcpu-ubuntu-2404

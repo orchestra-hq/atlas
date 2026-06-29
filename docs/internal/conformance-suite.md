@@ -2,7 +2,7 @@
 
 The executable definition of M0's API surface. Each acceptance criterion in [m0-acceptance.md](m0-acceptance.md) maps to a test group here; the suite is the M0 release gate (breaking `ANTHROPIC_BASE_URL` drop-in blocks any release — roadmap standing track), and its published results are the compat matrix that proves positioning angle #1.
 
-> **Status:** the suite has grown with the project — groups G1–G22 (M0 through M3) are all implemented and run green per the m0–m3 acceptance reports. Sections below labelled by milestone describe when each group was introduced, not work that is still outstanding.
+> **Status:** the suite has grown with the project — groups G1–G22 (M0 through M3) plus G23 (M8 bring-any-model auto-config) are all implemented and run green per the milestone acceptance reports. Sections below labelled by milestone describe when each group was introduced, not work that is still outstanding.
 
 ## Principles
 
@@ -159,3 +159,13 @@ Every control-plane mutation — model deploy/scale/stop, worker drain/remove, a
 ### G22 — Cloud-fallback passthrough (M3 phase 4)
 
 With fallback enabled for a model, load beyond local capacity that G16 would shed is instead served by the configured upstream provider, and the response is labeled `x-atlas-served-by: cloud` with its tokens attributed to the cloud ledger class — the response body itself is a normal Atlas response, so the SDK is unaffected. With fallback disabled (the default), the identical overflow sheds with the ADR-0010 429/529 envelope, unchanged. Usage reporting separates cloud-served from locally-served tokens.
+
+---
+
+## M8 test groups
+
+This group extends the matrix and the pass policy when M8 ships (bring any model / auto-configuration, [ADR-0015](decisions/0015-bring-any-model-auto-configuration.md)). See [m8-build-plan.md](m8-build-plan.md) for the phase that introduces it.
+
+### G23 — Bring-any-model auto-config (M8 phase 5)
+
+`atlas up --model <hugging-face-repo>` for a **known-family** repo that is **not in the starter catalog** auto-configures the full serving plan from the model's own metadata (the `Auto-configured … family` resolution path — not the bare passthrough, and not the unknown-family plain-chat warning), and the resulting endpoint is **agent-grade**: it passes the agent-critical groups **G3** (tool loop) and **G9** (the streamed ≥3-call agent-SDK loop), plus **G1/G2** substrate and **G4** reasoning, with no catalog row written by anyone. Proven per-PR on a real single-node llama.cpp CPU deployment by [`scripts/conformance-m8.sh`](../../scripts/conformance-m8.sh) (the `Conformance (M8)` CI job), which boots the repo, asserts the auto-config signal, then drives the model-agnostic harness against it. GPU-engine breadth — the parser-flag families (`--tool-call-parser hermes`/`qwen25`/… on vLLM/SGLang) that auto-config sets but llama.cpp drives from the chat template, and auto-config on MLX (Apple Silicon) — is the standing nightly follow-on, not part of the per-PR gate (see [m8-acceptance.md](m8-acceptance.md)).
