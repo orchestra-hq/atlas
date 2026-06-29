@@ -33,6 +33,12 @@ type resolvedModel struct {
 	// path/spec, which is a chat model. An "embedding" class launches the engine in
 	// embedding mode and registers the route as embedding-class.
 	class string
+	// fitBytes is the model's padded memory estimate (modelmeta.FitEstimate, M8
+	// Phase 3); 0 when the size is unknown or a catalog entry. The launch path
+	// (engineRuntime.start) weighs it against the runtime's *free* capacity so a
+	// model is refused when it won't fit alongside already-loaded models, not just
+	// when it exceeds an empty host (the resolveRaw baseline gate).
+	fitBytes int64
 }
 
 // resolveModel turns one --model value into a worker plan. A catalog name
@@ -127,10 +133,12 @@ func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, s
 	// Fit/load gating (M8 Phase 3): refuse, before any weight download, a model the
 	// pinned engine cannot load or that will not fit this host's memory — a hard
 	// failure (ADR-0015 Decision 3c), distinct from an unknown family, which stays
-	// the bare passthrough below (warn-and-serve is Phase 4).
+	// the bare passthrough below (warn-and-serve is Phase 4). This baseline weighs an
+	// empty host; the launch path additionally weighs free capacity (engineRuntime).
 	if err := gateLoadFit(engine, spec, caps); err != nil {
 		return resolvedModel{}, err
 	}
+	plan.fitBytes, _ = modelmeta.FitEstimate(caps) // for the launch-time free-capacity check
 	// Family auto-config (parser engine_args, reasoning, sampling, context). An
 	// unknown family stays bare today; warn-and-serve + --require-verified are
 	// M8 Phase 4.

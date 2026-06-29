@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -47,6 +48,7 @@ type startedModel struct {
 	worker    *worker.Worker
 	ctxWindow int
 	class     string // model class (M3 phase 2a); empty = chat
+	fitBytes  int64  // reserved free-capacity estimate (M8 Phase 3); released on stop
 }
 
 // engineRuntime is a provisioned engine binary plus the catalog and store
@@ -65,6 +67,49 @@ type engineRuntime struct {
 	// serve (M8 P8.2c); empty uses the Q4_K_M-preferring default. Single-node only
 	// (atlas up/run); the fleet worker leaves it empty.
 	quant string
+	// capacity is this host's schedulable memory and hasGPU whether it is VRAM,
+	// captured once at construction (M8 Phase 3). committed tracks the padded
+	// estimate of the models this runtime has launched, so start() can weigh a new
+	// model against *free* capacity (capacity - committed) rather than the total —
+	// matching the scheduler's free-capacity placement and catching a model that
+	// won't fit alongside its siblings. mu guards committed against concurrent loads.
+	capacity  int64
+	hasGPU    bool
+	mu        sync.Mutex
+	committed int64
+}
+
+// reserveFit checks that a model of the given padded estimate fits the runtime's
+// free capacity and, if so, reserves it. ok=false means refuse; free reports the
+// memory available at the time of the check (for the message). A zero estimate
+// (unknown size, or a catalog model the scheduler already sized) always fits and
+// reserves nothing, and an unknown host capacity (0) never refuses.
+func (r *engineRuntime) reserveFit(bytes int64) (free int64, ok bool) {
+	if bytes <= 0 {
+		return 0, true
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	free = r.capacity - r.committed
+	if r.capacity > 0 && bytes > free {
+		return free, false
+	}
+	r.committed += bytes
+	return free, true
+}
+
+// releaseFit returns a stopped model's reserved estimate to the free pool, so a
+// long-lived fleet worker that loads and unloads over time keeps an accurate
+// committed total.
+func (r *engineRuntime) releaseFit(bytes int64) {
+	if bytes <= 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.committed -= bytes; r.committed < 0 {
+		r.committed = 0
+	}
 }
 
 // newEngineRuntime loads the catalog, opens the model store, and provisions the
@@ -80,6 +125,7 @@ func newEngineRuntime(ctx context.Context, cmd *cobra.Command, engine worker.Eng
 	if err != nil {
 		return nil, err
 	}
+	capacity, hasGPU := detectCapacity()
 	return &engineRuntime{
 		cmd:        cmd,
 		engine:     engine,
@@ -89,6 +135,8 @@ func newEngineRuntime(ctx context.Context, cmd *cobra.Command, engine worker.Eng
 		cat:        cat,
 		st:         store.New(filepath.Join(stateDir, "store")),
 		quant:      quant,
+		capacity:   capacity,
+		hasGPU:     hasGPU,
 	}, nil
 }
 
@@ -115,6 +163,18 @@ func (r *engineRuntime) start(ctx context.Context, spec string) (startedModel, e
 	if err != nil {
 		return startedModel{}, err
 	}
+	// Weigh the model against *free* capacity (total minus already-loaded models),
+	// not just the empty-host baseline resolveRaw already checked: a model can clear
+	// the baseline yet not fit alongside its siblings on this runtime. Reserve before
+	// launching so concurrent fleet loads don't both pass on the same free space.
+	if free, ok := r.reserveFit(rm.fitBytes); !ok {
+		mem := "RAM"
+		if r.hasGPU {
+			mem = "VRAM"
+		}
+		return startedModel{}, fmt.Errorf("%s needs ~%s but only %s %s is free on this host (other models are loaded) — unload a model or use a host with more %s",
+			rm.served, humanBytes(rm.fitBytes), humanBytes(free), mem, mem)
+	}
 	r.cmd.Printf("Loading model %q (this can take a while on first run)…\n", rm.served)
 	w, err := worker.Start(ctx, worker.Config{
 		Engine:        r.engine,
@@ -131,6 +191,7 @@ func (r *engineRuntime) start(ctx context.Context, spec string) (startedModel, e
 		ReadyTimeout:  engineReadyTimeout(), // 0 = worker default; raised for vLLM cold start
 	})
 	if err != nil {
+		r.releaseFit(rm.fitBytes) // launch failed; return the reservation to the free pool
 		return startedModel{}, err
 	}
 	ctxWindow, err := w.ContextWindow(ctx)
@@ -142,7 +203,7 @@ func (r *engineRuntime) start(ctx context.Context, spec string) (startedModel, e
 			r.cmd.Printf("  warning: could not read context window for %q (%v); fit assertion disabled\n", rm.served, err)
 		}
 	}
-	return startedModel{name: rm.served, worker: w, ctxWindow: ctxWindow, class: rm.class}, nil
+	return startedModel{name: rm.served, worker: w, ctxWindow: ctxWindow, class: rm.class, fitBytes: rm.fitBytes}, nil
 }
 
 // startModelsOn launches each spec on the runtime, blocking until each has
@@ -153,6 +214,7 @@ func startModelsOn(ctx context.Context, rt *engineRuntime, models []string) ([]s
 	cleanup := func() {
 		for _, sm := range started {
 			_ = sm.worker.Stop()
+			rt.releaseFit(sm.fitBytes)
 		}
 	}
 	seen := map[string]bool{}
@@ -164,6 +226,7 @@ func startModelsOn(ctx context.Context, rt *engineRuntime, models []string) ([]s
 		}
 		if seen[sm.name] {
 			_ = sm.worker.Stop()
+			rt.releaseFit(sm.fitBytes)
 			cleanup()
 			return nil, nil, fmt.Errorf("duplicate model %q", sm.name)
 		}
@@ -201,6 +264,11 @@ func (l *fleetLoader) Load(ctx context.Context, model, engine string) (worker.Se
 	if err != nil {
 		return worker.ServedModel{}, nil, err
 	}
-	stop := func() { _ = sm.worker.Stop() }
+	// Return the reserved free-capacity estimate when the scheduler unloads this
+	// model, so the long-lived worker's committed total tracks load/unload churn.
+	stop := func() {
+		_ = sm.worker.Stop()
+		l.rt.releaseFit(sm.fitBytes)
+	}
 	return worker.ServedModel{Name: sm.name, ContextWindow: sm.ctxWindow, Class: sm.class, Engine: sm.worker}, stop, nil
 }
