@@ -61,7 +61,7 @@ Agents need more than chat, so the catalog also includes the rest of the stack:
 - **Embeddings** — `nomic-embed-text-v1.5`, served on the OpenAI `/v1/embeddings` shape.
 - **Reranking** — `bge-reranker-v2-m3`, on the de-facto Cohere `/v1/rerank` shape.
 
-A couple of conveniences fall out of the catalog. **Model aliases** map the Claude names your code already uses — `claude-sonnet-*`, `claude-opus-*`, `claude-haiku-*` — onto whatever you've actually deployed, so you don't have to touch model strings scattered through an app. And when the catalog isn't enough, **bring your own**: point Atlas at any Hugging Face repo id or a local weights file and it'll serve it best-effort. The catalog is the curated fast path, not a fence.
+A couple of conveniences fall out of the catalog. **Model aliases** map the Claude names your code already uses — `claude-sonnet-*`, `claude-opus-*`, `claude-haiku-*` — onto whatever you've actually deployed, so you don't have to touch model strings scattered through an app. And when the catalog isn't enough, **bring your own**: point Atlas at any Hugging Face repo id and it fetches the model's metadata — not its weights — to decide whether it can serve it well. For a model whose family Atlas has tested agent-config for, it auto-configures the parsers, reasoning, and defaults from that metadata and serves it agent-grade, no catalog entry required; a model it can load but hasn't tested is served as chat with a clear warning and a one-line path to add support; one it can't load or that won't fit fails fast with the reason, before any download. The catalog is the curated fast path, not a fence.
 
 ## Why we built it the way we did
 
