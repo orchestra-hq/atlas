@@ -104,15 +104,25 @@ echo "auto-config confirmed: $(grep -m1 'Auto-configured' "$ATLAS_LOG_FILE")"
 
 # Now prove the auto-configured endpoint is agent-grade: drive the agent-critical
 # conformance gates (G3 tool loop, G9 streamed agent-SDK loop) plus G1/G2 substrate
-# and G4 reasoning against it. The repo id is both the chat and reasoning model
-# (qwen3 is reasoning-capable); the genuinely-non-reasoning G4 case is omitted
-# (ATLAS_NONREASONING_MODEL unset → skipped), as on the single-engine tiers.
+# and G4 reasoning against it via the Anthropic Python SDK + agent-SDK suites. The
+# repo id is both the chat and reasoning model (qwen3 is reasoning-capable); the
+# genuinely-non-reasoning G4 case is omitted (ATLAS_NONREASONING_MODEL unset →
+# skipped), as on the single-engine tiers.
+#
+# --skip-ts: the required groups are fully covered by pytest (Python SDK + agent
+# SDK); the anthropic-ts subset adds no auto-config-specific signal (the wire format
+# is identical however the model was configured, and the TS SDK is already proven
+# per-engine by the catalog conformance jobs). It is also the slow long-pole — its
+# G4 streamed-thinking case (up to 2048 tokens) can blow the vitest timeout on a
+# cold CPU runner serving a tiny reasoning model — so skipping it keeps the gate
+# fast and reliable without weakening the auto-config claim.
 echo "==> Running the conformance harness against the auto-configured endpoint"
 ( cd conformance && uv run --locked python run.py \
     --base-url "$API" \
     --engine llamacpp \
     --model "$MODEL" \
     --reasoning-model "$MODEL" \
+    --skip-ts \
     --require G1,G2,G3,G4,G9 ) \
   || fail "G23: the auto-configured endpoint did not pass the agent-critical gates (G1,G2,G3,G4,G9)"
 
