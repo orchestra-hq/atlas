@@ -1,0 +1,65 @@
+# Split topology: bring up a GPU WORKER that dials out to an existing Atlas
+# control plane. This is the fleet shape from the website's Cloud fleet guide and
+# docs/internal/deployment-aws.md — `atlas server` runs on a small always-on box
+# (no GPU), and each GPU machine runs `atlas worker --join`, dialing OUT to it
+# (ADR-0003: workers never listen). The worker needs no inbound ports.
+#
+# You bring the control plane up first (see examples/serve/README.md → "Split
+# control plane + GPU worker"); it prints a join token and, with --tls-self-signed,
+# a cert pin. Pass them to this recipe via env and the worker appears in the fleet.
+#
+#   pip install 'skypilot[aws]'
+#   sky check
+#
+#   sky launch -c atlas-worker examples/serve/atlas-worker-join.sky.yaml --down -y \
+#       --env ATLAS_SERVER_URL=wss://<server-host>:9090/workers/connect \
+#       --env ATLAS_JOIN_TOKEN=<token printed by atlas server> \
+#       --env ATLAS_TLS_PIN=sha256:<hex printed by --tls-self-signed>   # omit for ACME/public-CA
+#
+# Clients still talk to the SERVER's endpoint, not this worker:
+#   ANTHROPIC_BASE_URL=https://<server-host>:9090 ANTHROPIC_API_KEY=<key> claude
+#
+# Tear down the worker (the control plane keeps running):  sky down atlas-worker
+
+name: atlas-worker-join
+
+resources:
+  accelerators: { L40S: 1, A10G: 1, L4: 1 } # match to the model you serve
+  disk_size: 256
+  # No `ports:` — a dial-out worker exposes nothing.
+
+workdir: .
+
+envs:
+  # The model this worker serves and the vLLM parser flags it needs. The 8B on a
+  # ~24GB GPU is the proven tier; size up per atlas-serve-staged.sky.yaml's ladder.
+  ATLAS_MODEL: Qwen/Qwen3-8B
+  ATLAS_ENGINE_ARGS: --tool-call-parser hermes --reasoning-parser qwen3
+  GO_VERSION: 1.26.4
+  # Join coordinates — set these on the `sky launch` command line (see header):
+  ATLAS_SERVER_URL: ""
+  ATLAS_JOIN_TOKEN: ""
+  ATLAS_TLS_PIN: "" # empty for ws:// or an ACME/public-CA wss:// endpoint
+
+setup: |
+  set -euo pipefail
+  if ! /usr/local/go/bin/go version 2>/dev/null | grep -q "go${GO_VERSION}"; then
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tgz
+    sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf /tmp/go.tgz
+  fi
+  export PATH="/usr/local/go/bin:$PATH"
+  go build -o "$HOME/atlas" ./cmd/atlas
+
+run: |
+  set -euo pipefail
+  nvidia-smi || { echo "no GPU visible on the host" >&2; exit 1; }
+  [ -n "$ATLAS_SERVER_URL" ] || { echo "set --env ATLAS_SERVER_URL=wss://<server>:9090/workers/connect" >&2; exit 1; }
+  [ -n "$ATLAS_JOIN_TOKEN" ] || { echo "set --env ATLAS_JOIN_TOKEN=<token from atlas server>" >&2; exit 1; }
+  # --join/--token/--tls-pin are read from ATLAS_SERVER_URL/ATLAS_JOIN_TOKEN/ATLAS_TLS_PIN.
+  # shellcheck disable=SC2086
+  "$HOME/atlas" worker \
+    --engine vllm \
+    --model "$ATLAS_MODEL" \
+    --name "$(hostname)" \
+    ${ATLAS_TLS_PIN:+--tls-pin "$ATLAS_TLS_PIN"} \
+    $(for a in $ATLAS_ENGINE_ARGS; do printf -- '--engine-arg %s ' "$a"; done)
