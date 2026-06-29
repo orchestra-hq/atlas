@@ -92,6 +92,17 @@ func newEngineRuntime(ctx context.Context, cmd *cobra.Command, engine worker.Eng
 	}, nil
 }
 
+// mergeEngineArgs combines a model's resolved engine args (the catalog entry's
+// or auto-config's defaults) with the user's --engine-arg, putting the user's
+// LAST. For argparse-style engines (vLLM/SGLang take the last value of a repeated
+// flag), this lets an explicit user flag override a default of the same name —
+// e.g. --engine-arg=--tool-call-parser --engine-arg=mine wins over an
+// auto-configured parser. (--served-model-name is also overridable this way, at
+// the user's own risk to gateway routing.)
+func mergeEngineArgs(defaults, user []string) []string {
+	return append(append([]string{}, defaults...), user...)
+}
+
 // start launches one model on the runtime, blocking until the engine reports
 // healthy. It resolves the spec (catalog name, Hugging Face ref, or local path),
 // fetches weights via the store as needed, and reads the engine's context window.
@@ -109,7 +120,7 @@ func (r *engineRuntime) start(ctx context.Context, spec string) (startedModel, e
 		Engine:        r.engine,
 		BinPath:       r.binPath,
 		ModelArgs:     rm.modelArgs,
-		ExtraArgs:     append(append([]string{}, r.engineArgs...), rm.engineArgs...),
+		ExtraArgs:     mergeEngineArgs(rm.engineArgs, r.engineArgs),
 		Model:         rm.served,
 		ContextWindow: rm.ctxHint,              // engines that cannot self-report (MLX) answer from this
 		Temperature:   rm.sampling.Temperature, // catalog sampling defaults (M2 phase 4a)
