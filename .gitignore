@@ -18,6 +18,7 @@ coverage.out
 /atlas-*.log
 /.atlas-acceptance*/
 /.atlas-m3/
+/.atlas-m8/
 
 # Conformance harness
 node_modules/

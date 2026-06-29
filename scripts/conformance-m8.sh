@@ -17,7 +17,7 @@
 # job in .github/workflows/ci.yml. CPU-only; GPU-engine breadth (parser-flag
 # families on vLLM/SGLang, auto-config on MLX) is the nightly tier. The harness
 # (conformance/run.py) is model-agnostic, so this adds a driver, not harness code.
-# Requires: go, uv, npm, curl.
+# Requires: go, uv, curl. (No node/npm: the harness runs with --skip-ts.)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -37,12 +37,13 @@ export LLAMA_CACHE=${LLAMA_CACHE:-$ATLAS_STATE_DIR/llama-cache}
 # like `qwen3-0.6b`, so cat.Lookup misses and this flows through resolveRaw — the
 # auto-config path under test). Qwen-published official GGUF: GGUF
 # general.architecture=qwen3 → modelmeta normalizes to the known `qwen3` family
-# (Reasoning: true), ~0.4 GiB at Q4_K_M — well within a CPU runner. Reasoning-
-# capable so G4 exercises the auto-configured reasoning gating, not just chat.
+# (Reasoning: true). Its sole GGUF is Q8_0 (~0.7 GiB; the repo has no Q4_K_M, so
+# the Q4_K_M-preferring default falls back to it) — well within a CPU runner.
+# Reasoning-capable so G4 exercises the auto-configured reasoning gating, not just chat.
 MODEL=${CONF_M8_MODEL:-Qwen/Qwen3-0.6B-GGUF}
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "conformance-m8: missing prerequisite '$1'" >&2; exit 2; }; }
-need go; need uv; need npm; need curl
+need go; need uv; need curl
 
 PIDS=()
 cleanup() {
@@ -80,6 +81,11 @@ PIDS+=($!)
 echo "==> Waiting for the auto-configured model to be ready"
 ready=0
 for _ in $(seq 1 240); do
+  # Fail fast if `atlas up` died (a bad flag, a fit-gate/arch refusal, an
+  # unreadable-metadata exit) rather than burning the full ~8-minute poll.
+  if ! kill -0 "${PIDS[0]}" 2>/dev/null; then
+    fail "G23: atlas up exited before becoming ready for $MODEL"
+  fi
   curl -sf -o /dev/null "$API/readyz" && { ready=1; break; }
   sleep 2
 done
