@@ -130,6 +130,9 @@ var transformersArchs = lowerSet(
 	"OlmoForCausalLM", "Olmo2ForCausalLM",
 	// IBM Granite, dense and MoE.
 	"GraniteForCausalLM", "GraniteMoeForCausalLM",
+	// State-space and hybrid models vLLM loads (no Atlas parser config yet, but
+	// loadable — so they reach the bare/Phase-4 path, not a refusal).
+	"MambaForCausalLM", "Mamba2ForCausalLM", "JambaForCausalLM",
 	// Nemotron, StableLM, Starcoder2, Falcon, GPT-NeoX/2/BigCode, MPT, Baichuan, Bloom, MiniCPM, Exaone.
 	"NemotronForCausalLM", "StableLmForCausalLM", "Starcoder2ForCausalLM",
 	"FalconForCausalLM", "GPTNeoXForCausalLM", "GPT2LMHeadModel", "GPTBigCodeForCausalLM",

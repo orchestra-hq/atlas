@@ -117,6 +117,13 @@ func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, s
 		}
 		return plan, nil
 	}
+	// Fit/load gating (M8 Phase 3): refuse, before any weight download, a model the
+	// pinned engine cannot load or that will not fit this host's memory — a hard
+	// failure (ADR-0015 Decision 3c), distinct from an unknown family, which stays
+	// the bare passthrough below (warn-and-serve is Phase 4).
+	if err := gateLoadFit(engine, spec, caps); err != nil {
+		return resolvedModel{}, err
+	}
 	// Family auto-config (parser engine_args, reasoning, sampling, context). An
 	// unknown family stays bare today; warn-and-serve + --require-verified are
 	// M8 Phase 4.
@@ -163,6 +170,34 @@ func applyQuant(cmd *cobra.Command, plan *resolvedModel, engine worker.Engine, s
 		cmd.Printf("Serving quantization %s of %s (default; override with --quant)\n", tok, spec)
 	}
 	return nil
+}
+
+// gateLoadFit is the M8 Phase 3 pre-download gate. It runs only on a successful
+// inspection (caps derived from metadata). It refuses a spec whose architecture
+// the pinned engine cannot load (an upstream-engine limitation, with a pointer to
+// fix it), and a spec whose padded weight estimate exceeds this host's schedulable
+// memory (with the sizing shortfall). A model whose size is unknown skips the fit
+// half (best-effort, never a false refusal); a loadable arch with an unknown
+// family passes the gate and is served bare (the warn-and-serve middle case is
+// Phase 4). Both failures abort before worker.Start, so no weights are fetched.
+func gateLoadFit(engine worker.Engine, spec string, caps modelmeta.Capabilities) error {
+	if ok, reason := modelmeta.ArchLoadable(string(engine), caps); !ok {
+		return fmt.Errorf("cannot serve %s: %s", spec, reason)
+	}
+	est, ok := modelmeta.FitEstimate(caps)
+	if !ok {
+		return nil
+	}
+	capacity, hasGPU := detectCapacity()
+	if capacity <= 0 || est <= capacity {
+		return nil
+	}
+	mem := "RAM"
+	if hasGPU {
+		mem = "VRAM"
+	}
+	return fmt.Errorf("%s needs ~%s (weights + ~%d%% overhead) but this host has %s %s — free up memory or use a host with more %s",
+		spec, humanBytes(est), int(modelmeta.KVOverheadFraction*100), humanBytes(capacity), mem, mem)
 }
 
 // parserSummary renders a known family's engine args for display — shared by the
