@@ -291,6 +291,73 @@ func TestResolveRawQuantOnNonRepo(t *testing.T) {
 	}
 }
 
+// withCapacity overrides the detected host capacity for the duration of a test so
+// the fit gate is deterministic without real hardware.
+func withCapacity(t *testing.T, bytes int64, hasGPU bool) {
+	t.Helper()
+	old := detectCapacity
+	detectCapacity = func() (int64, bool) { return bytes, hasGPU }
+	t.Cleanup(func() { detectCapacity = old })
+}
+
+// An unsupported architecture is refused before any weight download, with a
+// message naming the arch and the contribution pointer (M8 Phase 3, ADR-0015 3c).
+func TestResolveRawRefusesUnsupportedArch(t *testing.T) {
+	cat, _ := catalog.Load()
+	st := store.New(t.TempDir())
+	withCapacity(t, 80<<30, true) // roomy: the arch gate, not fit, must be what fires
+	srv := sizedRepoServer(t, "org/exotic", "FooBarForCausalLM", "foobar", 1<<30)
+	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
+
+	_, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "org/exotic")
+	if err == nil {
+		t.Fatal("expected a refusal for an unsupported architecture")
+	}
+	for _, want := range []string{"cannot serve", "FooBarForCausalLM", "open a PR"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+}
+
+// A model that exceeds the host's memory is refused before download, with the
+// sizing shortfall.
+func TestResolveRawRefusesOversized(t *testing.T) {
+	cat, _ := catalog.Load()
+	st := store.New(t.TempDir())
+	withCapacity(t, 2<<30, true) // 2 GiB VRAM
+	srv := sizedRepoServer(t, "org/big", "Qwen2ForCausalLM", "qwen2", 40<<30)
+	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
+
+	_, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "org/big")
+	if err == nil {
+		t.Fatal("expected a refusal for an oversized model")
+	}
+	for _, want := range []string{"needs", "VRAM"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+}
+
+// A loadable, fitting known-family model passes the gate and is auto-configured —
+// the gate does not regress the P8.2 path.
+func TestResolveRawGatePassesKnownFamily(t *testing.T) {
+	cat, _ := catalog.Load()
+	st := store.New(t.TempDir())
+	withCapacity(t, 80<<30, true)
+	srv := sizedRepoServer(t, "org/q2", "Qwen2ForCausalLM", "qwen2", 8<<30)
+	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
+
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "org/q2")
+	if err != nil {
+		t.Fatalf("resolveModel: %v", err)
+	}
+	if !containsPair(rm.engineArgs, "--tool-call-parser", "hermes") {
+		t.Errorf("a fitting known family should still be auto-configured: %v", rm.engineArgs)
+	}
+}
+
 // qwen3GGUFHeader hand-encodes a minimal GGUF header naming
 // general.architecture=qwen3, enough for resolution to classify the family.
 func qwen3GGUFHeader(t *testing.T) []byte {
