@@ -22,6 +22,7 @@ type runOptions struct {
 	system    string
 	maxTokens int
 	quant     string
+	force     bool
 	stateDir  string
 }
 
@@ -47,6 +48,8 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().IntVar(&opts.maxTokens, "max-tokens", 512, "maximum tokens to generate")
 	cmd.Flags().StringVar(&opts.quant, "quant", "",
 		"for a multi-quant Hugging Face GGUF repo, the quantization to serve (e.g. Q4_K_M); default prefers Q4_K_M")
+	cmd.Flags().BoolVar(&opts.force, "force", false,
+		"serve even if the model's architecture is not in the supported list (the engine load is the final authority)")
 	cmd.Flags().StringVar(&opts.stateDir, "state-dir", defaultStateDir(), "directory for runtimes, weights, and logs")
 	return cmd
 }
@@ -86,7 +89,7 @@ func runRun(ctx context.Context, cmd *cobra.Command, opts *runOptions, model str
 		return err
 	}
 
-	rm, err := resolveModel(ctx, cmd, engine, st, cat, opts.stateDir, opts.quant, model)
+	rm, err := resolveModel(ctx, cmd, engine, st, cat, opts.stateDir, opts.quant, model, opts.force)
 	if err != nil {
 		return err
 	}

@@ -128,8 +128,8 @@ func runWorker(ctx context.Context, cmd *cobra.Command, opts *workerOptions) err
 	// and heartbeats — the scheduler then places models on it over the channel
 	// (M1 phase 4b), loading them through the same runtime via fleetLoader.
 	// The fleet worker takes models by name from the scheduler, not a single-node
-	// --quant; quant selection is an `atlas up`/`run` convenience, so leave it empty.
-	rt, err := newEngineRuntime(ctx, cmd, engine, opts.engineArgs, opts.stateDir, "")
+	// --quant/--force; those are `atlas up`/`run` conveniences, so leave them off.
+	rt, err := newEngineRuntime(ctx, cmd, engine, opts.engineArgs, opts.stateDir, "", false)
 	if err != nil {
 		return err
 	}

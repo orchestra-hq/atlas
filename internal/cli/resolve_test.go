@@ -40,7 +40,7 @@ func TestResolveModelRawSpecFallsBack(t *testing.T) {
 	// metadata fetch fails and resolution falls back to the pre-M8 bare passthrough.
 	t.Setenv("ATLAS_HF_ENDPOINT", notFoundServer(t).URL)
 
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "", "ggml-org/Qwen2.5-0.5B-Instruct-GGUF")
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "", "ggml-org/Qwen2.5-0.5B-Instruct-GGUF", false)
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestResolveRawAutoConfigsKnownFamily(t *testing.T) {
 	}, hits)
 	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
 
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "Qwen/Qwen3-8B")
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "Qwen/Qwen3-8B", false)
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestResolveRawAutoConfigsPerEngine(t *testing.T) {
 	}, hits)
 	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
 
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineSGLang, st, cat, t.TempDir(), "", "Qwen/Qwen3-8B")
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineSGLang, st, cat, t.TempDir(), "", "Qwen/Qwen3-8B", false)
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestResolveRawAutoConfigsLocalGGUF(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "", path)
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "", path, false)
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestResolveRawUnknownFamilyFallsBack(t *testing.T) {
 	}, hits)
 	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
 
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "org/mamba")
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "org/mamba", false)
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestResolveRawQuantDefault(t *testing.T) {
 	srv := multiQuantGGUFServer(t, repo, []string{"m-Q4_K_M.gguf", "m-Q5_K_M.gguf", "m-Q8_0.gguf"}, qwen3GGUFHeader(t))
 	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
 
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "", repo)
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "", repo, false)
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestResolveRawQuantExplicit(t *testing.T) {
 			srv := multiQuantGGUFServer(t, repo, []string{"m-Q4_K_M.gguf", "m-Q5_K_M.gguf", "m-Q8_0.gguf"}, qwen3GGUFHeader(t))
 			t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
 
-			rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), quant, repo)
+			rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), quant, repo, false)
 			if err != nil {
 				t.Fatalf("resolveModel: %v", err)
 			}
@@ -252,7 +252,7 @@ func TestResolveRawQuantAmbiguous(t *testing.T) {
 	srv := multiQuantGGUFServer(t, repo, []string{"m-Q4_K_M.gguf", "m-Q5_K_M.gguf"}, qwen3GGUFHeader(t))
 	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
 
-	_, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "K_M", repo)
+	_, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "K_M", repo, false)
 	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
 		t.Errorf("error = %v, want an ambiguity error for --quant K_M", err)
 	}
@@ -266,7 +266,7 @@ func TestResolveRawQuantUnknown(t *testing.T) {
 	srv := multiQuantGGUFServer(t, repo, []string{"m-Q4_K_M.gguf", "m-Q8_0.gguf"}, qwen3GGUFHeader(t))
 	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
 
-	_, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "Q3_K_S", repo)
+	_, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "Q3_K_S", repo, false)
 	if err == nil {
 		t.Fatal("expected an error for an unavailable quant")
 	}
@@ -286,7 +286,7 @@ func TestResolveRawQuantOnNonRepo(t *testing.T) {
 	if err := os.WriteFile(path, qwen3GGUFHeader(t), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "Q4_K_M", path)
+	_, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "Q4_K_M", path, false)
 	if err == nil || !strings.Contains(err.Error(), "no selectable quantizations") {
 		t.Errorf("error = %v, want no-selectable-quantizations message", err)
 	}
@@ -310,7 +310,7 @@ func TestResolveRawRefusesUnsupportedArch(t *testing.T) {
 	srv := sizedRepoServer(t, "org/exotic", "FooBarForCausalLM", "foobar", 1<<30)
 	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
 
-	_, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "org/exotic")
+	_, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "org/exotic", false)
 	if err == nil {
 		t.Fatal("expected a refusal for an unsupported architecture")
 	}
@@ -330,7 +330,7 @@ func TestResolveRawRefusesOversized(t *testing.T) {
 	srv := sizedRepoServer(t, "org/big", "Qwen2ForCausalLM", "qwen2", 40<<30)
 	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
 
-	_, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "org/big")
+	_, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "org/big", false)
 	if err == nil {
 		t.Fatal("expected a refusal for an oversized model")
 	}
@@ -350,7 +350,7 @@ func TestResolveRawGatePassesKnownFamily(t *testing.T) {
 	srv := sizedRepoServer(t, "org/q2", "Qwen2ForCausalLM", "qwen2", 8<<30)
 	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
 
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "org/q2")
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "org/q2", false)
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}
@@ -397,7 +397,7 @@ func TestResolveRawQuantFitWeighsSelected(t *testing.T) {
 	st := store.New(t.TempDir())
 	srv := multiQuantSizedServer(t, repo, sizes, qwen3GGUFHeader(t))
 	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
-	if _, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "", repo); err != nil {
+	if _, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "", repo, false); err != nil {
 		t.Fatalf("default quant should fit: %v", err)
 	}
 
@@ -405,9 +405,35 @@ func TestResolveRawQuantFitWeighsSelected(t *testing.T) {
 	st2 := store.New(t.TempDir())
 	srv2 := multiQuantSizedServer(t, repo, sizes, qwen3GGUFHeader(t))
 	t.Setenv("ATLAS_HF_ENDPOINT", srv2.URL)
-	_, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st2, cat, t.TempDir(), "Q8_0", repo)
+	_, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st2, cat, t.TempDir(), "Q8_0", repo, false)
 	if err == nil || !strings.Contains(err.Error(), "needs") {
 		t.Fatalf("a too-large --quant must be refused by the fit gate, got %v", err)
+	}
+}
+
+// --force serves an unsupported architecture anyway (the engine load is the
+// authority), but the fit check still applies — forcing past the arch list never
+// forces an OOM.
+func TestResolveRawForceArchOverride(t *testing.T) {
+	cat, _ := catalog.Load()
+
+	// Without --force, an unsupported arch is refused; with --force it resolves.
+	st := store.New(t.TempDir())
+	withCapacity(t, 80<<30)
+	srv := sizedRepoServer(t, "org/exotic", "FooBarForCausalLM", "foobar", 1<<30)
+	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
+	if _, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "org/exotic", true); err != nil {
+		t.Fatalf("--force should serve an unsupported arch, got %v", err)
+	}
+
+	// --force does not override the fit check: a too-large model is still refused.
+	st2 := store.New(t.TempDir())
+	withCapacity(t, 1<<30) // 1 GiB — the 8 GiB model cannot fit
+	srv2 := sizedRepoServer(t, "org/exotic2", "FooBarForCausalLM", "foobar", 8<<30)
+	t.Setenv("ATLAS_HF_ENDPOINT", srv2.URL)
+	_, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st2, cat, t.TempDir(), "", "org/exotic2", true)
+	if err == nil || !strings.Contains(err.Error(), "needs") {
+		t.Fatalf("--force must still enforce the fit check, got %v", err)
 	}
 }
 
@@ -439,7 +465,7 @@ func TestResolveModelEngineMismatch(t *testing.T) {
 	cat, _ := catalog.Load()
 	st := store.New(t.TempDir())
 	// qwen3.5-35b-a3b is a vLLM catalog entry; resolving it under llamacpp errors.
-	if _, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "", "qwen3.5-35b-a3b"); err == nil {
+	if _, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "", "qwen3.5-35b-a3b", false); err == nil {
 		t.Fatal("expected engine-mismatch error")
 	}
 }
@@ -447,7 +473,7 @@ func TestResolveModelEngineMismatch(t *testing.T) {
 func TestResolveModelHFServesUnderName(t *testing.T) {
 	cat, _ := catalog.Load()
 	st := store.New(t.TempDir())
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "qwen3.5-35b-a3b")
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "qwen3.5-35b-a3b", false)
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}
@@ -481,7 +507,7 @@ func TestResolveModelGGUFAutoPulls(t *testing.T) {
 	cat := testCatalog(t, "small-test", srv.URL+"/m.gguf", hex.EncodeToString(sum[:]))
 	st := store.New(t.TempDir())
 
-	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "", "small-test")
+	rm, err := resolveModel(context.Background(), testCmd(), worker.EngineLlamaCpp, st, cat, t.TempDir(), "", "small-test", false)
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}

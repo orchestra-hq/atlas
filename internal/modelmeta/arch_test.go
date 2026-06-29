@@ -17,6 +17,10 @@ func TestArchLoadable(t *testing.T) {
 		{"gguf qwen3 on llamacpp", "llamacpp", Capabilities{Format: FormatGGUF, Architecture: "qwen3", ModelType: "qwen3"}, true},
 		{"gguf llama on llamacpp", "llamacpp", Capabilities{Format: FormatGGUF, ModelType: "llama"}, true},
 		{"mlx qwen3 by model_type", "mlx", Capabilities{Architecture: "Qwen3ForCausalLM", ModelType: "qwen3"}, true},
+		// Broadened seed (P8.3 follow-up): DBRX, a text-capable VLM, and a GGUF token.
+		{"dbrx on vllm", "vllm", Capabilities{Architecture: "DbrxForCausalLM", ModelType: "dbrx"}, true},
+		{"qwen2.5-vl text on vllm", "vllm", Capabilities{Architecture: "Qwen2_5_VLForConditionalGeneration", ModelType: "qwen2_5_vl"}, true},
+		{"gguf dbrx on llamacpp", "llamacpp", Capabilities{Format: FormatGGUF, ModelType: "dbrx"}, true},
 
 		// Refusals — an architecture we have a string for but is not in the engine's set.
 		{"unknown arch on vllm", "vllm", Capabilities{Architecture: "FooBarForCausalLM", ModelType: "foobar"}, false},
