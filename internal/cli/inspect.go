@@ -149,7 +149,7 @@ func presentInspect(cmd *cobra.Command, res modelmeta.Result, asJSON bool, capac
 		cmd.Printf("Engine:   %s (candidate)\n", strings.Join(c.Engines, ", "))
 	}
 	if c.Architecture != "" || c.ModelType != "" {
-		cmd.Printf("Arch:     %s\n", archLine(c.Architecture, c.ModelType))
+		cmd.Printf("Arch:     %s\n", modelmeta.FamilyDisplay(c))
 	}
 	if c.Selected != "" {
 		if len(c.Files) > 1 {
@@ -226,17 +226,6 @@ func parsersLine(c modelmeta.Capabilities, engine string) string {
 		return "(none — family unknown; served chat-only)"
 	}
 	return parserSummary(f.EngineArgs(engine))
-}
-
-func archLine(arch, modelType string) string {
-	switch {
-	case arch != "" && modelType != "":
-		return fmt.Sprintf("%s (%s)", arch, modelType)
-	case arch != "":
-		return arch
-	default:
-		return modelType
-	}
 }
 
 func contextLine(window int, rope string) string {

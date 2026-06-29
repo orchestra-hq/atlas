@@ -116,13 +116,14 @@ func Classify(c Capabilities) (Family, bool) {
 func UnknownFamilyReason(c Capabilities) string {
 	return fmt.Sprintf("no tested tool-call/reasoning config for %s, so tool-calling and "+
 		"reasoning may misbehave. To add agent support, add the family to "+
-		"internal/modelmeta/family.go and open a PR", familyDisplay(c))
+		"internal/modelmeta/family.go and open a PR", FamilyDisplay(c))
 }
 
-// familyDisplay names a model's family signal for a message: its architecture with
-// the model_type in parentheses when both are present, whichever exists otherwise,
-// or "this model" when neither does.
-func familyDisplay(c Capabilities) string {
+// FamilyDisplay renders a model's family signal — its architecture with the
+// model_type in parentheses when both are present, whichever exists otherwise, or
+// "this model" when neither does. Shared by UnknownFamilyReason and `atlas inspect`'s
+// arch line so the two surfaces describe the model identically.
+func FamilyDisplay(c Capabilities) string {
 	switch {
 	case c.Architecture != "" && c.ModelType != "":
 		return fmt.Sprintf("%s (%s)", c.Architecture, c.ModelType)
