@@ -132,16 +132,14 @@ func presentInspect(cmd *cobra.Command, res modelmeta.Result, asJSON bool) error
 // parsersLine previews the engine arguments metadata-driven resolution (M8 Phase
 // 2) would apply for the candidate engine: a known family's parser flags, or a
 // note when the family is unknown or the engine is template-driven (llama.cpp /
-// MLX apply the model's own chat template and need none).
+// MLX apply the model's own chat template and need none). It shares parserSummary
+// with the `atlas up` auto-config note so the two surfaces can't drift.
 func parsersLine(c modelmeta.Capabilities, engine string) string {
 	f, ok := modelmeta.Classify(c)
 	if !ok {
 		return "(none — family unknown; served chat-only)"
 	}
-	if args := f.EngineArgs(engine); len(args) > 0 {
-		return strings.Join(args, " ")
-	}
-	return "(none — template-driven)"
+	return parserSummary(f.EngineArgs(engine))
 }
 
 func archLine(arch, modelType string) string {

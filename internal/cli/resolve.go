@@ -125,7 +125,7 @@ func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, s
 		plan.reasoning = fam.Reasoning
 		plan.sampling = caps.Sampling
 		plan.ctxHint = caps.ContextWindow
-		cmd.Printf("Auto-configured %q as the %s family%s\n", spec, fam.Name, parserNote(plan.engineArgs))
+		cmd.Printf("Auto-configured %q as the %s family: %s\n", spec, fam.Name, parserSummary(plan.engineArgs))
 	}
 	// Quant selection for a multi-quant GGUF repo (independent of family).
 	if err := applyQuant(cmd, &plan, engine, spec, quant, caps); err != nil {
@@ -165,14 +165,16 @@ func applyQuant(cmd *cobra.Command, plan *resolvedModel, engine worker.Engine, s
 	return nil
 }
 
-// parserNote describes the parser flags auto-config applied, for the user-facing
-// note. An empty list means the engine drives tool-calling from the model's chat
-// template (llama.cpp / MLX) rather than a parser flag.
-func parserNote(args []string) string {
+// parserSummary renders a known family's engine args for display — shared by the
+// `atlas inspect` verdict preview (parsersLine) and the `atlas up` auto-config
+// note so the two surfaces describe the same model identically. An empty list
+// means the engine drives tool-calling from the model's chat template (llama.cpp
+// / MLX) rather than a parser flag.
+func parserSummary(args []string) string {
 	if len(args) == 0 {
-		return " (template-driven; no parser flags)."
+		return "template-driven (no parser flags)"
 	}
-	return ": " + strings.Join(args, " ")
+	return strings.Join(args, " ")
 }
 
 // inspectForResolve fetches a raw spec's metadata for auto-configuration. A local
