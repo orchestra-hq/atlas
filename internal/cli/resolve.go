@@ -44,13 +44,13 @@ type resolvedModel struct {
 // resolveModel turns one --model value into a worker plan. A catalog name
 // resolves through the store (pulling a cold gguf model first); anything else
 // is treated as a raw path or engine spec, preserving the pre-catalog behavior.
-func resolveModel(ctx context.Context, cmd *cobra.Command, engine worker.Engine, st *store.Store, cat *catalog.Catalog, stateDir, quant, spec string) (resolvedModel, error) {
+func resolveModel(ctx context.Context, cmd *cobra.Command, engine worker.Engine, st *store.Store, cat *catalog.Catalog, stateDir, quant, spec string, force bool) (resolvedModel, error) {
 	entry, ok := cat.Lookup(spec)
 	if !ok {
 		// Not a catalog name: a local path or a Hugging Face spec. Auto-configure
 		// from the model's own metadata where it names a known family (ADR-0015),
 		// else fall back to the pre-M8 bare passthrough.
-		return resolveRaw(ctx, cmd, engine, stateDir, quant, spec)
+		return resolveRaw(ctx, cmd, engine, stateDir, quant, spec, force)
 	}
 
 	if worker.Engine(entry.Engine) != engine {
@@ -111,7 +111,7 @@ func resolveModel(ctx context.Context, cmd *cobra.Command, engine worker.Engine,
 // entry would. Otherwise it returns the pre-M8 bare passthrough. Inspection is
 // best-effort: any failure (offline, gated, unrecognized) yields the bare plan,
 // so resolution is never less able to serve than it was before M8.
-func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, stateDir, quant, spec string) (resolvedModel, error) {
+func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, stateDir, quant, spec string, force bool) (resolvedModel, error) {
 	plan := resolvedModel{
 		served:    modelDisplayName(engine, spec),
 		modelArgs: modelArgs(engine, spec),
@@ -135,7 +135,7 @@ func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, s
 	// failure (ADR-0015 Decision 3c), distinct from an unknown family, which stays
 	// the bare passthrough below (warn-and-serve is Phase 4). This baseline weighs an
 	// empty host; the launch path additionally weighs free capacity (engineRuntime).
-	if err := gateLoadFit(engine, spec, caps); err != nil {
+	if err := gateLoadFit(cmd, engine, spec, caps, force); err != nil {
 		return resolvedModel{}, err
 	}
 	plan.fitBytes, _ = modelmeta.FitEstimate(caps) // for the launch-time free-capacity check
@@ -202,9 +202,15 @@ func setServedQuantBytes(caps *modelmeta.Capabilities, tok string) {
 // half (best-effort, never a false refusal); a loadable arch with an unknown
 // family passes the gate and is served bare (the warn-and-serve middle case is
 // Phase 4). Both failures abort before worker.Start, so no weights are fetched.
-func gateLoadFit(engine worker.Engine, spec string, caps modelmeta.Capabilities) error {
+func gateLoadFit(cmd *cobra.Command, engine worker.Engine, spec string, caps modelmeta.Capabilities, force bool) error {
 	if ok, reason := modelmeta.ArchLoadable(string(engine), caps); !ok {
-		return fmt.Errorf("cannot serve %s: %s", spec, reason)
+		if !force {
+			return fmt.Errorf("cannot serve %s: %s (re-run with --force to try anyway — the engine load is the final authority)", spec, reason)
+		}
+		// --force: the static arch list may be stale-pessimistic, so trust the user
+		// and let the engine load be the authority (ADR-0015 trust-and-catch). The fit
+		// check below still applies — forcing past the arch list never forces an OOM.
+		cmd.Printf("warning: serving %s despite an unrecognized architecture (--force); the engine load is the final authority\n", spec)
 	}
 	est, ok := modelmeta.FitEstimate(caps)
 	if !ok {

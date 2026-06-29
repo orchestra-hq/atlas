@@ -132,11 +132,18 @@ var transformersArchs = lowerSet(
 	"GraniteForCausalLM", "GraniteMoeForCausalLM",
 	// State-space and hybrid models vLLM loads (no Atlas parser config yet, but
 	// loadable — so they reach the bare/Phase-4 path, not a refusal).
-	"MambaForCausalLM", "Mamba2ForCausalLM", "JambaForCausalLM",
-	// Nemotron, StableLM, Starcoder2, Falcon, GPT-NeoX/2/BigCode, MPT, Baichuan, Bloom, MiniCPM, Exaone.
+	"MambaForCausalLM", "Mamba2ForCausalLM", "JambaForCausalLM", "Zamba2ForCausalLM",
+	// Nemotron, StableLM, Starcoder2, Falcon, GPT-NeoX/2/J/BigCode, OPT, MPT, Baichuan, Bloom, MiniCPM(3), Exaone.
 	"NemotronForCausalLM", "StableLmForCausalLM", "Starcoder2ForCausalLM",
-	"FalconForCausalLM", "GPTNeoXForCausalLM", "GPT2LMHeadModel", "GPTBigCodeForCausalLM",
-	"MPTForCausalLM", "BaichuanForCausalLM", "BloomForCausalLM", "MiniCPMForCausalLM", "ExaoneForCausalLM",
+	"FalconForCausalLM", "GPTNeoXForCausalLM", "GPT2LMHeadModel", "GPTJForCausalLM", "GPTBigCodeForCausalLM",
+	"OPTForCausalLM", "MPTForCausalLM", "BaichuanForCausalLM", "BloomForCausalLM",
+	"MiniCPMForCausalLM", "MiniCPM3ForCausalLM", "ExaoneForCausalLM",
+	// Databricks DBRX, Snowflake Arctic, Solar, Aquila, XVERSE, Persimmon, Orion, OLMoE, Phi-4.
+	"DbrxForCausalLM", "ArcticForCausalLM", "SolarForCausalLM", "AquilaForCausalLM",
+	"XverseForCausalLM", "PersimmonForCausalLM", "OrionForCausalLM", "OlmoeForCausalLM", "Phi4ForCausalLM",
+	// Multimodal models vLLM serves for text generation (the text path is loadable;
+	// Atlas treats them as chat).
+	"Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration", "Qwen3VLForConditionalGeneration",
 )
 
 // llamacppArchs is the set of GGUF general.architecture tokens the pinned
@@ -154,8 +161,9 @@ var llamacppArchs = lowerSet(
 	"command-r", "cohere2",
 	"internlm2", "olmo", "olmo2",
 	"granite", "granitemoe",
-	"falcon", "gptneox", "gpt2", "starcoder2", "gptbigcode",
-	"mpt", "baichuan", "bloom", "minicpm", "stablelm", "nemotron", "mamba", "exaone",
+	"falcon", "gptneox", "gpt2", "gptj", "starcoder2", "gptbigcode",
+	"mpt", "baichuan", "bloom", "minicpm", "minicpm3", "stablelm", "nemotron",
+	"mamba", "mamba2", "jamba", "exaone", "olmoe", "orion", "dbrx", "arctic", "phi4",
 )
 
 // mlxTypes is the set of config.json model_type tokens mlx-lm can load (MLX is the
@@ -170,8 +178,9 @@ var mlxTypes = lowerSet(
 	"phi", "phi3", "phimoe",
 	"glm", "glm4", "glm4_moe", "chatglm",
 	"deepseek", "deepseek_v2", "deepseek_v3",
-	"cohere", "cohere2", "internlm2", "olmo", "olmo2",
-	"granite", "starcoder2", "stablelm", "minicpm", "nemotron", "exaone",
+	"cohere", "cohere2", "internlm2", "olmo", "olmo2", "olmoe",
+	"granite", "starcoder2", "stablelm", "minicpm", "minicpm3", "nemotron", "exaone",
+	"dbrx", "qwen2_vl", "qwen2_5_vl", "qwen3_vl", "phi4",
 )
 
 // lowerSet builds a set whose keys are the lowercased inputs, so callers compare
