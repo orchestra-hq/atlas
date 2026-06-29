@@ -27,6 +27,7 @@ description: The atlas command-line interface — serving, the fleet, models, ke
 
 | Command                              | What it does                                              |
 | ------------------------------------ | -------------------------------------------------------- |
+| `atlas inspect <model>`              | Preview a model's derived serving plan + verdict (no download) |
 | `atlas pull [model...]`              | Download model weights into the store                    |
 | `atlas deploy <model>`               | Deploy a model instance onto the fleet                   |
 | `atlas scale <model> --replicas N`   | Scale a deployed model to N replicas                     |
