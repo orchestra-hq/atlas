@@ -1,6 +1,6 @@
 # M8 build plan
 
-> **🧭 Scheduled next — ratified, not yet started.** Ratified 2026-06-28: the owner accepted [ADR-0015](decisions/0015-bring-any-model-auto-configuration.md) and scheduled M8 **next, ahead of M6/M7** (the five open questions are resolved — see below). Nothing here is built yet; Phase 0 (ADR) is complete and implementation begins at Phase 1. M8 refines the M8 milestone in [roadmap.md](../roadmap.md).
+> **🚦 Phases 0–5 built; gate green; milestone declaration pending the owner.** Ratified 2026-06-28: the owner accepted [ADR-0015](decisions/0015-bring-any-model-auto-configuration.md) and scheduled M8 **next, ahead of M6/M7** (the five open questions are resolved — see below). Phases 1–5 are built and merged as green-only PRs (`atlas inspect` → family map + serve → fit gate → warn-and-serve middle case → the conformance gate). The per-PR `Conformance (M8)` job (**G23**) is green on `main`, proving the auto-config path serves agent-grade for a catalog-less known-family repo — see [m8-acceptance.md](m8-acceptance.md). Flipping M8 to ✅ done in [roadmap.md](../roadmap.md) is the owner's call. M8 refines the M8 milestone in [roadmap.md](../roadmap.md).
 
 The pitch in one line: **`atlas up --model <hugging-face-repo>` for _any_ model.** Atlas fetches the model's metadata (not its weights), decides whether it can serve the model well, and then either configures and serves it or tells the user exactly how to add support. This turns the curated catalog from a fence into a fast path, and — crucially — means **nobody has to maintain a catalog**: the "list of supported models" becomes a family→config map in Atlas's own source, extended by ordinary PRs gated on the conformance suite.
 
@@ -61,7 +61,7 @@ Exit criteria are cumulative. **Phase 1 is independently shippable and useful on
 
 **Phase 4 — middle case + funnel.** Implement the default "serve chat, warn, point at the PR" path and the opt-out flag to refuse unverified models. The message names the exact map file and entry shape; add contributor docs ("add a model family") that tie a new entry to a conformance case — see [contributing-model-families.md](contributing-model-families.md).
 
-**Phase 5 — conformance + acceptance.** A new G-group: auto-configure a known HF model with **no catalog row** and run the agent (tool-use, streaming) gates against it, proving the auto-config path is agent-grade. Reconcile public docs ([guides/models](../../website/src/content/docs/guides/models.md)) and the launch post's "bring your own" paragraph, which can then promise auto-config rather than "best-effort."
+**Phase 5 — conformance + acceptance (built; see [m8-p8.5-build-plan.md](m8-p8.5-build-plan.md)).** A new G-group, **G23**: `atlas up --model <repo>` auto-configures a known HF model with **no catalog row** and the resulting endpoint passes the agent (tool-use, streaming, reasoning) gates, proving the auto-config path is agent-grade — driven per-PR by [`scripts/conformance-m8.sh`](../../scripts/conformance-m8.sh) (the `Conformance (M8)` job) on a real llama.cpp deployment, with the gate model served via `-hf` (no catalog row). Public docs ([guides/models](../../website/src/content/docs/guides/models.md)) and the launch post's "bring your own" paragraph now promise auto-config + the honest three-way verdict rather than "best-effort." Full acceptance in [m8-acceptance.md](m8-acceptance.md); GPU-engine breadth (parser-flag families on vLLM/SGLang, auto-config on MLX) is the standing nightly follow-on.
 
 ## Resolved questions (settled at ratification, 2026-06-28)
 
@@ -75,7 +75,7 @@ All five are decided and bind the build (full text in [ADR-0015 § Resolved at r
 
 ## Acceptance — what "M8 done" means
 
-A newcomer runs `atlas up --model <a-popular-HF-repo-not-in-the-catalog>` and, for a known family, is serving an **agent-grade** endpoint (tool calls + reasoning correct) in one command — with no catalog entry written by anyone. An unsupported architecture or an oversized model fails fast with an actionable message instead of a confusing half-broken serve. The new conformance gate proves the auto-config path is agent-grade and runs per-PR. Engine-breadth coverage (auto-config across vLLM/SGLang/MLX, not just llama.cpp) follows the existing nightly tiering.
+A newcomer runs `atlas up --model <a-popular-HF-repo-not-in-the-catalog>` and, for a known family, is serving an **agent-grade** endpoint (tool calls + reasoning correct) in one command — with no catalog entry written by anyone. An unsupported architecture or an oversized model fails fast with an actionable message instead of a confusing half-broken serve. The new conformance gate (**G23**) proves the auto-config path is agent-grade and runs per-PR. Engine-breadth coverage (auto-config across vLLM/SGLang/MLX, not just llama.cpp) follows the existing nightly tiering. The full definition of done, the gate, and the green-run evidence live in [m8-acceptance.md](m8-acceptance.md).
 
 ## Who does what
 
