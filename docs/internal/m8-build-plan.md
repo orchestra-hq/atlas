@@ -59,7 +59,7 @@ Exit criteria are cumulative. **Phase 1 is independently shippable and useful on
 
 **Phase 3 — fit gating.** Add the engine-arch support check (per pinned engine version) and a VRAM/RAM fit pre-check (reuse the scheduler's existing VRAM-fit estimate), producing the clean failure messages before any download.
 
-**Phase 4 — middle case + funnel.** Implement the default "serve chat, warn, point at the PR" path and the opt-out flag to refuse unverified models. The message names the exact map file and entry shape; add contributor docs ("add a model family") that tie a new entry to a conformance case.
+**Phase 4 — middle case + funnel.** Implement the default "serve chat, warn, point at the PR" path and the opt-out flag to refuse unverified models. The message names the exact map file and entry shape; add contributor docs ("add a model family") that tie a new entry to a conformance case — see [contributing-model-families.md](contributing-model-families.md).
 
 **Phase 5 — conformance + acceptance.** A new G-group: auto-configure a known HF model with **no catalog row** and run the agent (tool-use, streaming) gates against it, proving the auto-config path is agent-grade. Reconcile public docs ([guides/models](../../website/src/content/docs/guides/models.md)) and the launch post's "bring your own" paragraph, which can then promise auto-config rather than "best-effort."
 
