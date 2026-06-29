@@ -122,6 +122,26 @@ jobs:
         run: |
           nvidia-smi || { echo "no GPU visible on the host" >&2; exit 1; }
           bash scripts/acceptance.sh
+      # M8 GPU breadth (G23): the SAME bring-any-model gate as the per-PR llama.cpp
+      # tier, but on vLLM with a non-catalog safetensors qwen3 repo, so the family→
+      # parser map actually emits engine flags (--tool-call-parser/--reasoning-parser)
+      # and conformance-m8.sh additionally asserts they were auto-derived — the
+      # dimension the template-driven CPU tier cannot show. Reuses the catalog vLLM
+      # track's GPU-fit tuning. Runs even if the catalog acceptance above failed, so
+      # the auto-config signal is independent. See docs/internal/m8-acceptance.md.
+      - name: M8 auto-config breadth (vLLM, G23)
+        if: ${{ !cancelled() }}
+        env:
+          CONF_M8_ENGINE: vllm
+          CONF_M8_MODEL: Qwen/Qwen3-8B # non-catalog (catalog name is `qwen3-8b`)
+          CONF_M8_ENGINE_ARGS: --max-model-len 32768 --enforce-eager
+          CONF_M8_READY_TRIES: "450" # vLLM cold start downloads + loads a multi-GB model
+          ATLAS_ENGINE_READY_TIMEOUT: 15m
+          VLLM_USE_FLASHINFER_SAMPLER: "0" # no ninja build toolchain on the runner
+          ATLAS_ADDR: 127.0.0.1:8081 # distinct from acceptance.sh's :8080
+          ATLAS_STATE_DIR: ${{ github.workspace }}/.atlas-m8
+          ATLAS_LOG_FILE: ${{ github.workspace }}/atlas-m8-vllm.log
+        run: bash scripts/conformance-m8.sh
       # Always upload — the per-cell matrix (with failure messages) is most useful
       # exactly when the gate is red, and vitest runs --silent so a failing TS cell
       # prints nothing to the logs.
@@ -134,6 +154,7 @@ jobs:
             conformance/results/matrix-*.json
             conformance/results/capability-matrix.json
             conformance/results/CAPABILITY.md
+            atlas-m8-vllm.log
           if-no-files-found: warn
 
   stop-gpu-runner:
@@ -561,6 +582,24 @@ jobs:
         run: |
           nvidia-smi || { echo "no GPU visible on the host" >&2; exit 1; }
           bash scripts/acceptance.sh
+      # M8 GPU breadth (G23) on SGLang — see the vLLM track's note. SGLang's family
+      # map emits --tool-call-parser qwen25 --reasoning-parser qwen3, asserted by the
+      # script. Scoped to G1–G4 (no G9): like the G17 SGLang cell, a 7–8B model drives
+      # the multi-call agent loop only intermittently; G3 (tool use) is the agent-
+      # critical proof here. Reuses the catalog SGLang track's GPU-fit tuning.
+      - name: M8 auto-config breadth (SGLang, G23)
+        if: ${{ !cancelled() }}
+        env:
+          CONF_M8_ENGINE: sglang
+          CONF_M8_MODEL: Qwen/Qwen3-8B # non-catalog (catalog name is `qwen3-8b-sglang`)
+          CONF_M8_ENGINE_ARGS: --mem-fraction-static 0.85 --context-length 32768 --attention-backend triton --sampling-backend pytorch
+          CONF_M8_READY_TRIES: "450"
+          CONF_M8_REQUIRE: G1,G2,G3,G4
+          ATLAS_ENGINE_READY_TIMEOUT: 15m
+          ATLAS_ADDR: 127.0.0.1:8081
+          ATLAS_STATE_DIR: ${{ github.workspace }}/.atlas-m8
+          ATLAS_LOG_FILE: ${{ github.workspace }}/atlas-m8-sglang.log
+        run: bash scripts/conformance-m8.sh
       - name: Upload conformance matrix
         if: always()
         uses: actions/upload-artifact@v4
@@ -570,6 +609,7 @@ jobs:
             conformance/results/matrix-*.json
             conformance/results/capability-matrix.json
             conformance/results/CAPABILITY.md
+            atlas-m8-sglang.log
           if-no-files-found: warn
 
   stop-sglang-runner:
