@@ -2,6 +2,7 @@ package modelmeta
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -63,6 +64,36 @@ func TestClassify(t *testing.T) {
 			}
 			if f.Reasoning != tc.wantReason {
 				t.Errorf("reasoning = %v, want %v", f.Reasoning, tc.wantReason)
+			}
+		})
+	}
+}
+
+// TestUnknownFamilyReason proves the middle-case (ADR-0015 3b) funnel message names
+// the model's family signal and points at the family map (not arch.go), the
+// family-map analogue of archReason.
+func TestUnknownFamilyReason(t *testing.T) {
+	cases := []struct {
+		name string
+		caps Capabilities
+		want string // a substring the message must name as the family signal
+	}{
+		{"arch and type", Capabilities{Architecture: "MambaForCausalLM", ModelType: "mamba"}, "MambaForCausalLM (mamba)"},
+		{"arch only", Capabilities{Architecture: "MambaForCausalLM"}, "MambaForCausalLM"},
+		{"type only", Capabilities{ModelType: "mamba"}, "mamba"},
+		{"neither", Capabilities{}, "this model"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := UnknownFamilyReason(tc.caps)
+			if !strings.Contains(msg, tc.want) {
+				t.Errorf("message %q does not name the family signal %q", msg, tc.want)
+			}
+			if !strings.Contains(msg, "internal/modelmeta/family.go") {
+				t.Errorf("message %q must point at the family map", msg)
+			}
+			if strings.Contains(msg, "arch.go") {
+				t.Errorf("the family funnel must point at family.go, not arch.go: %q", msg)
 			}
 		})
 	}

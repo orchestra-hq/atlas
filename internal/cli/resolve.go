@@ -44,13 +44,13 @@ type resolvedModel struct {
 // resolveModel turns one --model value into a worker plan. A catalog name
 // resolves through the store (pulling a cold gguf model first); anything else
 // is treated as a raw path or engine spec, preserving the pre-catalog behavior.
-func resolveModel(ctx context.Context, cmd *cobra.Command, engine worker.Engine, st *store.Store, cat *catalog.Catalog, stateDir, quant, spec string, force bool) (resolvedModel, error) {
+func resolveModel(ctx context.Context, cmd *cobra.Command, engine worker.Engine, st *store.Store, cat *catalog.Catalog, stateDir, quant, spec string, force, requireVerified bool) (resolvedModel, error) {
 	entry, ok := cat.Lookup(spec)
 	if !ok {
 		// Not a catalog name: a local path or a Hugging Face spec. Auto-configure
 		// from the model's own metadata where it names a known family (ADR-0015),
 		// else fall back to the pre-M8 bare passthrough.
-		return resolveRaw(ctx, cmd, engine, stateDir, quant, spec, force)
+		return resolveRaw(ctx, cmd, engine, stateDir, quant, spec, force, requireVerified)
 	}
 
 	if worker.Engine(entry.Engine) != engine {
@@ -111,7 +111,7 @@ func resolveModel(ctx context.Context, cmd *cobra.Command, engine worker.Engine,
 // entry would. Otherwise it returns the pre-M8 bare passthrough. Inspection is
 // best-effort: any failure (offline, gated, unrecognized) yields the bare plan,
 // so resolution is never less able to serve than it was before M8.
-func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, stateDir, quant, spec string, force bool) (resolvedModel, error) {
+func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, stateDir, quant, spec string, force, requireVerified bool) (resolvedModel, error) {
 	plan := resolvedModel{
 		served:    modelDisplayName(engine, spec),
 		modelArgs: modelArgs(engine, spec),
@@ -120,6 +120,13 @@ func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, s
 	if !ok {
 		if quant != "" {
 			return resolvedModel{}, fmt.Errorf("could not read %s's metadata to apply --quant %q (offline, gated, or not a Hugging Face GGUF repo)", spec, quant)
+		}
+		// --require-verified refuses a model whose family we cannot confirm — and an
+		// un-inspectable spec is exactly that. Without the flag this stays the pre-M8
+		// silent bare passthrough (Phase 4 adds no warning to a path it can say nothing
+		// about).
+		if requireVerified {
+			return resolvedModel{}, fmt.Errorf("refusing to serve %s with --require-verified: could not confirm a tested model family (its metadata was unreadable — offline, gated, or a local directory)", spec)
 		}
 		return plan, nil
 	}
@@ -139,16 +146,24 @@ func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, s
 		return resolvedModel{}, err
 	}
 	plan.fitBytes, _ = modelmeta.FitEstimate(caps) // for the launch-time free-capacity check
-	// Family auto-config (parser engine_args, reasoning, sampling, context). An
-	// unknown family stays bare today; warn-and-serve + --require-verified are
-	// M8 Phase 4.
+	// Family auto-config (parser engine_args, reasoning, sampling, context) for a
+	// known family.
 	if fam, ok := modelmeta.Classify(caps); ok {
 		plan.engineArgs = fam.EngineArgs(string(engine))
 		plan.reasoning = fam.Reasoning
 		plan.sampling = caps.Sampling
 		plan.ctxHint = caps.ContextWindow
 		cmd.Printf("Auto-configured %q as the %s family: %s\n", spec, fam.Name, parserSummary(plan.engineArgs))
+		return plan, nil
 	}
+	// Middle case (ADR-0015 Decision 3b): the engine can load this model and it fits,
+	// but Atlas has no tested agent-config for its family. Default to warn-and-serve
+	// plain chat; --require-verified refuses it instead. The message names the family
+	// signal and the one-line PR that would add support.
+	if requireVerified {
+		return resolvedModel{}, fmt.Errorf("refusing to serve %s with --require-verified: %s (or drop --require-verified to serve it as plain chat)", spec, modelmeta.UnknownFamilyReason(caps))
+	}
+	cmd.Printf("warning: serving %s as plain chat — %s\n", spec, modelmeta.UnknownFamilyReason(caps))
 	return plan, nil
 }
 

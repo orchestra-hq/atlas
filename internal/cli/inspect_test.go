@@ -115,6 +115,34 @@ func TestInspectFitsVerdict(t *testing.T) {
 	}
 }
 
+// TestInspectUnknownFamilyPointer proves inspect previews the P8.4 contribution
+// funnel: a loadable, fitting, unknown-family model shows the "add a family" pointer
+// (Mistral is loadable on both the macOS mlx and Linux vllm candidate engines but is
+// not a known family, so this is host-independent), while a known family shows none.
+func TestInspectUnknownFamilyPointer(t *testing.T) {
+	unknown := sizedRepoServer(t, "org/mistral", "MistralForCausalLM", "mistral", 4<<30)
+	out, err := runInspectCapture(t, &inspectOptions{stateDir: t.TempDir(), endpoint: unknown.URL, vram: 80}, []string{"org/mistral"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "family:   unknown") {
+		t.Fatalf("expected an unknown family for Mistral:\n%s", out)
+	}
+	if !strings.Contains(out, "internal/modelmeta/family.go") {
+		t.Errorf("a loadable+fitting unknown family should show the contribution pointer:\n%s", out)
+	}
+
+	// A known family (qwen2) carries no family pointer — its parsers are configured.
+	known := sizedRepoServer(t, "org/q2", "Qwen2ForCausalLM", "qwen2", 4<<30)
+	out2, err := runInspectCapture(t, &inspectOptions{stateDir: t.TempDir(), endpoint: known.URL, vram: 80}, []string{"org/q2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out2, "internal/modelmeta/family.go") {
+		t.Errorf("a known family should not show the add-a-family pointer:\n%s", out2)
+	}
+}
+
 // Regression for the P8.3 review: a cache entry written by an older binary carries
 // a stale Verdict (here Loadable="pending"); inspect must recompute the verdict
 // from the cached Capabilities rather than display the stale value.

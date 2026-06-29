@@ -168,6 +168,14 @@ func presentInspect(cmd *cobra.Command, res modelmeta.Result, asJSON bool, capac
 	cmd.Printf("  parsers:  %s\n", parsersLine(c, v.Engine))
 	cmd.Printf("  loadable: %s\n", loadableLine(v, c))
 	cmd.Printf("  fits:     %s\n", fitsLine(v.Fits, c, capacity, hasGPU))
+	// Middle case (ADR-0015 Decision 3b): the model loads and fits but its family has
+	// no tested agent-config — preview the contribution funnel `atlas up` would warn
+	// about. Only when the model is actually servable (loadable, not over-size), so
+	// the family pointer never competes with the arch funnel (loadable=no) or suggests
+	// adding a family for a model that won't fit.
+	if v.Family == modelmeta.FamilyUnknown && v.Loadable == "yes" && v.Fits != "no" {
+		cmd.Printf("\nNote: %s\n", modelmeta.UnknownFamilyReason(c))
+	}
 	return nil
 }
 
