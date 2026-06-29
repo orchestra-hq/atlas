@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -65,13 +66,66 @@ func TestInspectCommandPrintsPlan(t *testing.T) {
 	// The candidate engine (and thus the parser preview) is host-dependent for a
 	// safetensors repo, so assert only the host-independent rows here; parser
 	// rendering is covered by modelmeta.TestFamilyEngineArgs.
-	for _, want := range []string{"Qwen2ForCausalLM", "qwen2", "32768", "Template: present", "temperature=0.7", "Verdict:", "family:   qwen2", "parsers:", "pending (M8 Phase 3)"} {
+	for _, want := range []string{"Qwen2ForCausalLM", "qwen2", "32768", "Template: present", "temperature=0.7", "Verdict:", "family:   qwen2", "parsers:", "loadable: yes"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "pending (M8 Phase 2)") {
-		t.Errorf("family should be classified, not pending:\n%s", out)
+	// The load/fit dimensions are decided now, not deferred to a later phase.
+	if strings.Contains(out, "pending (M8 Phase") {
+		t.Errorf("no verdict row should still be pending:\n%s", out)
+	}
+}
+
+// sizedRepoServer serves a qwen2 config.json and a blobs listing with one
+// safetensors shard of the given size, so fit can be exercised deterministically.
+func sizedRepoServer(t *testing.T, repo, arch, modelType string, shardBytes int64) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/"+repo+"/resolve/main/config.json", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"architectures":["` + arch + `"],"model_type":"` + modelType + `","max_position_embeddings":32768}`))
+	})
+	mux.HandleFunc("/api/models/"+repo, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, `{"siblings":[{"rfilename":"model.safetensors","size":%d}]}`, shardBytes)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestInspectFitsVerdict(t *testing.T) {
+	const fourGiB = 4 << 30
+	srv := sizedRepoServer(t, "org/m", "Qwen2ForCausalLM", "qwen2", fourGiB)
+
+	// A roomy target fits; a tiny one does not. --vram makes the check deterministic
+	// regardless of the host running the test.
+	fits, err := runInspectCapture(t, &inspectOptions{stateDir: t.TempDir(), endpoint: srv.URL, vram: 80}, []string{"org/m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(fits, "fits:     yes") {
+		t.Errorf("want fits yes against 80 GiB:\n%s", fits)
+	}
+	noFit, err := runInspectCapture(t, &inspectOptions{stateDir: t.TempDir(), endpoint: srv.URL, vram: 1}, []string{"org/m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(noFit, "fits:     no") {
+		t.Errorf("want fits no against 1 GiB:\n%s", noFit)
+	}
+}
+
+func TestInspectUnsupportedArch(t *testing.T) {
+	srv := sizedRepoServer(t, "org/exotic", "FooBarForCausalLM", "foobar", 1<<30)
+	out, err := runInspectCapture(t, &inspectOptions{stateDir: t.TempDir(), endpoint: srv.URL, vram: 80}, []string{"org/exotic"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "loadable: no") {
+		t.Errorf("an unsupported architecture should be loadable: no:\n%s", out)
+	}
+	if !strings.Contains(out, "open a PR") {
+		t.Errorf("the not-loadable reason should point at the contribution path:\n%s", out)
 	}
 }
 
@@ -162,9 +216,9 @@ func TestInspectCacheImmutableSHANeverExpires(t *testing.T) {
 }
 
 func TestInspectCommandJSON(t *testing.T) {
-	hits := map[string]int{}
-	srv := hfFixtureServer(t, defaultFixtures(), hits)
-	opts := &inspectOptions{stateDir: t.TempDir(), endpoint: srv.URL, asJSON: true}
+	const twoGiB = 2 << 30
+	srv := sizedRepoServer(t, "org/m", "Qwen2ForCausalLM", "qwen2", twoGiB)
+	opts := &inspectOptions{stateDir: t.TempDir(), endpoint: srv.URL, asJSON: true, vram: 80}
 
 	out, err := runInspectCapture(t, opts, []string{"org/m"})
 	if err != nil {
@@ -176,6 +230,12 @@ func TestInspectCommandJSON(t *testing.T) {
 	}
 	if res.Capabilities.Architecture != "Qwen2ForCausalLM" {
 		t.Errorf("json arch = %q", res.Capabilities.Architecture)
+	}
+	if res.Capabilities.WeightBytes != twoGiB {
+		t.Errorf("json weight_bytes = %d, want %d", res.Capabilities.WeightBytes, twoGiB)
+	}
+	if res.Verdict.Fits != "yes" {
+		t.Errorf("json fits = %q, want yes (live, against the --vram override)", res.Verdict.Fits)
 	}
 }
 

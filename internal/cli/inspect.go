@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/orchestra-hq/atlas/internal/modelmeta"
+	"github.com/orchestra-hq/atlas/internal/worker"
 )
 
 // inspectOptions carries the flags for `atlas inspect`, separated from the cobra
@@ -24,7 +25,9 @@ type inspectOptions struct {
 	asJSON   bool
 	noCache  bool
 	stateDir string
-	endpoint string // hidden: metadata host override, for tests/mirrors
+	endpoint string  // hidden: metadata host override, for tests/mirrors
+	vram     float64 // GiB; override detected capacity for the fit check (0 = detect)
+	ram      float64 // GiB; alias of vram for CPU/Metal hosts (0 = detect)
 }
 
 func newInspectCmd() *cobra.Command {
@@ -49,6 +52,8 @@ func newInspectCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.stateDir, "state-dir", defaultStateDir(), "directory holding the metadata cache")
 	cmd.Flags().StringVar(&opts.endpoint, "hf-endpoint", "", "Hugging Face host to fetch metadata from")
 	_ = cmd.Flags().MarkHidden("hf-endpoint")
+	cmd.Flags().Float64Var(&opts.vram, "vram", 0, "GiB of GPU memory to check fit against (default: this host's detected capacity)")
+	cmd.Flags().Float64Var(&opts.ram, "ram", 0, "GiB of system memory to check fit against, for a CPU/Metal target (default: detected)")
 	return cmd
 }
 
@@ -59,25 +64,58 @@ func runInspect(ctx context.Context, cmd *cobra.Command, opts *inspectOptions, a
 		rev = modelmeta.DefaultRevision
 	}
 
+	res, ok := modelmeta.Result{}, false
 	if !opts.noCache {
-		if res, ok := readInspectCache(opts.stateDir, repo, rev); ok {
-			return presentInspect(cmd, res, opts.asJSON)
+		res, ok = readInspectCache(opts.stateDir, repo, rev)
+	}
+	if !ok {
+		var err error
+		res, err = modelmeta.Inspect(ctx, repo, modelmeta.Options{
+			Endpoint: opts.endpoint,
+			Revision: opts.revision,
+			Token:    hfToken(),
+		})
+		if err != nil {
+			return err
 		}
+		// Always refresh the cache after a successful fetch, even under --no-cache:
+		// the flag means "ignore the cached entry and refresh it", not "never write".
+		writeInspectCache(opts.stateDir, repo, rev, res) // best-effort
 	}
 
-	res, err := modelmeta.Inspect(ctx, repo, modelmeta.Options{
-		Endpoint: opts.endpoint,
-		Revision: opts.revision,
-		Token:    hfToken(),
-	})
-	if err != nil {
-		return err
-	}
+	// Fits is host-dependent, so it is never cached (the cache is host-neutral):
+	// compute it live against this host's capacity, or the --vram/--ram override.
+	capacity, hasGPU := inspectCapacity(opts)
+	res.Verdict.Fits = fitsVerdict(res.Capabilities, capacity)
+	return presentInspect(cmd, res, opts.asJSON, capacity, hasGPU)
+}
 
-	// Always refresh the cache after a successful fetch, even under --no-cache:
-	// the flag means "ignore the cached entry and refresh it", not "never write".
-	writeInspectCache(opts.stateDir, repo, rev, res) // best-effort
-	return presentInspect(cmd, res, opts.asJSON)
+// inspectCapacity resolves the memory the fit check weighs the model against: the
+// --vram/--ram override if given (GiB), else this host's detected capacity.
+func inspectCapacity(opts *inspectOptions) (bytes int64, hasGPU bool) {
+	const gib = 1 << 30
+	switch {
+	case opts.vram > 0:
+		return int64(opts.vram * gib), true
+	case opts.ram > 0:
+		return int64(opts.ram * gib), false
+	default:
+		return detectCapacity()
+	}
+}
+
+// fitsVerdict decides the host-dependent fit dimension: "yes"/"no", or "unknown"
+// when the model's size or the host capacity is undetermined (the check is then
+// skipped rather than guessed).
+func fitsVerdict(caps modelmeta.Capabilities, capacity int64) string {
+	est, ok := modelmeta.FitEstimate(caps)
+	if !ok || capacity <= 0 {
+		return "unknown"
+	}
+	if est <= capacity {
+		return "yes"
+	}
+	return "no"
 }
 
 // hfToken reads a Hugging Face token from the conventional environment variables,
@@ -89,7 +127,7 @@ func hfToken() string {
 	return os.Getenv("HUGGING_FACE_HUB_TOKEN")
 }
 
-func presentInspect(cmd *cobra.Command, res modelmeta.Result, asJSON bool) error {
+func presentInspect(cmd *cobra.Command, res modelmeta.Result, asJSON bool, capacity int64, hasGPU bool) error {
 	if asJSON {
 		b, err := json.MarshalIndent(res, "", "  ")
 		if err != nil {
@@ -124,9 +162,52 @@ func presentInspect(cmd *cobra.Command, res modelmeta.Result, asJSON bool) error
 	cmd.Printf("  engine:   %s\n", orDash(v.Engine))
 	cmd.Printf("  family:   %s\n", v.Family)
 	cmd.Printf("  parsers:  %s\n", parsersLine(c, v.Engine))
-	cmd.Printf("  loadable: %s\n", pendingLine(v.Loadable, "M8 Phase 3"))
-	cmd.Printf("  fits:     %s\n", pendingLine(v.Fits, "M8 Phase 3"))
+	cmd.Printf("  loadable: %s\n", loadableLine(v, c))
+	cmd.Printf("  fits:     %s\n", fitsLine(v.Fits, c, capacity, hasGPU))
 	return nil
+}
+
+// loadableLine renders the load dimension: "yes", or "no" with the arch-support
+// reason (the engine's supported-models pointer + the one-line PR to extend
+// Atlas's list).
+func loadableLine(v modelmeta.Verdict, c modelmeta.Capabilities) string {
+	if v.Loadable != "no" {
+		return v.Loadable
+	}
+	if _, reason := modelmeta.ArchLoadable(v.Engine, c); reason != "" {
+		return "no — " + reason
+	}
+	return "no"
+}
+
+// fitsLine renders the fit dimension with the sizing it was decided on: the padded
+// estimate vs. the capacity it was weighed against (VRAM or RAM). "unknown" when
+// the size or capacity could not be determined.
+func fitsLine(fits string, c modelmeta.Capabilities, capacity int64, hasGPU bool) string {
+	est, ok := modelmeta.FitEstimate(c)
+	if !ok || capacity <= 0 {
+		return "unknown (model size or host capacity undetermined)"
+	}
+	mem := "RAM"
+	if hasGPU {
+		mem = "VRAM"
+	}
+	return fmt.Sprintf("%s (needs ~%s, target has %s %s)", fits, humanBytes(est), humanBytes(capacity), mem)
+}
+
+// detectCapacity reports this host's schedulable memory and whether it has a GPU:
+// summed GPU VRAM if any, else system RAM — mirroring the scheduler's capacityOf.
+// It is a package var so tests inject a capacity without real hardware.
+var detectCapacity = func() (int64, bool) {
+	hw := worker.Detect()
+	if len(hw.GPUs) > 0 {
+		var sum int64
+		for _, g := range hw.GPUs {
+			sum += g.VRAMBytes
+		}
+		return sum, true
+	}
+	return hw.RAMBytes, false
 }
 
 // parsersLine previews the engine arguments metadata-driven resolution (M8 Phase
@@ -189,15 +270,6 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
-}
-
-// pendingLine renders a verdict dimension, annotating the Pending sentinel with
-// the phase that will supply the real answer.
-func pendingLine(value, phase string) string {
-	if value == modelmeta.Pending {
-		return fmt.Sprintf("pending (%s)", phase)
-	}
-	return value
 }
 
 // --- metadata cache (state dir, keyed by repo@revision; ADR-0015) ---

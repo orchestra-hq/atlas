@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/orchestra-hq/atlas/catalog"
 )
@@ -68,7 +69,27 @@ func inspectHF(ctx context.Context, repo string, opts Options) (Result, error) {
 		caps.Sampling = gen.sampling()
 	}
 
+	// Pre-download weight size for the fit check (M8 Phase 3): sum the repo's
+	// safetensors shards. Best-effort — a listing failure (rate limit, older API)
+	// just leaves WeightBytes at 0, which skips the fit check rather than failing
+	// inspection.
+	if files, err := listRepoFiles(ctx, opts, repo); err == nil {
+		caps.WeightBytes = sumSafetensorBytes(files)
+	}
+
 	return Result{Capabilities: caps, Verdict: verdictFor(caps)}, nil
+}
+
+// sumSafetensorBytes totals the byte sizes of a repo's *.safetensors shards,
+// ignoring tokenizer/config/readme files. 0 when none carry a known size.
+func sumSafetensorBytes(files []repoFile) int64 {
+	var sum int64
+	for _, f := range files {
+		if strings.HasSuffix(strings.ToLower(f.name), ".safetensors") {
+			sum += f.size
+		}
+	}
+	return sum
 }
 
 // fetchFile GETs one metadata file from repo at the configured revision. It

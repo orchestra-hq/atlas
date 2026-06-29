@@ -56,6 +56,33 @@ const (
 	fxGeneration      = `{"temperature":0.7,"top_p":0.8}`
 )
 
+func TestInspectHFWeightBytes(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/org/m/resolve/main/config.json", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(fxConfigQwen))
+	})
+	// The blobs=true listing carries sizes; safetensors shards sum, other files are
+	// ignored. The second shard reports its size under lfs (weight files are LFS).
+	mux.HandleFunc("/api/models/org/m", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"siblings":[
+			{"rfilename":"config.json","size":1024},
+			{"rfilename":"model-00001-of-00002.safetensors","size":3000000000},
+			{"rfilename":"model-00002-of-00002.safetensors","lfs":{"size":2000000000}},
+			{"rfilename":"README.md","size":4096}
+		]}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	res, err := Inspect(context.Background(), "org/m", Options{Endpoint: srv.URL})
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if got, want := res.Capabilities.WeightBytes, int64(5_000_000_000); got != want {
+		t.Errorf("WeightBytes = %d, want %d (sum of safetensors shards only)", got, want)
+	}
+}
+
 func TestInspectHFDerivesPlan(t *testing.T) {
 	hf := newFakeHF(map[string]fileResp{
 		"config.json":            {body: fxConfigQwen},
@@ -99,8 +126,13 @@ func TestInspectHFDerivesPlan(t *testing.T) {
 	if res.Verdict.Family != "qwen2" {
 		t.Errorf("family = %q, want qwen2 (classified, no longer pending)", res.Verdict.Family)
 	}
-	if res.Verdict.Loadable != Pending || res.Verdict.Fits != Pending {
-		t.Errorf("expected pending loadable/fits, got %+v", res.Verdict)
+	// Loadable is decided here (host-independent: qwen2 is a supported arch); Fits
+	// stays Pending in the record (host-dependent, filled live by the consumer).
+	if res.Verdict.Loadable != "yes" {
+		t.Errorf("loadable = %q, want yes", res.Verdict.Loadable)
+	}
+	if res.Verdict.Fits != Pending {
+		t.Errorf("fits = %q, want pending in the record", res.Verdict.Fits)
 	}
 }
 

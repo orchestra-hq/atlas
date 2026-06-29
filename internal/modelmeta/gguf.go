@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -19,17 +20,29 @@ import (
 func inspectGGUF(ctx context.Context, target string, opts Options) (Result, error) {
 	switch {
 	case isHTTPURL(target):
-		data, err := fetchGGUFHeader(ctx, opts, target)
+		data, total, err := fetchGGUFHeader(ctx, opts, target)
 		if err != nil {
 			return Result{}, err
 		}
-		return ggufResult(target, opts.revision(), "", nil, data)
+		res, err := ggufResult(target, opts.revision(), "", nil, data)
+		if err != nil {
+			return Result{}, err
+		}
+		res.Capabilities.WeightBytes = total // from the ranged fetch's Content-Range
+		return res, nil
 	case fileExists(target):
 		data, err := readLocalGGUFHeader(target)
 		if err != nil {
 			return Result{}, err
 		}
-		return ggufResult(target, opts.revision(), "", nil, data)
+		res, err := ggufResult(target, opts.revision(), "", nil, data)
+		if err != nil {
+			return Result{}, err
+		}
+		if info, serr := os.Stat(target); serr == nil {
+			res.Capabilities.WeightBytes = info.Size()
+		}
+		return res, nil
 	default:
 		return Result{}, fmt.Errorf("modelmeta: %q is not a local .gguf file or a URL — pass a path, a direct .gguf URL, or an HF repo id (for a multi-quant repo)", target)
 	}
@@ -46,9 +59,11 @@ func tryGGUFRepo(ctx context.Context, repo string, opts Options) (Result, bool, 
 		return Result{}, false, err
 	}
 	var ggufs []string
+	sizes := map[string]int64{}
 	for _, f := range files {
-		if strings.HasSuffix(strings.ToLower(f), ".gguf") {
-			ggufs = append(ggufs, f)
+		if strings.HasSuffix(strings.ToLower(f.name), ".gguf") {
+			ggufs = append(ggufs, f.name)
+			sizes[f.name] = f.size
 		}
 	}
 	if len(ggufs) == 0 {
@@ -58,7 +73,7 @@ func tryGGUFRepo(ctx context.Context, repo string, opts Options) (Result, bool, 
 	chosen := pickQuant(ggufs)
 
 	url := fmt.Sprintf("%s/%s/resolve/%s/%s", opts.endpoint(), repo, opts.revision(), chosen)
-	data, err := fetchGGUFHeader(ctx, opts, url)
+	data, _, err := fetchGGUFHeader(ctx, opts, url)
 	if err != nil {
 		return Result{}, false, err
 	}
@@ -66,6 +81,7 @@ func tryGGUFRepo(ctx context.Context, repo string, opts Options) (Result, bool, 
 	if err != nil {
 		return Result{}, false, err
 	}
+	res.Capabilities.WeightBytes = sizes[chosen] // the served quant's size (M8 Phase 3 fit)
 	return res, true, nil
 }
 
@@ -103,11 +119,21 @@ func ggufResult(repo, revision, selected string, files []string, header []byte) 
 	return Result{Capabilities: caps, Verdict: verdictFor(caps)}, nil
 }
 
-// listRepoFiles returns the file names in an HF repo via its model API
-// (…/api/models/<repo> → siblings[].rfilename). Used to detect a GGUF repo and
-// enumerate its quantizations.
-func listRepoFiles(ctx context.Context, opts Options, repo string) ([]string, error) {
-	url := fmt.Sprintf("%s/api/models/%s", opts.endpoint(), repo)
+// repoFile is one file in an HF repo listing: its name and, when the API reports
+// it (?blobs=true), its byte size (0 when unknown — older repos or non-LFS files
+// can omit it).
+type repoFile struct {
+	name string
+	size int64
+}
+
+// listRepoFiles returns the files in an HF repo via its model API
+// (…/api/models/<repo>?blobs=true → siblings[].rfilename + .size). Used to detect
+// a GGUF repo, enumerate its quantizations, and sum weight sizes for the
+// pre-download fit check (M8 Phase 3). The blobs param adds sizes; a repo or file
+// that omits a size simply reports 0 (fit then skipped).
+func listRepoFiles(ctx context.Context, opts Options, repo string) ([]repoFile, error) {
+	url := fmt.Sprintf("%s/api/models/%s?blobs=true", opts.endpoint(), repo)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("modelmeta: request repo listing: %w", err)
@@ -125,14 +151,22 @@ func listRepoFiles(ctx context.Context, opts Options, repo string) ([]string, er
 		var body struct {
 			Siblings []struct {
 				RFilename string `json:"rfilename"`
+				Size      int64  `json:"size"`
+				LFS       struct {
+					Size int64 `json:"size"`
+				} `json:"lfs"`
 			} `json:"siblings"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 			return nil, fmt.Errorf("modelmeta: parse %s listing: %w", repo, err)
 		}
-		files := make([]string, 0, len(body.Siblings))
+		files := make([]repoFile, 0, len(body.Siblings))
 		for _, s := range body.Siblings {
-			files = append(files, s.RFilename)
+			size := s.Size
+			if size == 0 {
+				size = s.LFS.Size // weight shards are LFS-tracked; size lives under lfs
+			}
+			files = append(files, repoFile{name: s.RFilename, size: size})
 		}
 		return files, nil
 	case http.StatusUnauthorized, http.StatusForbidden:
@@ -154,29 +188,31 @@ const (
 // fetchGGUFHeader reads only enough of a GGUF file (from the front, via HTTP
 // Range) to parse its metadata, growing the window if the header runs past the
 // first read. It never fetches the whole file: even if a server ignores Range,
-// the body read is capped at the current window.
-func fetchGGUFHeader(ctx context.Context, opts Options, url string) ([]byte, error) {
+// the body read is capped at the current window. It also returns the file's total
+// size (from the Content-Range total, 0 when the server does not report it) for
+// the pre-download fit check.
+func fetchGGUFHeader(ctx context.Context, opts Options, url string) ([]byte, int64, error) {
 	window := int64(ggufInitialHeaderBytes)
 	for {
-		data, err := fetchRange(ctx, opts, url, window)
+		data, total, err := fetchRange(ctx, opts, url, window)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if _, perr := parseGGUFHeader(data); errors.Is(perr, errShortHeader) && int64(len(data)) >= window {
 			if window >= ggufMaxHeaderBytes {
-				return nil, fmt.Errorf("modelmeta: GGUF header exceeds %d bytes", ggufMaxHeaderBytes)
+				return nil, 0, fmt.Errorf("modelmeta: GGUF header exceeds %d bytes", ggufMaxHeaderBytes)
 			}
 			window *= 2
 			continue
 		}
-		return data, nil
+		return data, total, nil
 	}
 }
 
-func fetchRange(ctx context.Context, opts Options, url string, n int64) ([]byte, error) {
+func fetchRange(ctx context.Context, opts Options, url string, n int64) ([]byte, int64, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("modelmeta: request header: %w", err)
+		return nil, 0, fmt.Errorf("modelmeta: request header: %w", err)
 	}
 	req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", n-1))
 	if opts.Token != "" {
@@ -184,21 +220,40 @@ func fetchRange(ctx context.Context, opts Options, url string, n int64) ([]byte,
 	}
 	resp, err := opts.client().Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("modelmeta: fetch header: %w", err)
+		return nil, 0, fmt.Errorf("modelmeta: fetch header: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusPartialContent:
 		// Cap the read at the window even if the server ignored Range (200), so we
 		// never pull the whole weights file.
-		return io.ReadAll(io.LimitReader(resp.Body, n))
+		data, err := io.ReadAll(io.LimitReader(resp.Body, n))
+		if err != nil {
+			return nil, 0, err
+		}
+		return data, totalFromContentRange(resp.Header.Get("Content-Range")), nil
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return nil, fmt.Errorf("modelmeta: %s is gated or private — set HF_TOKEN (or HUGGING_FACE_HUB_TOKEN)", url)
+		return nil, 0, fmt.Errorf("modelmeta: %s is gated or private — set HF_TOKEN (or HUGGING_FACE_HUB_TOKEN)", url)
 	case http.StatusNotFound:
-		return nil, fmt.Errorf("modelmeta: %s not found", url)
+		return nil, 0, fmt.Errorf("modelmeta: %s not found", url)
 	default:
-		return nil, fmt.Errorf("modelmeta: fetch header: unexpected status %s", resp.Status)
+		return nil, 0, fmt.Errorf("modelmeta: fetch header: unexpected status %s", resp.Status)
 	}
+}
+
+// totalFromContentRange parses the total length from a Content-Range header of the
+// form "bytes 0-1048575/4815319456"; returns 0 when the header is absent or its
+// total is unknown ("*").
+func totalFromContentRange(h string) int64 {
+	i := strings.LastIndex(h, "/")
+	if i < 0 {
+		return 0
+	}
+	total, err := strconv.ParseInt(strings.TrimSpace(h[i+1:]), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return total
 }
 
 func readLocalGGUFHeader(path string) ([]byte, error) {
