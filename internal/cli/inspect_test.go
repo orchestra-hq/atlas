@@ -117,16 +117,17 @@ func TestInspectFitsVerdict(t *testing.T) {
 
 // TestInspectUnknownFamilyPointer proves inspect previews the P8.4 contribution
 // funnel: a loadable, fitting, unknown-family model shows the "add a family" pointer
-// (Mistral is loadable on both the macOS mlx and Linux vllm candidate engines but is
-// not a known family, so this is host-independent), while a known family shows none.
+// (Mixtral is loadable on the vllm candidate engine but is not a known family — its
+// prefix is distinct from mistral's — so this is host-independent), while a known
+// family shows none.
 func TestInspectUnknownFamilyPointer(t *testing.T) {
-	unknown := sizedRepoServer(t, "org/mistral", "MistralForCausalLM", "mistral", 4<<30)
-	out, err := runInspectCapture(t, &inspectOptions{stateDir: t.TempDir(), endpoint: unknown.URL, vram: 80}, []string{"org/mistral"})
+	unknown := sizedRepoServer(t, "org/mixtral", "MixtralForCausalLM", "mixtral", 4<<30)
+	out, err := runInspectCapture(t, &inspectOptions{stateDir: t.TempDir(), endpoint: unknown.URL, vram: 80}, []string{"org/mixtral"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out, "family:   unknown") {
-		t.Fatalf("expected an unknown family for Mistral:\n%s", out)
+		t.Fatalf("expected an unknown family for Mixtral:\n%s", out)
 	}
 	if !strings.Contains(out, "internal/modelmeta/family.go") {
 		t.Errorf("a loadable+fitting unknown family should show the contribution pointer:\n%s", out)

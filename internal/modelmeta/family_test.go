@@ -40,6 +40,16 @@ func TestClassify(t *testing.T) {
 			wantFamily: "llama", wantOK: true, wantReason: false,
 		},
 		{
+			name:       "mistral (Devstral) by arch",
+			caps:       Capabilities{ModelType: "mistral", Architecture: "MistralForCausalLM"},
+			wantFamily: "mistral", wantOK: true, wantReason: false,
+		},
+		{
+			name:   "mixtral is not the mistral family",
+			caps:   Capabilities{ModelType: "mixtral", Architecture: "MixtralForCausalLM"},
+			wantOK: false,
+		},
+		{
 			name:   "unknown model_type is not a known family",
 			caps:   Capabilities{ModelType: "mamba", Architecture: "MambaForCausalLM"},
 			wantOK: false,
@@ -103,6 +113,7 @@ func TestFamilyEngineArgs(t *testing.T) {
 	qwen3, _ := Classify(Capabilities{ModelType: "qwen3"})
 	qwen2, _ := Classify(Capabilities{ModelType: "qwen2"})
 	gemma, _ := Classify(Capabilities{ModelType: "gemma2"})
+	mistral, _ := Classify(Capabilities{ModelType: "mistral"})
 
 	cases := []struct {
 		name   string
@@ -115,6 +126,8 @@ func TestFamilyEngineArgs(t *testing.T) {
 		{"qwen3 llamacpp (template-driven)", qwen3, "llamacpp", nil},
 		{"qwen3 mlx (template-driven)", qwen3, "mlx", nil},
 		{"qwen2 vllm omits reasoning parser", qwen2, "vllm", []string{"--enable-auto-tool-choice", "--tool-call-parser", "hermes"}},
+		{"mistral vllm (non-reasoning, mistral parser)", mistral, "vllm", []string{"--enable-auto-tool-choice", "--tool-call-parser", "mistral"}},
+		{"mistral sglang (no seeded parser)", mistral, "sglang", nil},
 		{"gemma vllm (no seeded parser)", gemma, "vllm", nil},
 		{"gemma sglang (no seeded parser)", gemma, "sglang", nil},
 	}

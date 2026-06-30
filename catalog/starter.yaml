@@ -167,6 +167,34 @@ models:
       - --reasoning-parser
       - qwen3
 
+  # --- Single-GPU agentic coder (vLLM; proven with Claude Code) -----------
+  # Devstral-Small-2507 (Mistral, 24B dense, MistralForCausalLM, 128k native).
+  # The strongest single-GPU agentic-coding model Atlas has driven end-to-end
+  # with Claude Code: served on ONE 48 GB L40S (AWS g6e.xlarge) it ran a real
+  # multi-tool agentic loop (Bash→Read→Edit→Bash) start to finish (2026-06-30
+  # dogfood). engine_args carry only the portable tool-calling flags — Mistral
+  # needs BOTH --enable-auto-tool-choice and --tool-call-parser mistral (this is
+  # what the mistral family in internal/modelmeta also auto-applies). To fit the
+  # L40S add host-sizing flags at launch: --engine-arg --quantization --engine-arg
+  # fp8 (bf16 ~47 GB does not fit) --engine-arg --enforce-eager --engine-arg
+  # --max-model-len --engine-arg 98304 (caps the KV cache so it fits beside the
+  # ~24 GB fp8 weights). A bigger GPU (e.g. 80 GB A100) can serve bf16 at the full
+  # 128k. Non-reasoning. NOTE: the first cold serve downloads ~47 GB and can exceed
+  # the 3-min vLLM ready timeout — raise it with ATLAS_ENGINE_READY_TIMEOUT (e.g.
+  # 20m) or pre-pull, then warm restarts load in well under a minute.
+  - name: devstral-small
+    engine: vllm
+    tier: sonnet
+    reasoning: false
+    context_window: 131072
+    source:
+      type: hf
+      repo: mistralai/Devstral-Small-2507
+    engine_args:
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - mistral
+
   - name: glm-5.1
     engine: vllm
     tier: opus

@@ -503,17 +503,19 @@ func resolveCapture(t *testing.T, engine worker.Engine, spec string, requireVeri
 // warn-and-serve middle case (ADR-0015 Decision 3b, P8.4).
 func TestResolveRawWarnsUnknownFamily(t *testing.T) {
 	withCapacity(t, 80<<30) // roomy: loadable + fits, so the family axis is what's exercised
-	srv := sizedRepoServer(t, "org/mistral", "MistralForCausalLM", "mistral", 4<<30)
+	// Mixtral is loadable (a listed transformers arch) but intentionally not a known
+	// family (its prefix is distinct from mistral's), so it exercises warn-and-serve.
+	srv := sizedRepoServer(t, "org/mixtral", "MixtralForCausalLM", "mixtral", 4<<30)
 	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
 
-	rm, out, err := resolveCapture(t, worker.EngineVLLM, "org/mistral", false)
+	rm, out, err := resolveCapture(t, worker.EngineVLLM, "org/mixtral", false)
 	if err != nil {
 		t.Fatalf("an unknown family should still serve (warn-and-serve), got %v", err)
 	}
 	if len(rm.engineArgs) != 0 || rm.reasoning {
 		t.Errorf("expected the bare plan for an unknown family, got engineArgs=%v reasoning=%v", rm.engineArgs, rm.reasoning)
 	}
-	for _, want := range []string{"warning", "MistralForCausalLM", "internal/modelmeta/family.go"} {
+	for _, want := range []string{"warning", "MixtralForCausalLM", "internal/modelmeta/family.go"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("warning output %q missing %q", out, want)
 		}
@@ -524,14 +526,14 @@ func TestResolveRawWarnsUnknownFamily(t *testing.T) {
 // naming the family signal and the one-line PR — and reaches no weight download.
 func TestResolveRawRequireVerifiedRefusesUnknownFamily(t *testing.T) {
 	withCapacity(t, 80<<30)
-	srv := sizedRepoServer(t, "org/mistral", "MistralForCausalLM", "mistral", 4<<30)
+	srv := sizedRepoServer(t, "org/mixtral", "MixtralForCausalLM", "mixtral", 4<<30)
 	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
 
-	_, _, err := resolveCapture(t, worker.EngineVLLM, "org/mistral", true)
+	_, _, err := resolveCapture(t, worker.EngineVLLM, "org/mixtral", true)
 	if err == nil {
 		t.Fatal("expected --require-verified to refuse an unknown-family model")
 	}
-	for _, want := range []string{"require-verified", "MistralForCausalLM", "internal/modelmeta/family.go"} {
+	for _, want := range []string{"require-verified", "MixtralForCausalLM", "internal/modelmeta/family.go"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q missing %q", err, want)
 		}
