@@ -85,12 +85,31 @@ func inspectHF(ctx context.Context, repo string, opts Options) (Result, error) {
 // the fit check) when there are no shards OR when any shard's size is missing — a
 // partial sum would undercount and could pass an oversized model through the fit
 // gate, so an incomplete listing is treated as unknown rather than too-low.
+//
+// Some repos (notably Mistral's, e.g. Devstral) ship the same weights twice: the
+// HF sharded set (model-0000x-of-0000y.safetensors, indexed by a
+// *.safetensors.index.json) plus a single consolidated.safetensors in Mistral's
+// native format. Transformers/vLLM/SGLang load the indexed shards; the
+// consolidated file is a redundant alternate copy. Summing both would roughly
+// double the estimate, so when an index is present we drop the consolidated copy
+// and count only the shards it points to.
 func sumSafetensorBytes(files []repoFile) int64 {
+	hasIndex := false
+	for _, f := range files {
+		if strings.HasSuffix(strings.ToLower(f.name), ".safetensors.index.json") {
+			hasIndex = true
+			break
+		}
+	}
 	var sum int64
 	var seen bool
 	for _, f := range files {
-		if !strings.HasSuffix(strings.ToLower(f.name), ".safetensors") {
+		name := strings.ToLower(f.name)
+		if !strings.HasSuffix(name, ".safetensors") {
 			continue
+		}
+		if hasIndex && strings.HasPrefix(name, "consolidated") {
+			continue // redundant native-format copy alongside the indexed HF shards
 		}
 		seen = true
 		if f.size <= 0 {
