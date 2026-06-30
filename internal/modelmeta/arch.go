@@ -24,6 +24,25 @@ func FitEstimate(c Capabilities) (bytes int64, ok bool) {
 	return int64(float64(c.WeightBytes) * (1 + KVOverheadFraction)), true
 }
 
+// QuantMemoryFactor is the fraction of a model's full-precision (bf16/fp16) weight
+// size that a vLLM/SGLang weight-quantization flag yields once loaded on the GPU,
+// so the pre-download fit gate weighs the precision the engine will actually serve
+// rather than the full-precision on-disk size. The published weight size is
+// near-always 16-bit, so 8-bit schemes halve and 4-bit schemes quarter it. An
+// unrecognized or absent value returns 1.0 (no scaling) — conservative, since the
+// fit gate then keeps its current full-precision estimate and the live engine load
+// stays the final authority.
+func QuantMemoryFactor(quant string) float64 {
+	switch strings.ToLower(strings.TrimSpace(quant)) {
+	case "fp8", "fbgemm_fp8", "modelopt", "int8", "w8a8":
+		return 0.5
+	case "awq", "awq_marlin", "gptq", "gptq_marlin", "marlin", "bitsandbytes", "fp4", "nvfp4", "modelopt_fp4":
+		return 0.25
+	default:
+		return 1.0
+	}
+}
+
 // ArchLoadable reports whether the pinned build of engine can load the model's
 // architecture, and a short pointer reason when it cannot. It is the "engine can
 // load this arch" oracle ADR-0015 Decision 3 needs, decoupled from family
@@ -110,8 +129,9 @@ const (
 var transformersArchs = lowerSet(
 	// Llama family and Llama-architecture derivatives (Yi, etc.).
 	"LlamaForCausalLM", "Llama4ForCausalLM",
-	// Qwen 2 / 2.5 / 3, dense and MoE.
+	// Qwen 2 / 2.5 / 3 / 3.5, dense and MoE.
 	"Qwen2ForCausalLM", "Qwen2MoeForCausalLM", "Qwen3ForCausalLM", "Qwen3MoeForCausalLM",
+	"Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration",
 	// Mistral / Mixtral.
 	"MistralForCausalLM", "MixtralForCausalLM",
 	// Gemma 1 / 2 / 3.

@@ -341,6 +341,52 @@ func TestResolveRawRefusesOversized(t *testing.T) {
 	}
 }
 
+func TestServedQuant(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"space form", []string{"--tool-call-parser", "hermes", "--quantization", "fp8"}, "fp8"},
+		{"equals form", []string{"--quantization=fp8"}, "fp8"},
+		{"short flag", []string{"-q", "awq"}, "awq"},
+		{"short equals", []string{"-q=gptq"}, "gptq"},
+		{"absent", []string{"--enforce-eager"}, ""},
+		{"trailing flag, no value", []string{"--quantization"}, ""},
+	}
+	for _, tc := range cases {
+		if got := servedQuant(tc.args); got != tc.want {
+			t.Errorf("%s: servedQuant(%v) = %q, want %q", tc.name, tc.args, got, tc.want)
+		}
+	}
+}
+
+// A model whose full-precision (bf16) size exceeds the host is accepted once a
+// weight-quantization engine flag is passed, because the fit gate then weighs the
+// quantized footprint. Regression for the live-run bug where --quantization fp8 was
+// ignored and a model that fits the GPU was refused on its bf16 size.
+func TestResolveRawFP8FitsWhenBf16WouldNot(t *testing.T) {
+	cat, _ := catalog.Load()
+	withCapacity(t, 24<<30) // 24 GiB VRAM
+	const weight = 30 << 30 // 30 GiB bf16 → est 36 GiB (refused); fp8 halves → ~18 GiB (fits)
+
+	// Without the quant flag: refused on the full-precision estimate.
+	st := store.New(t.TempDir())
+	srv := sizedRepoServer(t, "org/fp8", "Qwen2ForCausalLM", "qwen2", weight)
+	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
+	if _, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "org/fp8", false, false); err == nil {
+		t.Fatal("expected refusal without --quantization (bf16 estimate exceeds host)")
+	}
+
+	// With --quantization fp8: the gate weighs the halved footprint and it fits.
+	st2 := store.New(t.TempDir())
+	srv2 := sizedRepoServer(t, "org/fp8", "Qwen2ForCausalLM", "qwen2", weight)
+	t.Setenv("ATLAS_HF_ENDPOINT", srv2.URL)
+	if _, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st2, cat, t.TempDir(), "", "org/fp8", false, false, "--quantization", "fp8"); err != nil {
+		t.Fatalf("expected the fp8 model to fit, got refusal: %v", err)
+	}
+}
+
 // A loadable, fitting known-family model passes the gate and is auto-configured —
 // the gate does not regress the P8.2 path.
 func TestResolveRawGatePassesKnownFamily(t *testing.T) {
