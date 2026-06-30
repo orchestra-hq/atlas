@@ -85,6 +85,19 @@ var families = []Family{
 		Name:      "llama",
 		Reasoning: false,
 	},
+	{
+		// Mistral / Devstral (MistralForCausalLM / model_type mistral). Dense,
+		// non-reasoning. vLLM emits tool calls in Mistral's [TOOL_CALLS] format,
+		// parsed by the "mistral" tool parser (which, like all vLLM tool parsers,
+		// needs --enable-auto-tool-choice — supplied by EngineArgs). Proven driving
+		// Claude Code with Devstral-Small-2507 (the catalog devstral-small tier).
+		// SGLang parser left to a conformance-gated PR.
+		Name:      "mistral",
+		Reasoning: false,
+		parsers: map[string]engineParsers{
+			"vllm": {toolCall: "mistral"},
+		},
+	},
 }
 
 // Classify maps inspected capabilities to a known family, or reports false when
@@ -167,6 +180,10 @@ func normalizeFamily(s string) string {
 		return "gemma"
 	case strings.HasPrefix(s, "llama"):
 		return "llama"
+	case strings.HasPrefix(s, "mistral"):
+		// "mistral" only — Mixtral (MoE) is a distinct family, intentionally
+		// unmatched (its prefix differs).
+		return "mistral"
 	default:
 		return ""
 	}
