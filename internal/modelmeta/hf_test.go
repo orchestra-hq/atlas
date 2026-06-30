@@ -244,3 +244,73 @@ func TestInspectHFSendsToken(t *testing.T) {
 		t.Errorf("Authorization = %q, want \"Bearer secret\"", hf.lastAuth)
 	}
 }
+
+func TestSumSafetensorBytes(t *testing.T) {
+	const gb = int64(1) << 30
+	tests := []struct {
+		name  string
+		files []repoFile
+		want  int64
+	}{
+		{
+			name: "single file",
+			files: []repoFile{
+				{name: "model.safetensors", size: 16 * gb},
+				{name: "config.json", size: 4096},
+			},
+			want: 16 * gb,
+		},
+		{
+			name: "sharded with index",
+			files: []repoFile{
+				{name: "model.safetensors.index.json", size: 30000},
+				{name: "model-00001-of-00002.safetensors", size: 10 * gb},
+				{name: "model-00002-of-00002.safetensors", size: 10 * gb},
+			},
+			want: 20 * gb,
+		},
+		{
+			// Mistral/Devstral ship the same weights twice: indexed HF shards plus
+			// a consolidated.safetensors native copy. The consolidated copy must not
+			// be added to the shard total — that would roughly double the estimate.
+			name: "consolidated copy alongside indexed shards is dropped",
+			files: []repoFile{
+				{name: "model.safetensors.index.json", size: 30000},
+				{name: "consolidated.safetensors", size: 47 * gb},
+				{name: "model-00001-of-00002.safetensors", size: 23 * gb},
+				{name: "model-00002-of-00002.safetensors", size: 24 * gb},
+			},
+			want: 47 * gb,
+		},
+		{
+			// No index: a lone consolidated.safetensors is the only weight set, so it
+			// counts — we never drop the sole copy.
+			name: "consolidated only, no index",
+			files: []repoFile{
+				{name: "consolidated.safetensors", size: 47 * gb},
+				{name: "tokenizer.json", size: 4096},
+			},
+			want: 47 * gb,
+		},
+		{
+			name: "missing shard size is untrustworthy",
+			files: []repoFile{
+				{name: "model-00001-of-00002.safetensors", size: 10 * gb},
+				{name: "model-00002-of-00002.safetensors", size: 0},
+			},
+			want: 0,
+		},
+		{
+			name:  "no safetensors",
+			files: []repoFile{{name: "pytorch_model.bin", size: 16 * gb}},
+			want:  0,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sumSafetensorBytes(tc.files); got != tc.want {
+				t.Errorf("sumSafetensorBytes() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
