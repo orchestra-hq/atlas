@@ -89,6 +89,12 @@ The shed-vs-spill decision (`shouldSpill` + `spillToCloud`, `internal/server/clo
 
 When a Qwen3 thinking turn on vLLM hits `max_tokens` before emitting `</think>`, the response comes back with empty `content` _and_ empty `reasoning_content` despite a full `output_tokens` count — so neither Atlas nor any OpenAI client sees the generated text. This is why the G4 thinking tests failed at `max_tokens=128`; M0 now gates on a realistic budget instead (the model completes its trace), so this is no longer blocking. But it remains a real edge: vLLM 0.23.0 contains the upstream #35221 fix (which should route truncated output to `reasoning_content` when `enable_thinking=True`) and Atlas does send `chat_template_kwargs.enable_thinking=true` (`internal/engines/openaichat/wire.go`, `ThinkingKwargs`), yet the truncated trace still vanishes. Worth confirming on a GPU box whether the parser honors `enable_thinking` as passed (capture vLLM's raw `/v1/chat/completions` for a deliberately-truncated thinking request), and whether a short streamed budget reproduces it. Contrast: llama.cpp surfaces a partial `reasoning_content` in the same situation, so the two engines diverge on truncated reasoning.
 
+### `atlas up` has no engine-startup watchdog — a hung load sits forever
+
+**Suggested:** when next touching the worker launch path. **Surfaced:** 2026-06-30, dogfooding a large hybrid MoE on a single GPU.
+
+`worker.Start` blocks until the engine reports healthy, with no overall timeout: if the engine process wedges during model load (e.g. a Triton/FlashInfer kernel that never returns, or a memory-profiling pass that deadlocks), `atlas up` waits indefinitely with no progress and `/readyz` never flips — on a rented GPU that is silent money burned. Repro'd serving `Qwen/Qwen3.5-35B-A3B` (a hybrid MoE + GDN linear-attention model) on an L40S via vLLM 0.23.0 FP8: weights loaded onto the GPU, then startup hung after kernel selection with no further log output. The control plane already has `--autostart-timeout` (default 5m) for fleet auto-start; the single-node launch path should grow an equivalent bound (a `--startup-timeout` that aborts the launch and tears down the engine subprocess, surfacing the last engine log lines) so a stuck load fails fast instead of idling. Distinct from a slow-but-progressing cold boot — the bound wants to key off no-progress/health-poll elapsed, not a flat wall-clock that a legitimately large download would trip.
+
 ## Documentation / research sourcing
 
 ### Research docs cite blog aggregators instead of primary sources

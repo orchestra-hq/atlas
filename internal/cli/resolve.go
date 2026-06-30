@@ -44,13 +44,15 @@ type resolvedModel struct {
 // resolveModel turns one --model value into a worker plan. A catalog name
 // resolves through the store (pulling a cold gguf model first); anything else
 // is treated as a raw path or engine spec, preserving the pre-catalog behavior.
-func resolveModel(ctx context.Context, cmd *cobra.Command, engine worker.Engine, st *store.Store, cat *catalog.Catalog, stateDir, quant, spec string, force, requireVerified bool) (resolvedModel, error) {
+// engineArgs is the user's --engine-arg list (variadic so existing callers need
+// no change); the fit gate reads any weight-quantization flag from it.
+func resolveModel(ctx context.Context, cmd *cobra.Command, engine worker.Engine, st *store.Store, cat *catalog.Catalog, stateDir, quant, spec string, force, requireVerified bool, engineArgs ...string) (resolvedModel, error) {
 	entry, ok := cat.Lookup(spec)
 	if !ok {
 		// Not a catalog name: a local path or a Hugging Face spec. Auto-configure
 		// from the model's own metadata where it names a known family (ADR-0015),
 		// else fall back to the pre-M8 bare passthrough.
-		return resolveRaw(ctx, cmd, engine, stateDir, quant, spec, force, requireVerified)
+		return resolveRaw(ctx, cmd, engine, stateDir, quant, spec, force, requireVerified, engineArgs...)
 	}
 
 	if worker.Engine(entry.Engine) != engine {
@@ -111,7 +113,7 @@ func resolveModel(ctx context.Context, cmd *cobra.Command, engine worker.Engine,
 // entry would. Otherwise it returns the pre-M8 bare passthrough. Inspection is
 // best-effort: any failure (offline, gated, unrecognized) yields the bare plan,
 // so resolution is never less able to serve than it was before M8.
-func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, stateDir, quant, spec string, force, requireVerified bool) (resolvedModel, error) {
+func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, stateDir, quant, spec string, force, requireVerified bool, engineArgs ...string) (resolvedModel, error) {
 	plan := resolvedModel{
 		served:    modelDisplayName(engine, spec),
 		modelArgs: modelArgs(engine, spec),
@@ -136,6 +138,17 @@ func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, s
 	// caps.WeightBytes to the selected quant's size.
 	if err := applyQuant(cmd, &plan, &caps, engine, spec, quant); err != nil {
 		return resolvedModel{}, err
+	}
+	// A weight-quantization engine flag (e.g. --quantization fp8) shrinks the GPU
+	// footprint below the full-precision on-disk size the metadata reports, so scale
+	// the fit estimate to the precision the engine will actually load — otherwise an
+	// fp8/4-bit model that fits is refused on its bf16 size. vLLM/SGLang only; GGUF
+	// and MLX carry their quantization in the weights, so caps.WeightBytes is already
+	// the served size there.
+	if engine == worker.EngineVLLM || engine == worker.EngineSGLang {
+		if f := modelmeta.QuantMemoryFactor(servedQuant(engineArgs)); f < 1 {
+			caps.WeightBytes = int64(float64(caps.WeightBytes) * f)
+		}
 	}
 	// Fit/load gating (M8 Phase 3): refuse, before any weight download, a model the
 	// pinned engine cannot load or that will not fit this host's memory — a hard
@@ -165,6 +178,26 @@ func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, s
 	}
 	cmd.Printf("warning: serving %s as plain chat — %s\n", spec, modelmeta.UnknownFamilyReason(caps))
 	return plan, nil
+}
+
+// servedQuant extracts the value of a vLLM/SGLang weight-quantization flag from the
+// user's --engine-arg list, accepting both "--quantization fp8" and
+// "--quantization=fp8" forms (and the -q short flag). "" when absent. It lets the
+// fit gate weigh the precision the engine will actually load (see QuantMemoryFactor).
+func servedQuant(args []string) string {
+	for i, a := range args {
+		switch {
+		case a == "--quantization" || a == "-q":
+			if i+1 < len(args) {
+				return args[i+1]
+			}
+		case strings.HasPrefix(a, "--quantization="):
+			return strings.TrimPrefix(a, "--quantization=")
+		case strings.HasPrefix(a, "-q="):
+			return strings.TrimPrefix(a, "-q=")
+		}
+	}
+	return ""
 }
 
 // applyQuant points a multi-quant Hugging Face GGUF repo at one quantization,

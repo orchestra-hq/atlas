@@ -11,6 +11,7 @@ func TestArchLoadable(t *testing.T) {
 	}{
 		{"qwen2 on vllm", "vllm", Capabilities{Architecture: "Qwen2ForCausalLM", ModelType: "qwen2"}, true},
 		{"qwen3 on vllm", "vllm", Capabilities{Architecture: "Qwen3ForCausalLM", ModelType: "qwen3"}, true},
+		{"qwen3.5 moe on vllm", "vllm", Capabilities{Architecture: "Qwen3_5MoeForConditionalGeneration", ModelType: "qwen3_5_moe"}, true},
 		{"qwen3 on sglang", "sglang", Capabilities{Architecture: "Qwen3ForCausalLM", ModelType: "qwen3"}, true},
 		{"glm on vllm", "vllm", Capabilities{Architecture: "Glm4MoeForCausalLM", ModelType: "glm4_moe"}, true},
 		{"llama on vllm", "vllm", Capabilities{Architecture: "LlamaForCausalLM", ModelType: "llama"}, true},
@@ -57,6 +58,27 @@ func TestFitEstimate(t *testing.T) {
 	}
 	if _, ok := FitEstimate(Capabilities{WeightBytes: 0}); ok {
 		t.Error("FitEstimate ok = true for an unknown size")
+	}
+}
+
+func TestQuantMemoryFactor(t *testing.T) {
+	cases := []struct {
+		quant string
+		want  float64
+	}{
+		{"fp8", 0.5},
+		{"FP8", 0.5}, // case-insensitive
+		{"int8", 0.5},
+		{"awq", 0.25},
+		{"gptq_marlin", 0.25},
+		{"bitsandbytes", 0.25},
+		{"", 1.0},        // absent → no scaling
+		{"mystery", 1.0}, // unrecognized → conservative
+	}
+	for _, tc := range cases {
+		if got := QuantMemoryFactor(tc.quant); got != tc.want {
+			t.Errorf("QuantMemoryFactor(%q) = %v, want %v", tc.quant, got, tc.want)
+		}
 	}
 }
 
