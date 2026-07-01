@@ -134,6 +134,12 @@ func newEngineRuntime(ctx context.Context, cmd *cobra.Command, engine worker.Eng
 		return nil, err
 	}
 	capacity, hasGPU := detectCapacity()
+	// Mirror gateLoadFit's CPU-offload credit so the launch-time free-capacity check
+	// (reserveFit) agrees with the pre-download gate: a --cpu-offload-gb launch spills
+	// weights to host RAM, raising the effective ceiling above summed VRAM.
+	if hasGPU {
+		capacity += cpuOffloadCredit(engine, engineArgs)
+	}
 	return &engineRuntime{
 		cmd:             cmd,
 		engine:          engine,

@@ -361,6 +361,81 @@ func TestServedQuant(t *testing.T) {
 	}
 }
 
+func TestEngineArgValue(t *testing.T) {
+	cases := []struct {
+		name  string
+		args  []string
+		flags []string
+		want  string
+	}{
+		{"space form", []string{"--cpu-offload-gb", "40"}, []string{"--cpu-offload-gb"}, "40"},
+		{"equals form", []string{"--cpu-offload-gb=32"}, []string{"--cpu-offload-gb"}, "32"},
+		{"first of several flags", []string{"-tp", "8"}, []string{"--tensor-parallel-size", "-tp"}, "8"},
+		{"long form of alias", []string{"--tensor-parallel-size=4"}, []string{"--tensor-parallel-size", "-tp"}, "4"},
+		{"absent", []string{"--enforce-eager"}, []string{"--cpu-offload-gb"}, ""},
+		{"trailing flag, no value", []string{"--cpu-offload-gb"}, []string{"--cpu-offload-gb"}, ""},
+	}
+	for _, tc := range cases {
+		if got := engineArgValue(tc.args, tc.flags...); got != tc.want {
+			t.Errorf("%s: engineArgValue(%v, %v) = %q, want %q", tc.name, tc.args, tc.flags, got, tc.want)
+		}
+	}
+}
+
+func TestCPUOffloadCredit(t *testing.T) {
+	cases := []struct {
+		name   string
+		engine worker.Engine
+		args   []string
+		want   int64
+	}{
+		{"vllm, per-gpu offload × tp", worker.EngineVLLM, []string{"--cpu-offload-gb", "40", "--tensor-parallel-size", "4"}, 160 << 30},
+		{"vllm, offload with no tp defaults to 1 gpu", worker.EngineVLLM, []string{"--cpu-offload-gb=32"}, 32 << 30},
+		{"vllm, -tp short form", worker.EngineVLLM, []string{"-tp", "8", "--cpu-offload-gb", "10"}, 80 << 30},
+		{"sglang credited too", worker.EngineSGLang, []string{"--cpu-offload-gb", "16", "-tp", "2"}, 32 << 30},
+		{"llamacpp not credited (wrong engine)", worker.EngineLlamaCpp, []string{"--cpu-offload-gb", "40"}, 0},
+		{"vllm, no offload flag", worker.EngineVLLM, []string{"--enforce-eager"}, 0},
+		{"vllm, zero offload", worker.EngineVLLM, []string{"--cpu-offload-gb", "0"}, 0},
+	}
+	for _, tc := range cases {
+		if got := cpuOffloadCredit(tc.engine, tc.args); got != tc.want {
+			t.Errorf("%s: cpuOffloadCredit(%s, %v) = %d, want %d", tc.name, tc.engine, tc.args, got, tc.want)
+		}
+	}
+}
+
+// A frontier MoE whose 4-bit weights exceed summed VRAM is refused by default, but
+// accepted once --cpu-offload-gb (×tensor-parallel-size) credits the host RAM it
+// spills into — the GLM-5.2-on-4×A100 dogfood shape. Companion to the fp8 case.
+func TestResolveRawCPUOffloadFits(t *testing.T) {
+	cat, _ := catalog.Load()
+	withCapacity(t, 320<<30) // 4×A100-80GB = 320 GiB VRAM
+	const weight = 372 << 30 // 4-bit weights → est ~446 GiB (exceeds 320 VRAM)
+
+	// Without --cpu-offload-gb: refused on the summed-VRAM ceiling, and the message
+	// points at the flag as one remedy.
+	st := store.New(t.TempDir())
+	srv := sizedRepoServer(t, "zai-org/glm", "GlmMoeDsaForCausalLM", "glm_moe_dsa", weight)
+	t.Setenv("ATLAS_HF_ENDPOINT", srv.URL)
+	_, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st, cat, t.TempDir(), "", "zai-org/glm", false, false)
+	if err == nil {
+		t.Fatal("expected refusal without --cpu-offload-gb (weights exceed VRAM)")
+	}
+	if !strings.Contains(err.Error(), "--cpu-offload-gb") {
+		t.Errorf("refusal %q should suggest --cpu-offload-gb", err)
+	}
+
+	// With --cpu-offload-gb 40 across tensor-parallel-size 4 (160 GiB credit): the
+	// 480 GiB effective ceiling covers the ~446 GiB estimate, so it fits.
+	st2 := store.New(t.TempDir())
+	srv2 := sizedRepoServer(t, "zai-org/glm", "GlmMoeDsaForCausalLM", "glm_moe_dsa", weight)
+	t.Setenv("ATLAS_HF_ENDPOINT", srv2.URL)
+	if _, err := resolveModel(context.Background(), testCmd(), worker.EngineVLLM, st2, cat, t.TempDir(), "", "zai-org/glm", false, false,
+		"--cpu-offload-gb", "40", "--tensor-parallel-size", "4"); err != nil {
+		t.Fatalf("expected the offloaded model to fit, got refusal: %v", err)
+	}
+}
+
 // A model whose full-precision (bf16) size exceeds the host is accepted once a
 // weight-quantization engine flag is passed, because the fit gate then weighs the
 // quantized footprint. Regression for the live-run bug where --quantization fp8 was

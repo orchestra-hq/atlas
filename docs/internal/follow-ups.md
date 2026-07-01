@@ -8,6 +8,14 @@ Scope rules:
 - Each entry states what, why it was deferred, where in the code it lives, a suggested milestone, and the review that surfaced it. Items needing an owner decision before work can start are marked **Decision needed** (those are the ones that would otherwise go in [open-questions.md](open-questions.md); they live here so all review fallout sits in one place).
 - Delete an entry when it ships — git history keeps the trail.
 
+## Fit gate / capacity planning
+
+### CPU-offload credit is single-node only; the fleet placer is unaware of it
+
+**Suggested:** M6+ (when a fleet worker needs to advertise offload headroom). **Surfaced:** GLM-5.2 dogfood scoping.
+
+The pre-download fit gate (`gateLoadFit`) and the launch-time reservation (`engineRuntime.reserveFit`) now credit a vLLM/SGLang `--cpu-offload-gb` launch's spilled-to-RAM weights via `cpuOffloadCredit` (`internal/cli/resolve.go`), so a model sized to spill deliberately (a 4-bit frontier MoE across a few GPUs) is not false-refused on the single-node `atlas up` path. The fleet scheduler (`CapacityOf` / `Scheduler.fits`, `internal/server/scheduler.go`) still weighs only a worker's advertised summed VRAM — a joined worker launched with `--cpu-offload-gb` does not advertise the extra headroom, so the placer under-counts its capacity. Correct but conservative (it never over-places); the fix is for a worker to fold its own offload credit into the `Hardware`/capacity it advertises at join.
+
 ## TLS / transport security
 
 ### Self-signed cert cache ignores changed `--tls` hosts
