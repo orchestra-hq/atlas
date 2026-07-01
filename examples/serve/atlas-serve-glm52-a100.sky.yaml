@@ -1,0 +1,82 @@
+# Serve GLM-5.2 (Z.ai, 744B MoE + DeepSeek sparse attention, MIT) on a 4×A100-80GB
+# node — a frontier open-weights coder self-hosted on two-gen-old, cheap silicon.
+# This is the "bring a frontier model" dogfood: it reproduces the widely-shared
+# result of running GLM-5.2 on a Standard_NC96ads_A100_v4 (4×A100-80GB, ~$3.50/hr
+# Azure spot) and driving Claude Code against it, from your own tenant.
+#
+# WHY A100 SHAPES THE CONFIG:
+#   A100 is Ampere — NO native FP8 (Hopper+) and NO FP4 (Blackwell). So GLM-5.2's
+#   FP8 and NVFP4 checkpoints are off the table here. The Ampere-viable path is a
+#   4-bit AWQ checkpoint on vLLM. AWQ-INT4 weights (~372GB) exceed 320GB of VRAM,
+#   so ~a third spills to host RAM via --cpu-offload-gb (≈4× slower on those layers
+#   — exactly the documented behaviour). Atlas's fit gate credits that spill
+#   (--cpu-offload-gb × tensor-parallel-size) so the launch is not pre-refused.
+#
+# MACHINE: SkyPilot maps A100-80GB:4 to the right SKU per cloud —
+#   Azure  Standard_NC96ads_A100_v4  (4×A100-80GB, 96 vCPU, 880GB RAM) — the post's box
+#   GCP    a2-ultragpu-4g            (4×A100-80GB, 340GB RAM) — also fine for the offload
+#   AWS has NO 4×A100 SKU (A100 only as 8×A100 p4d/p4de); use Azure or GCP here.
+#
+#   pip install 'skypilot[azure]'   # or [gcp]
+#   sky check
+#
+#   # Prove the pipe, then point Claude Code at it:
+#   sky launch -c glm52 examples/serve/atlas-serve-glm52-a100.sky.yaml --use-spot --down -y
+#   sky logs glm52 | grep 'ATLAS API KEY'
+#   ssh -N -L 8080:localhost:8080 $(sky status --ip glm52) &   # nothing exposed
+#   ANTHROPIC_BASE_URL=http://localhost:8080 ANTHROPIC_API_KEY=<key> claude
+#
+#   sky down glm52    # STOP THE METER
+#
+# !! EXPERIMENTAL — NOT in the Atlas acceptance matrix. !! This is a frontier-size,
+# multi-GPU, CPU-offloaded, brand-new-architecture serve. The numbers below are
+# starting points from the model card + fit arithmetic, not verified-good end to
+# end. Shake it out with the runbook in README.md ("GLM-5.2 on 4×A100") — a cheap
+# boot-test first, then the acceptance suite with the Claude Code smoke — before you
+# rely on it. Requires vLLM ≥0.23 (glm_moe_dsa support) + transformers ≥5.3.
+
+name: atlas-serve-glm52
+
+resources:
+  accelerators: { A100-80GB: 4 } # 320GB VRAM total; TP=4
+  ports: 8080
+  disk_size: 1024 # ~372GB AWQ weights + engine + store headroom
+  # use_spot honoured by `sky launch --use-spot`; keeps the cheap-box story.
+
+workdir: .
+
+envs:
+  # Ampere-viable 4-bit checkpoint. Do NOT add --quantization awq: the repo is
+  # already 4-bit on disk, so vLLM auto-detects it from quantization_config and
+  # Atlas weighs the real on-disk size for the fit gate.
+  ATLAS_MODEL: cyankiwi/GLM-5.2-AWQ-INT4
+  # TP=4 across the 4 GPUs; expert-parallel for the 256-expert MoE; --cpu-offload-gb
+  # 34/GPU (=136GB) covers the ~126GB the 320GB VRAM can't hold (the "spill"); modest
+  # max-model-len so the KV cache fits what VRAM the weights leave; eager avoids CUDA
+  # graph OOM on a tight fit. Tool/reasoning parsers are AUTO-CONFIGURED by Atlas
+  # (glm family → glm47/glm45 on vLLM); override here only if 0.23 needs a newer pair.
+  ATLAS_ENGINE_ARGS: --tensor-parallel-size 4 --enable-expert-parallel --cpu-offload-gb 34 --max-model-len 32768 --enforce-eager
+  GO_VERSION: 1.26.4
+
+setup: |
+  set -euo pipefail
+  if ! /usr/local/go/bin/go version 2>/dev/null | grep -q "go${GO_VERSION}"; then
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tgz
+    sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf /tmp/go.tgz
+  fi
+  export PATH="/usr/local/go/bin:$PATH"
+  go build -o "$HOME/atlas" ./cmd/atlas
+
+run: |
+  set -euo pipefail
+  nvidia-smi || { echo "no GPU visible on the host" >&2; exit 1; }
+  KEY=$("$HOME/atlas" keys create --quiet)
+  echo "================ ATLAS API KEY: $KEY ================"
+  # shellcheck disable=SC2086
+  "$HOME/atlas" up \
+    --engine vllm \
+    --model "$ATLAS_MODEL" \
+    --alias "claude-opus-4-8=$ATLAS_MODEL" \
+    --alias "claude-sonnet-4-6=$ATLAS_MODEL" \
+    --addr 0.0.0.0:8080 \
+    $(for a in $ATLAS_ENGINE_ARGS; do printf -- '--engine-arg %s ' "$a"; done)
