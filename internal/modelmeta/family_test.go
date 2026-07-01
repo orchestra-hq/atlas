@@ -30,6 +30,13 @@ func TestClassify(t *testing.T) {
 			wantFamily: "glm", wantOK: true, wantReason: true,
 		},
 		{
+			// GLM-5.2's new model_type/arch (glm_moe_dsa / GlmMoeDsaForCausalLM) still
+			// resolves to the glm family by prefix — no family-map change needed.
+			name:       "glm-5.2 moe+dsa by model_type",
+			caps:       Capabilities{ModelType: "glm_moe_dsa", Architecture: "GlmMoeDsaForCausalLM"},
+			wantFamily: "glm", wantOK: true, wantReason: true,
+		},
+		{
 			name:       "gguf arch mirrored into model_type",
 			caps:       Capabilities{Format: FormatGGUF, ModelType: "qwen3", Architecture: "qwen3"},
 			wantFamily: "qwen3", wantOK: true, wantReason: true,

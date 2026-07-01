@@ -14,6 +14,8 @@ func TestArchLoadable(t *testing.T) {
 		{"qwen3.5 moe on vllm", "vllm", Capabilities{Architecture: "Qwen3_5MoeForConditionalGeneration", ModelType: "qwen3_5_moe"}, true},
 		{"qwen3 on sglang", "sglang", Capabilities{Architecture: "Qwen3ForCausalLM", ModelType: "qwen3"}, true},
 		{"glm on vllm", "vllm", Capabilities{Architecture: "Glm4MoeForCausalLM", ModelType: "glm4_moe"}, true},
+		{"glm-5.2 moe+dsa on vllm", "vllm", Capabilities{Architecture: "GlmMoeDsaForCausalLM", ModelType: "glm_moe_dsa"}, true},
+		{"glm-5.2 moe+dsa on sglang", "sglang", Capabilities{Architecture: "GlmMoeDsaForCausalLM", ModelType: "glm_moe_dsa"}, true},
 		{"llama on vllm", "vllm", Capabilities{Architecture: "LlamaForCausalLM", ModelType: "llama"}, true},
 		{"gguf qwen3 on llamacpp", "llamacpp", Capabilities{Format: FormatGGUF, Architecture: "qwen3", ModelType: "qwen3"}, true},
 		{"gguf llama on llamacpp", "llamacpp", Capabilities{Format: FormatGGUF, ModelType: "llama"}, true},

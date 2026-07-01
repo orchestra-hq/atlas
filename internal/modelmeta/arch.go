@@ -138,8 +138,14 @@ var transformersArchs = lowerSet(
 	"GemmaForCausalLM", "Gemma2ForCausalLM", "Gemma3ForCausalLM", "Gemma3ForConditionalGeneration",
 	// Phi 1.5 / 2 / 3, and Phi-MoE.
 	"PhiForCausalLM", "Phi3ForCausalLM", "Phi3SmallForCausalLM", "PhiMoEForCausalLM",
-	// GLM 4 / 4.5 / 5.x, dense and MoE, plus ChatGLM.
-	"GlmForCausalLM", "Glm4ForCausalLM", "Glm4MoeForCausalLM", "ChatGLMModel", "ChatGLMForConditionalGeneration",
+	// GLM 4 / 4.5 / 5.x, dense and MoE, plus ChatGLM. GlmMoeDsaForCausalLM is
+	// GLM-5.2's MoE + DeepSeek-sparse-attention arch (model_type glm_moe_dsa),
+	// loadable by the pinned vLLM 0.23.0 / SGLang 0.5.10.post1 (needs
+	// transformers>=5.3). llama.cpp's DSA support is still partial (indexer
+	// unimplemented as of the pinned build), so the GGUF token is deliberately
+	// left out of llamacppArchs below.
+	"GlmForCausalLM", "Glm4ForCausalLM", "Glm4MoeForCausalLM", "GlmMoeDsaForCausalLM",
+	"ChatGLMModel", "ChatGLMForConditionalGeneration",
 	// DeepSeek v1 / v2 / v3.
 	"DeepseekForCausalLM", "DeepseekV2ForCausalLM", "DeepseekV3ForCausalLM",
 	// Cohere Command-R.
