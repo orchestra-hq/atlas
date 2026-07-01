@@ -2,12 +2,13 @@
 
 Recipes for running Atlas on a GPU you rent and pointing your tools at it. They all end the same way — an `ANTHROPIC_BASE_URL` your Claude Code / SDKs talk to — they differ only in how the box gets created, reached, and sized.
 
-| Recipe                                                               | Extra tooling        | Best when                                                              |
-| -------------------------------------------------------------------- | -------------------- | ---------------------------------------------------------------------- |
-| [SkyPilot one-command](#skypilot-one-command)                        | `skypilot` + a cloud | you want the cheapest GPU across clouds picked for you, in one command |
-| [Single box + SSH tunnel](#single-box--ssh-tunnel)                   | none                 | you already have a GPU box (any cloud, or your own) and want zero deps |
-| [Single GPU, staged & sized up](#single-gpu-staged--sized-up)        | `skypilot` + a cloud | you want the strongest model one GPU can hold, proven cheap first      |
-| [Split control plane + GPU worker](#split-control-plane--gpu-worker) | `skypilot` + a cloud | you want the fleet shape: a small always-on hub, GPU workers dial out  |
+| Recipe                                                                    | Extra tooling          | Best when                                                               |
+| ------------------------------------------------------------------------- | ---------------------- | ----------------------------------------------------------------------- |
+| [SkyPilot one-command](#skypilot-one-command)                             | `skypilot` + a cloud   | you want the cheapest GPU across clouds picked for you, in one command  |
+| [Single box + SSH tunnel](#single-box--ssh-tunnel)                        | none                   | you already have a GPU box (any cloud, or your own) and want zero deps  |
+| [Single GPU, staged & sized up](#single-gpu-staged--sized-up)             | `skypilot` + a cloud   | you want the strongest model one GPU can hold, proven cheap first       |
+| [Split control plane + GPU worker](#split-control-plane--gpu-worker)      | `skypilot` + a cloud   | you want the fleet shape: a small always-on hub, GPU workers dial out   |
+| [GLM-5.2 on 4×A100 (frontier dogfood)](#glm-52-on-4a100-frontier-dogfood) | `skypilot` + Azure/GCP | you want a frontier open-weights coder self-hosted, with a real $/token |
 
 > Security: the gateway mints an API key on first start and requires it on every request — the endpoint is never open, even with the port exposed. The SkyPilot recipe opens port 8080 on the host, so still lock the security group; read the minted key from `sky logs` (or mint more with `atlas keys create`). The single-box recipe binds to localhost and reaches it over an SSH tunnel — nothing is exposed to the internet. For a public endpoint, terminate TLS with `atlas server --tls-acme-domain <name>` (Let's Encrypt); for a private fleet, `--tls-self-signed` prints a pin workers join with over `wss://` ([ADR-0009](../../docs/internal/decisions/0009-transport-security-tls-and-pinning.md)).
 
@@ -82,16 +83,16 @@ sky launch -c atlas examples/serve/atlas-serve-staged.sky.yaml --down -y
 
 There is **no single-H100 instance on AWS**; the single-GPU ladder tops out at the 48GB L40S. Pick the instance for the model tier you want:
 
-| Instance                        | GPU                  | Fits                                                  | Tier                                         |
-| ------------------------------- | -------------------- | ----------------------------------------------------- | -------------------------------------------- |
-| `g6.xlarge`                     | 1×L4 24GB            | 7–14B (e.g. Qwen3-8B)                                 | prove-the-pipe — **proven** with Claude Code |
-| `g5.xlarge`                     | 1×A10G 24GB          | 7–14B                                                 | same tier                                    |
-| `g6e.xlarge`                    | 1×L40S 48GB          | ~35B at FP8 (Qwen3.5-35B-A3B)                         | best single GPU AWS sells                    |
-| `p5.48xlarge` / `p4de.24xlarge` | 8×H100 / 8×A100-80GB | ~355B with tensor parallel (glm-5.1, the `opus` tier) | multi-GPU node, not single-GPU               |
+| Instance                        | GPU                  | Fits                                          | Tier                                         |
+| ------------------------------- | -------------------- | --------------------------------------------- | -------------------------------------------- |
+| `g6.xlarge`                     | 1×L4 24GB            | 7–14B (e.g. Qwen3-8B)                         | prove-the-pipe — **proven** with Claude Code |
+| `g5.xlarge`                     | 1×A10G 24GB          | 7–14B                                         | same tier                                    |
+| `g6e.xlarge`                    | 1×L40S 48GB          | ~35B at FP8 (Qwen3.5-35B-A3B)                 | best single GPU AWS sells                    |
+| `p5.48xlarge` / `p4de.24xlarge` | 8×H100 / 8×A100-80GB | ~355B+ with tensor parallel (the `opus` tier) | multi-GPU node, not single-GPU               |
 
 New AWS accounts start with a **0-vCPU quota** on GPU families — request "Running On-Demand G and VT instances" (for `g6`/`g5`/`g6e`) or "Running On-Demand P instances" (for `p5`/`p4de`) in the Service Quotas console before launching.
 
-> **Only the 24GB / 8B tier is in the Atlas acceptance matrix today.** The 35B (FP8) and `glm-5.1` (tensor-parallel) configs — and their tool/reasoning parsers — have not been run end-to-end against Claude Code yet. The recipe labels them experimental; shake them out before you rely on them.
+> **Only the 24GB / 8B tier is in the Atlas acceptance matrix today.** The 35B (FP8) config — and its tool/reasoning parsers — has not been run end-to-end against Claude Code yet. The recipe labels it experimental; shake it out before you rely on it. For the frontier multi-GPU tier (a 744B MoE on a 4×A100 node), see [GLM-5.2 on 4×A100](#glm-52-on-4a100-frontier-dogfood) below — a dedicated recipe with its own runbook.
 
 ## Split control plane + GPU worker
 
@@ -122,6 +123,64 @@ ANTHROPIC_BASE_URL=https://<server-host>:9090 ANTHROPIC_API_KEY=<key from step 1
 ```
 
 For the production version of this shape — ALB + ACM cert, workers in private subnets under an autoscaling group, join token in Secrets Manager — see [deployment-aws.md](../../docs/internal/deployment-aws.md). Turnkey IaC (Compose/systemd/k8s/Terraform) is the demand-driven [M7](../../docs/internal/decisions/0014-m5-rescoped-to-documentation.md) milestone; the two commands above work today with the shipped binary.
+
+## GLM-5.2 on 4×A100 (frontier dogfood)
+
+[`atlas-serve-glm52-a100.sky.yaml`](atlas-serve-glm52-a100.sky.yaml) self-hosts **GLM-5.2** (Z.ai, 744B MoE + DeepSeek sparse attention, MIT, 1M context) on a **4×A100-80GB** node and drives Claude Code against it — a frontier open-weights coder on cheap, two-gen-old silicon, in your own tenant (zero data leakage). It reproduces the widely-shared "$3.50/hr Azure spot, comparable to a frontier hosted model" result, end to end through Atlas.
+
+This is the sharpest form of the model-agnostic pitch: not "we're model-agnostic" in the abstract, but a real model, a real box, a real `$/1M-token` number.
+
+### Why the config looks the way it does
+
+**A100 is Ampere** — no native FP8 (Hopper+), no FP4 (Blackwell). GLM-5.2's FP8 and NVFP4 checkpoints can't run here. The Ampere-viable path is a **4-bit AWQ** checkpoint on vLLM. AWQ-INT4 weights (~372GB) exceed 320GB of VRAM, so ~a third spills to host RAM via `--cpu-offload-gb` (≈4× slower on the offloaded layers — the documented behaviour). Atlas recognizes GLM-5.2's `glm_moe_dsa` architecture (auto-configuring the `glm47`/`glm45` parsers) and its fit gate credits the deliberate spill (`--cpu-offload-gb` × `--tensor-parallel-size`), so neither the family nor the fit check pre-refuses the launch.
+
+### Machine
+
+SkyPilot maps `A100-80GB:4` to the right SKU per cloud. **AWS has no 4×A100 SKU** (A100 ships only as 8×A100 `p4d`/`p4de`), so use Azure or GCP:
+
+| Cloud | SKU                        | GPUs        | Host RAM | Notes                                     |
+| ----- | -------------------------- | ----------- | -------- | ----------------------------------------- |
+| Azure | `Standard_NC96ads_A100_v4` | 4×A100-80GB | 880 GB   | the reference box; ~$3.50/hr spot         |
+| GCP   | `a2-ultragpu-4g`           | 4×A100-80GB | 340 GB   | also fine — 340GB covers the ~136GB spill |
+
+### Runbook
+
+**1. Boot-test first (cheap — catch the arch/quant/offload issues before a long run).** Launch, wait for readiness, fire one completion:
+
+```bash
+pip install 'skypilot[azure]'   # or [gcp]
+sky launch -c glm52 examples/serve/atlas-serve-glm52-a100.sky.yaml --use-spot --down -y
+sky logs glm52 | grep 'ATLAS API KEY'          # grab the minted key
+KEY=<key>; ssh -N -L 8080:localhost:8080 $(sky status --ip glm52) &
+
+curl -s localhost:8080/readyz && echo ok
+curl -s localhost:8080/v1/messages -H "x-api-key: $KEY" -H 'anthropic-version: 2023-06-01' \
+  -d '{"model":"claude-opus-4-8","max_tokens":64,"messages":[{"role":"user","content":"reply with the single word: ready"}]}'
+```
+
+If the model loads and answers, the hard parts (DSA arch on vLLM 0.23, AWQ on Ampere, the CPU-offload fit) all work. If vLLM OOMs, raise `--cpu-offload-gb`; if it rejects the arch, confirm the image is vLLM ≥0.23 with `transformers ≥5.3`.
+
+**2. Drive Claude Code** (the actual "does the flow work" test):
+
+```bash
+ANTHROPIC_BASE_URL=http://localhost:8080 ANTHROPIC_API_KEY="$KEY" claude
+```
+
+**3. Run the conformance suite with the agent smoke** (the same gates the acceptance ladder uses). On the box, against the running gateway:
+
+```bash
+CONF_CLAUDE_CODE_SMOKE=1 ATLAS_API_KEY="$KEY" bash scripts/acceptance.sh   # Stage 2, provider-agnostic
+```
+
+**4. Capture the cost story.** The point of the exercise is a real number. From the request log (per-request token counts) and the instance price:
+
+```text
+$/1M output tokens ≈ (instance $/hr) ÷ (output tokens/sec × 3600 ÷ 1e6)
+```
+
+Record tokens/sec (from `atlas top` / the request log), the spot `$/hr`, and the derived `$/1M tokens` alongside the Claude Code result.
+
+> **Experimental — not in the acceptance matrix.** Frontier size, multi-GPU, CPU-offloaded, brand-new architecture: every axis is past what's proven. Requires vLLM ≥0.23 (`glm_moe_dsa`) + `transformers ≥5.3`. If GLM-5.2 needs a newer vLLM parser than the auto-configured `glm47`/`glm45`, override with `--engine-arg`. A pure-GGUF variant (unsloth `GLM-5.2-GGUF`, fits VRAM without offload) is possible but needs a **DSA-patched llama.cpp** — its indexer support is still partial — and Claude Code drop-in is unproven on llama.cpp; the vLLM/AWQ path above is the supported one.
 
 ## See also
 
