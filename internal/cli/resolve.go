@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -155,7 +156,7 @@ func resolveRaw(ctx context.Context, cmd *cobra.Command, engine worker.Engine, s
 	// failure (ADR-0015 Decision 3c), distinct from an unknown family, which stays
 	// the bare passthrough below (warn-and-serve is Phase 4). This baseline weighs an
 	// empty host; the launch path additionally weighs free capacity (engineRuntime).
-	if err := gateLoadFit(cmd, engine, spec, caps, force); err != nil {
+	if err := gateLoadFit(cmd, engine, spec, caps, force, engineArgs); err != nil {
 		return resolvedModel{}, err
 	}
 	plan.fitBytes, _ = modelmeta.FitEstimate(caps) // for the launch-time free-capacity check
@@ -250,7 +251,7 @@ func setServedQuantBytes(caps *modelmeta.Capabilities, tok string) {
 // half (best-effort, never a false refusal); a loadable arch with an unknown
 // family passes the gate and is served bare (the warn-and-serve middle case is
 // Phase 4). Both failures abort before worker.Start, so no weights are fetched.
-func gateLoadFit(cmd *cobra.Command, engine worker.Engine, spec string, caps modelmeta.Capabilities, force bool) error {
+func gateLoadFit(cmd *cobra.Command, engine worker.Engine, spec string, caps modelmeta.Capabilities, force bool, engineArgs []string) error {
 	if ok, reason := modelmeta.ArchLoadable(string(engine), caps); !ok {
 		if !force {
 			return fmt.Errorf("cannot serve %s: %s (re-run with --force to try anyway — the engine load is the final authority)", spec, reason)
@@ -265,15 +266,70 @@ func gateLoadFit(cmd *cobra.Command, engine worker.Engine, spec string, caps mod
 		return nil
 	}
 	capacity, hasGPU := detectCapacity()
-	if capacity <= 0 || est <= capacity {
+	// A vLLM/SGLang --cpu-offload-gb keeps weights in host RAM, raising the effective
+	// memory ceiling above the summed VRAM detectCapacity reports — so a model sized
+	// to spill deliberately (e.g. a 4-bit frontier MoE across a few A100s) is not
+	// false-refused here. Only credited on a GPU host; see cpuOffloadCredit.
+	credit := int64(0)
+	if hasGPU {
+		credit = cpuOffloadCredit(engine, engineArgs)
+	}
+	if capacity <= 0 || est <= capacity+credit {
 		return nil
 	}
 	mem := "RAM"
 	if hasGPU {
 		mem = "VRAM"
 	}
-	return fmt.Errorf("%s needs ~%s (weights + ~%d%% overhead) but this host has %s %s — free up memory or use a host with more %s",
-		spec, humanBytes(est), int(modelmeta.KVOverheadFraction*100), humanBytes(capacity), mem, mem)
+	avail := fmt.Sprintf("%s %s", humanBytes(capacity), mem)
+	if credit > 0 {
+		avail = fmt.Sprintf("%s %s + %s CPU-offload", humanBytes(capacity), mem, humanBytes(credit))
+	}
+	return fmt.Errorf("%s needs ~%s (weights + ~%d%% overhead) but this host has %s — free up memory, raise --cpu-offload-gb, or use a host with more %s",
+		spec, humanBytes(est), int(modelmeta.KVOverheadFraction*100), avail, mem)
+}
+
+// cpuOffloadCredit returns the extra schedulable bytes a vLLM/SGLang launch's
+// --cpu-offload-gb grants the fit gate. That flag offloads weights to host RAM
+// *per GPU* — vLLM frames it as "a virtual way to increase the GPU memory size" —
+// so the effective ceiling rises by (per-GPU offload × GPU count), where the GPU
+// count is the tensor-parallel size (default 1). The value is trusted as the
+// user's assertion of spare host RAM, consistent with --force's trust-and-catch:
+// the launch-time free-capacity check (engineRuntime.reserveFit, which credits the
+// same amount) and the engine load itself remain the authority on the host
+// actually having it. Returns 0 for other engines, or when the flag is absent or
+// unparseable. Scoped to the single-node `atlas up` path; the fleet scheduler
+// weighs a worker's advertised VRAM and is unaffected.
+func cpuOffloadCredit(engine worker.Engine, engineArgs []string) int64 {
+	if engine != worker.EngineVLLM && engine != worker.EngineSGLang {
+		return 0
+	}
+	gib, err := strconv.ParseFloat(strings.TrimSpace(engineArgValue(engineArgs, "--cpu-offload-gb")), 64)
+	if err != nil || gib <= 0 {
+		return 0
+	}
+	gpus := 1
+	if n, err := strconv.Atoi(strings.TrimSpace(engineArgValue(engineArgs, "--tensor-parallel-size", "-tp"))); err == nil && n > 1 {
+		gpus = n
+	}
+	return int64(gib * float64(gpus) * (1 << 30))
+}
+
+// engineArgValue returns the value of the first of the named engine-arg flags
+// present in args, accepting both "--flag value" and "--flag=value" forms. "" when
+// none is present. (servedQuant predates this and stays as-is for the -q short form.)
+func engineArgValue(args []string, flags ...string) string {
+	for i, a := range args {
+		for _, f := range flags {
+			if a == f && i+1 < len(args) {
+				return args[i+1]
+			}
+			if v, ok := strings.CutPrefix(a, f+"="); ok {
+				return v
+			}
+		}
+	}
+	return ""
 }
 
 // parserSummary renders a known family's engine args for display — shared by the
