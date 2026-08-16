@@ -11,6 +11,15 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Republish the images for an already-released version, e.g. v0.1.0.
+          Reproduces the tag-push tag set (:<version>, :slim, :latest, :cuda,
+          :<version>-cuda) and stamps VERSION with it. Leave empty for a plain
+          dev push (:slim + :cuda only, stamped 0.0.0-dev+<sha>).
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -61,8 +70,22 @@ jobs:
       packages: write # push to GHCR under the org namespace
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      # The version this run publishes as: the dispatch input when republishing an
+      # already-released version, the tag name on a v* push, else empty (dev push).
+      # Empty means rolling tags only, stamped 0.0.0-dev+<sha>.
+      REL_VERSION: ${{ inputs.version || (github.ref_type == 'tag' && github.ref_name) || '' }}
     steps:
+      # Build the tree the version actually refers to. A workflow_dispatch defaults
+      # to the branch it was started from, so republishing v0.1.0 without this
+      # would build current main and label the images v0.1.0.
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.version || github.ref }}
+      # github.sha is the dispatching branch's head, not the ref we just checked
+      # out, so stamp the image from the real build tree instead.
+      - name: Resolve build commit
+        id: src
+        run: echo "sha=$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v3 # arm64 emulation for the slim multi-arch build
       - uses: docker/setup-buildx-action@v3
       # Authenticated Docker Hub pulls for the base images (golang/debian/nvidia),
@@ -86,9 +109,9 @@ jobs:
           images: ${{ env.IMAGE }}
           flavor: latest=false
           tags: |
-            type=ref,event=tag
+            type=raw,value=${{ env.REL_VERSION }},enable=${{ env.REL_VERSION != '' }}
             type=raw,value=slim
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=latest,enable=${{ env.REL_VERSION != '' }}
       - name: Build and push slim (multi-arch)
         uses: docker/build-push-action@v6
         with:
@@ -99,8 +122,8 @@ jobs:
           tags: ${{ steps.meta_slim.outputs.tags }}
           labels: ${{ steps.meta_slim.outputs.labels }}
           build-args: |
-            VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('0.0.0-dev+{0}', github.sha) }}
-            COMMIT=${{ github.sha }}
+            VERSION=${{ env.REL_VERSION != '' && env.REL_VERSION || format('0.0.0-dev+{0}', steps.src.outputs.sha) }}
+            COMMIT=${{ steps.src.outputs.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       # CUDA image: linux/amd64 only, suffixed tags (never :latest). Heavy build
@@ -114,7 +137,7 @@ jobs:
           flavor: latest=false
           tags: |
             type=raw,value=cuda
-            type=raw,value=${{ github.ref_name }}-cuda,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=${{ env.REL_VERSION }}-cuda,enable=${{ env.REL_VERSION != '' }}
       - name: Build and push cuda (amd64)
         uses: docker/build-push-action@v6
         with:
@@ -125,8 +148,8 @@ jobs:
           tags: ${{ steps.meta_cuda.outputs.tags }}
           labels: ${{ steps.meta_cuda.outputs.labels }}
           build-args: |
-            VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('0.0.0-dev+{0}', github.sha) }}
-            COMMIT=${{ github.sha }}
+            VERSION=${{ env.REL_VERSION != '' && env.REL_VERSION || format('0.0.0-dev+{0}', steps.src.outputs.sha) }}
+            COMMIT=${{ steps.src.outputs.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       # Prune untagged image versions orphaned when a rolling tag (:slim, :cuda,
@@ -144,3 +167,37 @@ jobs:
           owner: orchestra-hq
           delete-untagged: true
           token: ${{ secrets.GITHUB_TOKEN }}
+      # Guard against a corrupt multi-arch index: the per-platform manifests of a
+      # multi-arch image are themselves untagged, so anything that deletes untagged
+      # versions can strip an index's children and leave a tag that resolves but
+      # cannot be pulled. That is exactly what happened to the v0.1.0 images — the
+      # tags returned 200 while every child 404'd — and it went unnoticed for weeks
+      # because the package was private. Resolve each published tag anonymously and
+      # fail the run if any platform is unreachable.
+      - name: Verify published images are pullable
+        env:
+          TAGS: ${{ steps.meta_slim.outputs.tags }}
+          CUDA_TAGS: ${{ steps.meta_cuda.outputs.tags }}
+        run: |
+          set -euo pipefail
+          docker logout ghcr.io || true
+          tok=$(curl -fsSL "https://ghcr.io/token?scope=repository:orchestra-hq/atlas:pull&service=ghcr.io" | jq -r .token)
+          idx_accept='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json'
+          man_accept='application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json'
+          rc=0
+          for ref in $TAGS $CUDA_TAGS; do
+            tag=${ref##*:}
+            body=$(curl -fsSL -H "Authorization: Bearer $tok" -H "Accept: $idx_accept" \
+              "https://ghcr.io/v2/orchestra-hq/atlas/manifests/$tag") || { echo "::error::$ref — tag not resolvable"; rc=1; continue; }
+            # Single-platform images have no .manifests[]; nothing further to check.
+            for dg in $(printf '%s' "$body" | jq -r '.manifests[]?.digest'); do
+              st=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $tok" \
+                -H "Accept: $man_accept" "https://ghcr.io/v2/orchestra-hq/atlas/manifests/$dg")
+              if [ "$st" != 200 ]; then
+                echo "::error::$ref — child manifest $dg returned HTTP $st (corrupt index)"
+                rc=1
+              fi
+            done
+            echo "$ref ok"
+          done
+          exit $rc
