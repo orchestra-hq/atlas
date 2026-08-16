@@ -1,6 +1,8 @@
 # M4 build plan
 
-> **✅ Accepted — M4 declared done 2026-06-27.** The deliverability machinery is built and **proven end-to-end**: cutting `v0.1.0` produced a signed draft release (cosign keyless via GitHub OIDC → `checksums.txt.{sig,pem}`) and pushed the formula to `orchestra-hq/homebrew-tap` at `Formula/atlas.rb` via the dedicated "Atlas Release" App token; [`install.sh`](../../install.sh) was validated locally (detect → download → checksum-verify → install → run). What remains is a **non-engineering owner flip** — take the `atlas` repo public and publish the draft release — which lights up `brew install orchestra-hq/tap/atlas` and `curl -fsSL …/install.sh | sh` for the public (the release binaries become anonymously downloadable). A true anonymous clean-machine install was **not** independently verified pre-public; that is the accepted go-live check. Steady-state release ritual: `git tag vX.Y.Z && git push origin vX.Y.Z` → CI builds, signs, pushes the formula, and creates a draft → publish it.
+> **✅ Accepted — M4 declared done 2026-06-27; public go-live completed 2026-08-16.** The deliverability machinery is built and **proven end-to-end**: cutting `v0.1.0` produced a signed draft release (cosign keyless via GitHub OIDC → `checksums.txt.{sig,pem}`) and pushed the formula to `orchestra-hq/homebrew-tap` at `Formula/atlas.rb` via the dedicated "Atlas Release" App token; [`install.sh`](../../install.sh) was validated locally (detect → download → checksum-verify → install → run).
+>
+> **Go-live (2026-08-16):** the `atlas` repo is **public** and `v0.1.0` is **published**, so both channels are live. Verified anonymously (with no GitHub token in the environment): `install.sh` resolves the latest release → downloads → checksum-verifies → installs → `atlas version 0.1.0` runs; `orchestra-hq/homebrew-tap` is public and all four formula `sha256` values match the published `checksums.txt` exactly. See [Phase 3](#phase-3-closeout) below for what that verification did and did not cover. Steady-state release ritual: `git tag vX.Y.Z && git push origin vX.Y.Z` → CI builds, signs, pushes the formula, and creates a draft → publish it.
 
 The path from "installable enough to prove it" to **frictionless public install**: a newcomer gets a working `atlas` on their machine in one command. M4 refines the M4 milestone in [roadmap.md](../roadmap.md); the packaging/distribution decisions it builds on live in [ADR-0006](decisions/0006-packaging-and-deployment.md).
 
@@ -32,11 +34,29 @@ Exit criteria are cumulative. Phases 1 and 2 are fully buildable + verifiable **
 
 **Phase 2 — Homebrew tap.** A `brews:` stanza in `.goreleaser.yaml` (formula name `atlas`, homepage, description, the `bin.install` + a smoke `test do atlas --version`), with `repository: orchestra-hq/homebrew-tap` and `repository.token` templated from the App-minted token env. The release workflow gains a `create-github-app-token` step (dedicated Release App id/key secrets) before GoReleaser, exposing the token to the tap push only. `goreleaser release --snapshot` renders the formula into `dist/` for inspection without pushing or any secret. The actual push + a real `brew install` are exercised on the next tag once the owner has created the repo/App.
 
-**Phase 3 — public go-live.** When the `atlas` repo goes public the release binaries become anonymously downloadable, which is the one thing both channels were waiting on. Verify end to end on a clean machine (a fresh VM / container): `brew install orchestra-hq/tap/atlas` resolves the public tap → downloads the public binary → `atlas up` serves a model; and `curl -fsSL …/install.sh | sh` does the same. Reconcile the now-real install command into the docs that currently reference the dropped `get.atlas.dev` (`vision.md`, `deployment-aws.md`, `roadmap.md`).
+<a id="phase-3-closeout"></a>
+
+**Phase 3 — public go-live. ✅ Done 2026-08-16.** Taking the repo public made the release binaries anonymously downloadable, which is the one thing both channels were waiting on.
+
+What was verified, with no GitHub token in the environment:
+
+- **`install.sh` — executed end to end.** Resolved the latest release, downloaded the `darwin/arm64` archive, verified the checksum, installed, and ran: `atlas version 0.1.0 (ad24ccf)`.
+- **Homebrew tap — verified by inspection.** `orchestra-hq/homebrew-tap` is public, `Formula/atlas.rb` is anonymously fetchable, and all four `sha256` values in it match the published `checksums.txt` byte for byte.
+- **Supporting surfaces.** Release assets (4 archives + `checksums.txt` + cosign `.sig`/`.pem`) download anonymously; the docs site returns 200.
+
+**Not covered, and still open:**
+
+- `brew install orchestra-hq/tap/atlas` was **never executed** — the formula is verified by inspection only.
+- Neither channel was run on a **clean machine**; both checks ran on a developer Mac that already had the repo. The acceptance bar below asks for a fresh VM / container, so that bar is not yet fully met.
+- **GHCR container images are still private.** `docker run ghcr.io/orchestra-hq/atlas:slim` returns 401 anonymously, while [README.md](../../README.md) and the docs site both recommend it. Package visibility is independent of repo visibility and has no REST API — it is a web-UI change at `https://github.com/orgs/orchestra-hq/packages/container/atlas/settings`. **This is the one documented install path that is currently broken for the public.**
+
+The `get.atlas.dev` reconciliation this phase also called for is **complete**: every surviving mention is an explicit "this was dropped" historical note in an ADR or research snapshot, not a live instruction.
 
 ## Acceptance — what "M4 done" means
 
 M4 has no new conformance G-group (it is delivery, not API surface). "Done" is the phase-3 demo observed on a **clean machine**: a newcomer with neither Go nor the repo installs `atlas` in one command — via **both** `brew install orchestra-hq/tap/atlas` and `curl -fsSL <install.sh> | sh` — with the downloaded binary signature-verified, and reaches a served model. The machinery (phases 1–2) is proven continuously by the existing per-PR `goreleaser release --snapshot` dry-run (it already runs in CI), extended to cover the new `signs:`/`brews:` blocks.
+
+**Against that bar (2026-08-16):** the `curl | sh` half is met for install (anonymous, checksum-verified, binary runs) but was not run on a clean machine and did not go on to serve a model; the `brew` half is verified by inspection only. The remaining gap is a fresh VM / container run of both commands through to `atlas up`.
 
 ## Who does what
 
@@ -44,8 +64,9 @@ M4 has no new conformance G-group (it is delivery, not API surface). "Done" is t
 
 1. Create the public repo **`orchestra-hq/homebrew-tap`** (empty; generic name, reused org-wide).
 2. Create a dedicated **"Atlas Release" GitHub App** — one permission, **Contents: read & write** — generate a private key, and **install it on `homebrew-tap` only**. Add its id + private key as Actions secrets on `orchestra-hq/atlas` (e.g. `RELEASE_APP_ID`, `RELEASE_APP_PRIVATE_KEY`).
-3. **Take the `atlas` repo public** — the trigger that makes both channels work for the world.
-4. Cut/publish the next `v*` release tag (releases are draft → published manually) once the above are in place.
+3. ~~**Take the `atlas` repo public**~~ — done 2026-08-16.
+4. ~~Cut/publish the next `v*` release tag~~ — `v0.1.0` published 2026-08-16. Releases stay draft → published manually.
+5. **Still open:** make the GHCR container packages public (web UI; see [Phase 3](#phase-3-closeout)).
 
 **Claude (everything in-repo, no secrets needed to build + validate):**
 

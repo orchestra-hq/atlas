@@ -84,7 +84,7 @@ Deferred from M3 (revisit by traction):
 
 ## M4 — Deliverability: "the frictionless install"
 
-**Status: ✅ done (2026-06-27).** The deliverability machinery — `install.sh`, cosign keyless signing, and the Homebrew formula pushed to `orchestra-hq/homebrew-tap` via a dedicated Release App — is built and proven end-to-end by the `v0.1.0` release run. The public channels (`brew install` / `curl | sh`) light up on the owner's go-live flip (repo public + publish the draft); see [m4-build-plan.md](internal/m4-build-plan.md).
+**Status: ✅ done (2026-06-27); public go-live 2026-08-16.** The deliverability machinery — `install.sh`, cosign keyless signing, and the Homebrew formula pushed to `orchestra-hq/homebrew-tap` via a dedicated Release App — is built and proven end-to-end by the `v0.1.0` release run. The repo is now **public** and **`v0.1.0` is published**, so both public channels (`brew install` / `curl | sh`) are live and verified anonymously. One gap remains: the GHCR container images are still private, so the documented `docker run ghcr.io/orchestra-hq/atlas:slim` does not yet work for the public. See [m4-build-plan.md](internal/m4-build-plan.md).
 
 **Demo:** a newcomer runs `brew install orchestra-hq/tap/atlas` (or `curl -fsSL <install.sh> | sh`) and is serving a model in one command. Build order + decisions: [m4-build-plan.md](internal/m4-build-plan.md). Until M4 the binary is installed from GitHub Releases / the container image (M0.5, [ADR-0006](internal/decisions/0006-packaging-and-deployment.md)).
 
