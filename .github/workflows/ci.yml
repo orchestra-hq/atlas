@@ -89,6 +89,11 @@ jobs:
       # exercises the cold-boot path: `atlas pull` → store → `atlas up`.
       CONF_MODEL_NAME: qwen2.5-1.5b-instruct
       CONF_REASONING_NAME: qwen3-0.6b
+      # Match the acceptance scripts' CPU-track bump (scripts/acceptance.sh). The
+      # 120s vitest default is sized for a warm local box; streaming a 2048-token
+      # thinking response on a shared 4vCPU runner can exceed it, and a vitest
+      # timeout is indistinguishable from "no thinking block" — it fails G4.
+      CONF_TS_TIMEOUT: 300
       ATLAS_STATE_DIR: ${{ github.workspace }}/.atlas-state
       # Where atlas writes its request log; G10 reads it to assert per-request
       # token counts are logged. Absolute so the harness (run from conformance/)
@@ -206,6 +211,9 @@ jobs:
       # when inference transits the worker channel rather than an in-process one.
       CONF_MODEL_NAME: qwen2.5-1.5b-instruct
       CONF_REASONING_NAME: qwen3-0.6b
+      # As above, and more exposed: every request here is proxied and streamed
+      # over the worker channel, so this job is the slower of the two CPU tiers.
+      CONF_TS_TIMEOUT: 300
       ATLAS_STATE_DIR: ${{ github.workspace }}/.atlas-state
       ATLAS_JOIN_TOKEN: conformance-join-token
       # The gateway runs inside `atlas server`, so its request log (G10 token
