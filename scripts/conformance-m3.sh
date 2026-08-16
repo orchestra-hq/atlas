@@ -148,7 +148,34 @@ if [ "$ready" != 1 ]; then
   echo "=== server ==="; cat "$ATLAS_LOG_FILE"; echo "=== w1 ==="; cat "$REPO/atlas-m3-w1.log"; echo "=== w2 ==="; cat "$REPO/atlas-m3-w2.log"
   fail "two-process M3 deployment did not become ready (chat=$c embed=$e rerank=$r)"
 fi
-echo "==> Ready"
+
+# The loop above only proves each model class is routable — and worker 1 alone
+# serves all three, so it returns as soon as w1 is up. G19 needs the *second*
+# chat replica: with one replica there is no routing choice, no affinity decision
+# is recorded, and atlas_affinity_total is never created (not merely zero). Wait
+# for the chat deployment to report two ready replicas before asserting on it.
+echo "==> Waiting for 2 ready chat replicas (G19 precondition)"
+# Both workers declare their models with --model rather than going through
+# `atlas deploy`, so the scheduler's deployment map stays empty here — count the
+# connected, non-draining workers actually serving the chat model instead.
+chat_ready() {
+  api "$API/admin/status" |
+    jq -r --arg m "$CHAT_MODEL" \
+      '[.workers[]? | select(.Draining | not) | select(.Models // [] | index($m))] | length' 2>/dev/null || echo 0
+}
+replicas=0
+for _ in $(seq 1 120); do
+  replicas=$(chat_ready)
+  [ -n "$replicas" ] || replicas=0
+  [ "$replicas" -ge 2 ] && break
+  sleep 2
+done
+if [ "$replicas" -lt 2 ]; then
+  echo "=== server ==="; cat "$ATLAS_LOG_FILE"; echo "=== w2 ==="; cat "$REPO/atlas-m3-w2.log"
+  echo "=== /admin/status ==="; api "$API/admin/status"
+  fail "G19 precondition: chat model $CHAT_MODEL has $replicas ready replica(s), want 2"
+fi
+echo "==> Ready (chat replicas=$replicas)"
 
 # =============================================================================
 # G19 — prefix/session-affinity routing
