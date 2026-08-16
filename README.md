@@ -1,33 +1,58 @@
 # Atlas
 
-Atlas is an open source, self-hosted LLM inference platform. It lets you run open-weight models on hardware **you** control — a laptop, a single GPU box, or a fleet of GPU machines across clouds — and exposes the APIs that agents and apps already speak, so you can point existing tooling (the Claude Agent SDK, Claude Code, OpenAI-compatible clients) at your own infrastructure with a one-line config change.
+**Point your agents at your own hardware.**
 
-**Status: M0–M5 + M8 done (M8 declared 2026-06-29); M6 (web console) next.** M0 ("Claude Code on your own box"), M0.5 ("Release & prove"), M1 ("Fleet"), M2 ("Operate from the terminal"), M3 ("Ecosystem & differentiation deepeners"), M4 ("Deliverability"), and M8 ("Bring any model") are complete — M0/M0.5 acceptance is green on both engines with the real Claude Code drop-in proven on a GPU ([docs/internal/m0-acceptance.md](docs/internal/m0-acceptance.md)), M1's multi-host fleet acceptance (G1–G14 across two machines, two engines) is green ([docs/internal/m1-acceptance.md](docs/internal/m1-acceptance.md)), M2's engine-breadth acceptance (MLX on Apple Silicon + SGLang on GPU) is green alongside the per-PR observability/backpressure gates ([docs/internal/m2-acceptance.md](docs/internal/m2-acceptance.md)), M3's affinity routing, embeddings/reranker classes, audit log, and cloud-fallback are proven by the per-PR G19–G22 conformance ([docs/internal/m3-acceptance.md](docs/internal/m3-acceptance.md)), M4's install machinery (`install.sh`, cosign signing, Homebrew tap) is proven by the `v0.1.0` release run ([docs/internal/m4-build-plan.md](docs/internal/m4-build-plan.md)), M5 shipped the public docs site ([docs/internal/m5-build-plan.md](docs/internal/m5-build-plan.md)), and M8 makes `atlas up --model <hugging-face-repo>` auto-configure any known-family model from its own metadata (no catalog row), proven by the per-PR `Conformance (M8)` gate (G23) plus the vLLM + SGLang GPU-breadth nightly ([docs/internal/m8-acceptance.md](docs/internal/m8-acceptance.md)). User-facing documentation lives at the **[Atlas docs site](https://orchestra-hq.github.io/atlas)**; the design truth lives in [`docs/internal/`](docs/internal/).
+Atlas is an open source, self-hosted LLM inference platform. It runs open-weight models on hardware **you** control — a laptop, a single GPU box, or a fleet of GPU machines across clouds — and exposes the APIs that agents and apps already speak, so you can point existing tooling (the Claude Agent SDK, Claude Code, OpenAI-compatible clients) at your own infrastructure with a one-line config change.
 
 > 📖 **Documentation:** <https://orchestra-hq.github.io/atlas> — install, quickstart, guides, deploy, and operate.
 
-## Install
-
-Once a release is published, install the `atlas` binary via Homebrew or the one-line installer:
+## Quickstart
 
 ```sh
-# Homebrew (macOS / Linuxbrew)
+# install (macOS / Linux)
 brew install orchestra-hq/tap/atlas
 
 # or the one-line installer (detects OS/arch, verifies checksum + cosign signature)
 curl -fsSL https://raw.githubusercontent.com/orchestra-hq/atlas/main/install.sh | sh
+
+# serve a model — Atlas fetches it, provisions the engine, and exposes the API
+atlas up --model qwen3-0.6b
 ```
 
-Or run the container image: `docker run ghcr.io/orchestra-hq/atlas:slim` (CPU) / `:cuda` (GPU). Then `atlas up` to serve a model. Full walkthrough: the [quickstart](https://orchestra-hq.github.io/atlas/get-started/quickstart/) on the docs site.
+On first start Atlas mints an API key and prints it. Now point Claude Code at your own machine:
+
+```sh
+export ANTHROPIC_BASE_URL=http://localhost:8080
+export ANTHROPIC_API_KEY=<the key Atlas printed>
+claude
+```
+
+Prefer containers? `docker run ghcr.io/orchestra-hq/atlas:slim` (CPU) or `:cuda` (GPU). Full walkthrough: the [quickstart](https://orchestra-hq.github.io/atlas/get-started/quickstart/) on the docs site.
 
 ## Why
 
-Teams building on LLMs increasingly want control over where the model runs and where their data goes. The pieces to do this exist — vLLM and SGLang for serving, Ollama for local DX, LiteLLM for API translation — but assembling them into a private, multi-machine, agent-ready inference platform is still a do-it-yourself project. Atlas packages the best ideas from those projects into one coherent, well-marketed product:
+Teams building on LLMs increasingly want control over where the model runs and where their data goes. The pieces to do this exist — vLLM and SGLang for serving, Ollama for local DX, LiteLLM for API translation — but assembling them into a private, multi-machine, agent-ready inference platform is still a do-it-yourself project. Atlas packages the best ideas from those projects into one coherent product:
 
 - **Agent-first API compatibility.** Native Anthropic Messages API (`/v1/messages`) plus OpenAI-compatible endpoints, so `ANTHROPIC_BASE_URL=https://your-atlas` just works.
 - **Your hardware, anywhere.** A lightweight worker runs on each compute machine (your DC, your cloud, your customer's infra) and dials out to a central control plane. No inbound ports, no Kubernetes required.
 - **Ollama-grade DX, fleet-grade scale.** One binary, `atlas up`, pull a model, serve it. The same binary scales out to a multi-node GPU cluster.
 - **Best engine for the job.** Atlas orchestrates proven inference engines (vLLM, SGLang, llama.cpp, MLX) rather than reinventing them.
+
+## Project status
+
+Atlas is at **v0.1.0**. Drop-in compatibility is a release gate, not a claim: a conformance suite drives real Anthropic and OpenAI SDKs — plus a Claude Code smoke test — on every pull request, and the acceptance runs below are green on real hardware.
+
+| Milestone                               | What it delivered                                                                 | Proof                                           |
+| --------------------------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------- |
+| **M0 / M0.5** — Claude Code on your box | The Anthropic + OpenAI API surface, llama.cpp and vLLM engines, release machinery | [m0-acceptance](docs/internal/m0-acceptance.md) |
+| **M1** — Fleet                          | Control plane + outbound-dialling workers, scheduling, API keys, TLS              | [m1-acceptance](docs/internal/m1-acceptance.md) |
+| **M2** — Operate from the terminal      | Metrics, backpressure, `atlas status` / `top`; MLX + SGLang engines               | [m2-acceptance](docs/internal/m2-acceptance.md) |
+| **M3** — Ecosystem deepeners            | Affinity routing, embeddings + rerank, audit log, cloud fallback                  | [m3-acceptance](docs/internal/m3-acceptance.md) |
+| **M4** — Deliverability                 | `install.sh`, cosign signing, Homebrew tap                                        | [m4-build-plan](docs/internal/m4-build-plan.md) |
+| **M5** — Documentation                  | The public [docs site](https://orchestra-hq.github.io/atlas)                      | [m5-build-plan](docs/internal/m5-build-plan.md) |
+| **M8** — Bring any model                | `atlas up --model <hf-repo>` auto-configures from model metadata                  | [m8-acceptance](docs/internal/m8-acceptance.md) |
+
+**Next:** M6 (web console). Full-HA control plane and a hosted offering are deliberately deferred — see the [roadmap](docs/roadmap.md).
 
 ## Design docs & internals
 
@@ -71,7 +96,9 @@ source docs — for contributors and agents working in the repo.
 
 ## Contributing (humans and agents)
 
-Read [CLAUDE.md](CLAUDE.md) first — it explains the project conventions and where design truth lives. During the design phase, changes to `docs/` are the contribution surface; substantive direction changes need an ADR.
+Read [CLAUDE.md](CLAUDE.md) first — it explains the project conventions and where design truth lives. During the design phase, changes to `docs/` are the contribution surface; substantive direction changes need an ADR. To add agent-config support for a new model family, see [contributing-model-families.md](docs/internal/contributing-model-families.md).
+
+Found a security issue? Please report it privately — see [SECURITY.md](SECURITY.md), not a public issue.
 
 ## License
 
