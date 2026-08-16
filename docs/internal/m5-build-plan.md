@@ -119,8 +119,10 @@ M5 has no new conformance G-group (it is documentation, not API surface), like M
 
 ## Who does what
 
-**Owner (one-time):** enable **GitHub Pages → Source: GitHub Actions** on the `atlas` repo (the
-go-live flip). Optional/later: register a docs domain (CNAME-only change).
+**Owner (one-time):** ✅ done — GitHub Pages is enabled and the site is live at
+<https://orchestra-hq.github.io/atlas>. (This was the Pages flip; the separate repo-visibility
+go-live landed 2026-08-16, see [m4-build-plan.md](m4-build-plan.md).) Optional/later: register a
+docs domain (CNAME-only change).
 
 **Claude (everything in-repo):** ADR-0014 + roadmap/follow-ups updates; the `docs/internal/`
 restructure + reference rewrites; the `website/` Starlight project; `docs-site.yml`; all content
