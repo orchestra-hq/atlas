@@ -47,12 +47,13 @@ One of the things people burn the most time on with a DIY setup isn't the API la
 
 So Atlas ships a curated, agent-tested catalog. Each entry comes with the engine, the parser flags, and the defaults that make tool calling and reasoning work correctly — you just name the model. The starter catalog spans all four engines and three rough capability tiers:
 
-| Where you run it     | Engine       | Models in the starter catalog                                       |
-| -------------------- | ------------ | ------------------------------------------------------------------- |
-| **Laptop / CPU box** | llama.cpp    | Qwen2.5-1.5B-Instruct, Qwen3-0.6B (reasoning)                       |
-| **NVIDIA GPU**       | vLLM, SGLang | Qwen3-8B (reasoning), Qwen3.5-35B-A3B, GLM-5.1, Qwen2.5-7B-Instruct |
-| **Apple Silicon**    | MLX (Metal)  | Qwen2.5-1.5B-Instruct, Qwen2.5-7B-Instruct                          |
-| **Coding**           | llama.cpp    | Gemma-4-12B coder finetune (reasoning, 256K context, Apache-2.0)    |
+| Where you run it     | Engine       | Models in the starter catalog                                                |
+| -------------------- | ------------ | ---------------------------------------------------------------------------- |
+| **Laptop / CPU box** | llama.cpp    | Qwen2.5-1.5B-Instruct, Qwen3-0.6B (reasoning), Qwen2.5-7B-Instruct, Qwen3-8B |
+| **NVIDIA GPU**       | vLLM, SGLang | Qwen3-8B (reasoning), Qwen3.5-35B-A3B, GLM-5.1 (reasoning, 200K), Qwen2.5-7B |
+| **Apple Silicon**    | MLX (Metal)  | Qwen2.5-1.5B-Instruct, Qwen2.5-7B-Instruct                                   |
+| **Coding**           | llama.cpp    | Gemma-4-12B coder finetune (reasoning, 256K context, Apache-2.0)             |
+| **Coding (GPU)**     | vLLM         | Devstral-Small-2507 (agentic coder, 128K context)                            |
 
 The small llama.cpp tier cold-boots on a plain CPU — it's what runs in our own CI on every change — and is great for development, evals, and offline work. The capable GPU tiers are sized to drive Claude Code for real.
 
